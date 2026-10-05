@@ -3,12 +3,13 @@
 Minecraft 整合包更新管理工具（开发者端 + 玩家端），界面基于 CustomTkinter，
 目标平台 Windows 10。
 
-> 本仓库是 **下载引擎 v0.2.3 更新版**。
+> 本仓库是 Pulses Easier 的 **下载引擎聚合更新 v0.3.0**，
+> 一个包 = v0.2.0 ~ v0.2.3 的全部改动（不需要按顺序先装旧包）。
 
 ## 下载
 
-* 只需替换文件 → 下载更新包（无需登录）：
-  [`release/pulses-easier-download-engine-v0.2.3.zip`](release/pulses-easier-download-engine-v0.2.3.zip)
+* 只需替换 8 个文件 → 下载聚合更新包（无需登录）：
+  [`release/pulses-easier-download-engine-v0.3.0-aggregate.zip`](release/pulses-easier-download-engine-v0.3.0-aggregate.zip)
 * 本次改动明细 → [`CHANGELOG.md`](CHANGELOG.md)
 
 更新包内按项目原有目录结构组织，解压后直接覆盖即可：
@@ -16,7 +17,7 @@ Minecraft 整合包更新管理工具（开发者端 + 玩家端），界面基�
 ```
 app/core/downloader.py                  ← 下载引擎主体
 app/core/database.py                    ← 新增配置项默认值
-app/core/__init__.py                    ← 版本号 0.1.0 → 0.2.3
+app/core/__init__.py                    ← 版本号 0.1.0 → 0.3.0
 app/ui/main_window.py                   ← 新增启动 boot 任务：探测缓存盘类型
 app/ui/widgets/preferences_dialog.py    ← 新配置项的类型登记
 app/ui/player_view.py                   ← 槽位面板收起回调桥接
