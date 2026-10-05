@@ -32,3 +32,6 @@ tests/logs/*.tmp
 
 # 真实网络实测的临时下载目录
 _realworld/
+
+# 发布包验证的临时工作目录
+_verify/

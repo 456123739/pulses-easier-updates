@@ -447,6 +447,120 @@ PARAM_TABLE = [
 ]
 
 
+# ----------------------------------------------------------------------
+# 4.5) 三个下载站 + 镜像：逐源对比 与 换源实战
+#      MCIM（mod.mcimirror.top）对文件和 API 都是"转发器"：
+#        Modrinth  : mod.mcimirror.top/data/{project}/versions/{ver}/{file}
+#                    → 302 → cdn.modrinth.com/...
+#        CurseForge: mod.mcimirror.top/files/{a}/{b}/{file}
+#                    → 302 → mediafilez.forgecdn.net/...
+#      （file_cdn=False 时的默认行为，见 mcim-api 的 app/routes/file_cdn）
+# ----------------------------------------------------------------------
+MIRROR_HOST = "mod.mcimirror.top"
+
+
+def mirror_url_of(official: str) -> str | None:
+    """把官方文件 URL 映射到 MCIM 的文件路由；不认识的域名返回 None。"""
+    for host in ("https://cdn.modrinth.com/", "https://edge.forgecdn.net/"):
+        if official.startswith(host):
+            return official.replace(host, f"https://{MIRROR_HOST}/", 1)
+    return None
+
+
+def dead_url_of(official: str) -> str:
+    """故意把域名写坏，用来验证"换源"真的发生了。"""
+    for host in ("cdn.modrinth.com", "edge.forgecdn.net"):
+        if host in official:
+            return official.replace(host, f"{host.replace('.', '-')}.invalid")
+    return official.replace("://", "://dead-")
+
+
+def _one_download(url: str, it: dict, root: Path, log=print):
+    """用**新版 downloader** 单文件下载一个源，返回 (ok, 秒数, 备注)。"""
+    from app.core import downloader as dl
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    dl.clear_disk_cache()
+    dl._OPT_CACHE = dict(dl._DEFAULTS)
+    task = dl.DownloadTask(f"mods/{it['filename']}", [url],
+                           sha1=it["sha1"], sha256="",
+                           file_size=it["file_size"])
+    t0 = time.perf_counter()
+    try:
+        dl.download_files([task], target_dir=root, threads=1)
+    except Exception as e:  # noqa: BLE001
+        return False, time.perf_counter() - t0, f"异常 {type(e).__name__}"
+    dt = time.perf_counter() - t0
+    p = root / task.rel_path
+    if not p.is_file():
+        return False, dt, "文件未落盘"
+    if hashlib.sha1(p.read_bytes()).hexdigest() != it["sha1"]:
+        return False, dt, "sha1 不符"
+    return True, dt, ""
+
+
+def source_matrix(items, work, per_source=3, log=print):
+    """同一批文件分别从 官方 / 镜像 下载，逐源计时并逐字节校验。"""
+    picks = ([i for i in items if i["source"] == "Modrinth"][:per_source]
+             + [i for i in items if i["source"] == "CurseForge"][:per_source])
+    log(f"  取 {len(picks)} 个文件（Modrinth {per_source} + "
+        f"CurseForge {per_source}），每个都分别从官方与镜像各下一次")
+    table = []
+    for it in picks:
+        official = it["urls"][0]
+        mirror = mirror_url_of(official)
+        cells = []
+        for tag, url in (("官方", official), ("镜像", mirror)):
+            if not url:
+                cells.append((tag, False, 0.0, "无镜像映射"))
+                continue
+            root = work / "src" / f"{it['sha1'][:8]}_{tag}"
+            ok, dt, note = _one_download(url, it, root, log)
+            cells.append((tag, ok, dt, note))
+            log(f"    {it['filename'][:44]:44s} {tag}: "
+                f"{'OK ' if ok else 'FAIL'} {dt:6.2f}s "
+                f"{it['file_size'] / max(dt, 1e-9) / 1024:8.1f} KB/s {note}")
+        table.append((it, cells))
+    return table
+
+
+def mirror_fallback_test(items, work, per_source=2, log=print):
+    """
+    换源实战：把官方链接**写坏**，只在候选里留镜像。
+    先证明"坏链接单独必然失败"，再证明"坏链接 + 镜像 = 成功"。
+    """
+    picks = ([i for i in items if i["source"] == "Modrinth"][:per_source]
+             + [i for i in items if i["source"] == "CurseForge"][:per_source])
+    out = []
+    for it in picks:
+        official = it["urls"][0]
+        mirror = mirror_url_of(official)
+        bad = dead_url_of(official)
+        if not mirror:
+            continue
+        only_bad = _one_download(bad, it, work / "fb" / f"{it['sha1'][:8]}_bad")
+        both = work / "fb" / f"{it['sha1'][:8]}_both"
+        shutil.rmtree(both, ignore_errors=True)
+        both.mkdir(parents=True, exist_ok=True)
+        from app.core import downloader as dl
+        dl.clear_disk_cache()
+        dl._OPT_CACHE = dict(dl._DEFAULTS)
+        task = dl.DownloadTask(f"mods/{it['filename']}", [bad, mirror],
+                               sha1=it["sha1"], sha256="",
+                               file_size=it["file_size"])
+        t0 = time.perf_counter()
+        dl.download_files([task], target_dir=both, threads=1)
+        dt = time.perf_counter() - t0
+        p = both / task.rel_path
+        ok = p.is_file() and \
+            hashlib.sha1(p.read_bytes()).hexdigest() == it["sha1"]
+        out.append((it, only_bad[0], ok, dt))
+        log(f"    {it['filename'][:44]:44s} 坏链接单独: "
+            f"{'竟然成功(?)' if only_bad[0] else '失败(预期)'}   "
+            f"坏链接+镜像: {'成功' if ok else '失败'} {dt:5.2f}s")
+    return out
+
+
 def print_param_table():
     print("\n" + "=" * 78)
     print("参数对照：单线程顺序下载  vs  Easier 新版 downloader")
@@ -473,6 +587,8 @@ def main():
                     help="跳过第一回合，只跑轮转配对回合")
     ap.add_argument("--rotate-rounds", type=int, default=0,
                     help="轮转回合数（每轮把三臂的先后顺序轮换，抵消网络漂移）")
+    ap.add_argument("--source-matrix", type=int, default=0,
+                    help="每个站各取 N 个文件，分别从官方与镜像下载对比（0=跳过）")
     ap.add_argument("--calibrate", action="store_true",
                     help="每臂开跑前先测一次单连接基准速度，用于归一化")
     args = ap.parse_args()
@@ -608,6 +724,21 @@ def main():
               f"   →  C/A = {ta / max(tc, 1e-9):.2f}×  "
               f"C/B = {tb / max(tc, 1e-9):.2f}×")
 
+    # ---------------- 三个下载站 + 镜像 ----------------
+    if args.source_matrix and args.source_matrix > 0:
+        print("\n[6] 三个下载站 + 镜像：逐源对比")
+        print("    Modrinth 官方 = cdn.modrinth.com")
+        print("    Modrinth 镜像 = mod.mcimirror.top/data/...（302 到官方 CDN）")
+        print("    CurseForge 官方 = edge.forgecdn.net / mediafilez.forgecdn.net")
+        print("    CurseForge 镜像 = mod.mcimirror.top/files/...（302 到官方 CDN）")
+        tbl = source_matrix(items, WORK, args.source_matrix)
+        print("\n[7] 换源实战：官方链接写坏 + 镜像兜底")
+        fb = mirror_fallback_test(items, WORK, max(1, args.source_matrix - 1))
+        bad_ok = sum(1 for _i, only_bad, _ok, _dt in fb if only_bad)
+        good_ok = sum(1 for _i, _b, ok, _dt in fb if ok)
+        print(f"    → 坏链接单独成功 {bad_ok}/{len(fb)}（应为 0）"
+              f"；坏链接+镜像成功 {good_ok}/{len(fb)}（应为全部）")
+
     print_param_table()
 
     if summary:
@@ -625,11 +756,21 @@ def main():
         print(f"  · C/A = {a['elapsed'] / max(c['elapsed'], 1e-9):.2f}×   "
               f"C/B = {b['elapsed'] / max(c['elapsed'], 1e-9):.2f}×")
 
+    print("\n" + "=" * 78)
+    print("本次实战测试用到的全部模组文件")
+    print("=" * 78)
+    print(f"  {'#':>2}  {'站点':<11}{'大小':>9}  {'文件名':<58} sha1")
+    for i, it in enumerate(items, 1):
+        print(f"  {i:>2}  {it['source']:<11}{fmt_size(it['file_size']):>9}  "
+              f"{it['filename'][:58]:<58} {it['sha1'][:12]}")
+    print(f"  合计 {len(items)} 个，"
+          f"{fmt_size(sum(i['file_size'] for i in items))}")
+
     if not args.keep:
         shutil.rmtree(WORK, ignore_errors=True)
-        print(f"\n[6] 已清理测试目录 {WORK}（存在={WORK.exists()}）")
+        print(f"\n[8] 已清理测试目录 {WORK}（存在={WORK.exists()}）")
     else:
-        print(f"\n[6] 保留测试目录 {WORK}")
+        print(f"\n[8] 保留测试目录 {WORK}")
     return 0
 
 
