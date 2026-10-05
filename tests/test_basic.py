@@ -223,6 +223,143 @@ class TestUiContract(unittest.TestCase):
         self.assertIn("on_toggle", src)
 
 
+class TestDownloadPanel(unittest.TestCase):
+    """「下不下来的文件交还给用户」这块的契约与匹配逻辑。"""
+
+    @classmethod
+    def setUpClass(cls):
+        stubs.install()
+
+    def _panel(self, items, drop_handler=None, notice=None):
+        from app.ui.widgets.download_panel import DownloadPanel
+        calls = []
+
+        def handler(rel, path):
+            calls.append((rel, str(path)))
+            if drop_handler is None:
+                return True
+            return drop_handler(rel, path)
+
+        panel = DownloadPanel(None, failed_items=items,
+                              on_file_dropped=handler,
+                              on_skip_all=lambda: None,
+                              in_progress=False,
+                              on_notice=notice)
+        return panel, calls
+
+    @staticmethod
+    def _item(rel, urls, error="boom"):
+        return {"rel": rel, "urls": list(urls), "error": error}
+
+    # -- 名称归一化 -----------------------------------------------------
+    def test_normalize_keeps_version_numbers(self):
+        from app.ui.widgets.download_panel import DownloadPanel as P
+        self.assertEqual(P._normalize_name("create-1.20.1-6.0.7.jar"),
+                         "create-1.20.1-6.0.7.jar")
+        self.assertEqual(P._normalize_name("jei-1.21.1-fabric-19.57.0.451.jar"),
+                         "jei-1.21.1-fabric-19.57.0.451.jar")
+
+    def test_normalize_strips_browser_copy_suffix(self):
+        from app.ui.widgets.download_panel import DownloadPanel as P
+        want = "create-1.20.1-6.0.7.jar"
+        for name in ("create-1.20.1-6.0.7 (1).jar",
+                     "create-1.20.1-6.0.7(2).jar",
+                     "create-1.20.1-6.0.7 - 副本.jar",
+                     "create-1.20.1-6.0.7 - copy.jar",
+                     "Create-1.20.1-6.0.7.JAR"):
+            self.assertEqual(P._normalize_name(name), want, name)
+
+    # -- 链接 -----------------------------------------------------------
+    def test_links_of_returns_all_sources(self):
+        panel, _ = self._panel([self._item(
+            "mods/a.jar", ["https://a/1.jar", "https://b/2.jar",
+                           "https://a/1.jar", ""])])
+        self.assertEqual(panel.links_of("mods/a.jar"),
+                         ["https://a/1.jar", "https://b/2.jar"])
+
+    def test_links_text_has_filename_and_all_sources(self):
+        panel, _ = self._panel([self._item(
+            "mods/a.jar", ["https://a/1.jar", "https://mirror/2.jar"])])
+        text = panel.links_text("mods/a.jar")
+        self.assertTrue(text.startswith("# a.jar"))
+        self.assertIn("https://a/1.jar", text)
+        self.assertIn("https://mirror/2.jar", text)
+
+    def test_panel_exposes_copy_and_open(self):
+        from app.ui.widgets.download_panel import DownloadPanel
+        for name in ("_copy_links", "_open_link", "links_of", "links_text",
+                     "_candidates", "add_item", "has_failures"):
+            self.assertTrue(hasattr(DownloadPanel, name),
+                            f"DownloadPanel 缺少 {name}")
+        sig = inspect.signature(DownloadPanel.__init__)
+        self.assertIn("on_notice", sig.parameters)
+
+    # -- 拖入匹配 -------------------------------------------------------
+    def test_candidates_exact_and_fuzzy(self):
+        panel, _ = self._panel([self._item("mods/foo-1.0.jar", ["u"])])
+        self.assertEqual(panel._candidates("foo-1.0.jar"), ["mods/foo-1.0.jar"])
+        self.assertEqual(panel._candidates("FOO-1.0.JAR"), ["mods/foo-1.0.jar"])
+        self.assertEqual(panel._candidates("foo-1.0 (1).jar"),
+                         ["mods/foo-1.0.jar"])
+
+    def test_candidates_single_remaining_fallback(self):
+        panel, _ = self._panel([self._item("mods/foo-1.0.jar", ["u"])])
+        self.assertEqual(panel._candidates("完全不相干的名字.jar"),
+                         ["mods/foo-1.0.jar"])
+
+    def test_candidates_ambiguous_returns_none_path(self):
+        panel, _ = self._panel([
+            self._item("mods/a.jar", ["u"]),
+            self._item("mods/b.jar", ["u"]),
+        ])
+        self.assertEqual(panel._candidates("c.jar"), [])
+
+    def test_same_basename_in_two_folders_tries_both(self):
+        panel, calls = self._panel([
+            self._item("mods/x.jar", ["u"]),
+            self._item("resourcepacks/x.jar", ["u"]),
+        ], drop_handler=lambda rel, path: rel == "resourcepacks/x.jar")
+        panel._on_files_dropped([Path("x.jar")])
+        self.assertEqual([c[0] for c in calls],
+                         ["mods/x.jar", "resourcepacks/x.jar"])
+        self.assertTrue(panel.has_failures(), "只该移除校验通过的那一项")
+        self.assertNotIn("resourcepacks/x.jar", panel._failed)
+
+    # -- 拖入结果反馈 ---------------------------------------------------
+    def test_drop_success_removes_item(self):
+        notices = []
+        panel, calls = self._panel(
+            [self._item("mods/a.jar", ["u"])],
+            notice=lambda lv, t: notices.append((lv, t)))
+        panel._on_files_dropped([Path("/tmp/a.jar")])
+        self.assertEqual(calls, [("mods/a.jar", "/tmp/a.jar")])
+        self.assertFalse(panel.has_failures())
+
+    def test_drop_mismatch_reports(self):
+        notices = []
+        panel, calls = self._panel(
+            [self._item("mods/a.jar", ["u"]),
+             self._item("mods/b.jar", ["u"])],
+            notice=lambda lv, t: notices.append((lv, t)))
+        panel._on_files_dropped([Path("/tmp/zzz.jar")])
+        self.assertEqual(calls, [])
+        self.assertTrue(any("不在待补入列表" in t for _lv, t in notices),
+                        f"没有给出提示：{notices}")
+        self.assertTrue(panel.has_failures())
+
+    def test_drop_verify_failure_reports(self):
+        notices = []
+        panel, calls = self._panel(
+            [self._item("mods/a.jar", ["u"])],
+            drop_handler=lambda rel, path: False,
+            notice=lambda lv, t: notices.append((lv, t)))
+        panel._on_files_dropped([Path("/tmp/a.jar")])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(any("校验未通过" in t for _lv, t in notices),
+                        f"没有给出提示：{notices}")
+        self.assertTrue(panel.has_failures(), "校验不过的项应当留着继续让用户试")
+
+
 class TestConfigConsistency(unittest.TestCase):
     """配置三处（downloader._DEFAULTS / database 默认值 / 首选项类型）不许漂移。"""
 

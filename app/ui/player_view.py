@@ -1109,7 +1109,8 @@ class PlayerView(ctk.CTkFrame):
                 failed_items=[],
                 on_file_dropped=self._on_file_dropped,
                 on_skip_all=self._on_skip_all_failed,
-                in_progress=in_progress)
+                in_progress=in_progress,
+                on_notice=self.log.log)
             self.download_panel.grid(row=0, column=0, sticky="nsew")
         except Exception:  # noqa: BLE001
             self.download_panel = None

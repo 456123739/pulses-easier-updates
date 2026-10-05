@@ -3,12 +3,12 @@
 Minecraft 整合包更新管理工具（开发者端 + 玩家端），界面基于 CustomTkinter，
 目标平台 Windows 10。
 
-> 本仓库是 **下载引擎 v0.2.2 更新版**。
+> 本仓库是 **下载引擎 v0.2.3 更新版**。
 
 ## 下载
 
 * 只需替换文件 → 下载更新包（无需登录）：
-  [`release/pulses-easier-download-engine-v0.2.2.zip`](release/pulses-easier-download-engine-v0.2.2.zip)
+  [`release/pulses-easier-download-engine-v0.2.3.zip`](release/pulses-easier-download-engine-v0.2.3.zip)
 * 本次改动明细 → [`CHANGELOG.md`](CHANGELOG.md)
 
 更新包内按项目原有目录结构组织，解压后直接覆盖即可：
@@ -16,11 +16,12 @@ Minecraft 整合包更新管理工具（开发者端 + 玩家端），界面基�
 ```
 app/core/downloader.py                  ← 下载引擎主体
 app/core/database.py                    ← 新增配置项默认值
-app/core/__init__.py                    ← 版本号 0.1.0 → 0.2.2
+app/core/__init__.py                    ← 版本号 0.1.0 → 0.2.3
 app/ui/main_window.py                   ← 新增启动 boot 任务：探测缓存盘类型
 app/ui/widgets/preferences_dialog.py    ← 新配置项的类型登记
 app/ui/player_view.py                   ← 槽位面板收起回调桥接
 app/ui/widgets/slot_panel.py            ← 标题栏 + 收起按钮
+app/ui/widgets/download_panel.py        ← 失败项：复制/打开链接、拖入匹配与提示
 CHANGELOG.md
 ```
 
@@ -89,7 +90,7 @@ python3 tests/bench_ab.py          # 与原版的成对 A/B 实测（本地模�
 python3 tests/realworld_test.py    # 真实网络实战：Modrinth 10 + CurseForge 10（会下载约 70MB，跑完自动删除）
 ```
 
-* 基础测试 20/20、功能测试 51/51 通过。
+* 基础测试 32/32、功能测试 51/51 通过。
 * 基础测试用桩依赖把 `main.py` 的启动链路整条跑通（组类 → 构造主窗口 →
   双端预热 → boot 任务），但**不覆盖真实 Tk 渲染**——那部分仍建议在
   Windows 10 实机上点一遍。
