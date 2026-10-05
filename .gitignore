@@ -1,0 +1,31 @@
+# Python 字节码缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境目录
+venv/
+.venv/
+env/
+
+# IDE 配置文件
+.vscode/
+.idea/
+
+# 环境变量文件（包含敏感密钥，严禁上传）
+.env
+
+# 打包构建输出
+dist/
+build/
+DATABASE-TEST/
+resources/
+*.egg-info/
+
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/
+
+# 测试用的自签证书与临时产物
+tests/_tls/
+tests/logs/*.tmp

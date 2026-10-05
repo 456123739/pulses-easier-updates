@@ -1,0 +1,7 @@
+customtkinter>=5.2.0
+tkinterdnd2>=0.3.0
+Pillow>=10.0.0
+markdown>=3.5
+multimark>=0.2.0
+tkhtmlview>=0.3.0
+pywebview>=5.0.0

@@ -1,0 +1,401 @@
+"""
+developer_view.py — 开发者界面
+------------------------------------------------
+左工作区：拖入导出包 + 策略表 + 主按钮
+右工作区：更新日志编辑器 + 导出选项 + 进度 + 日志
+
+策略表支持文件夹 + 根目录散文件（如 options.txt）
+"""
+
+import os
+import subprocess
+import sys
+import threading
+import zipfile
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from tkinter import filedialog
+
+import customtkinter as ctk
+
+from ..core import database as db
+from ..core.eapack import export_eapack
+from ..core.mrpack import MRPack, merge_files, parse_mrpack, top_level_folders
+from ..theme import Color, Font, Size
+from ..utils.files import human_size
+from .widgets.drop_zone import DropZone
+from .widgets.export_options import ExportOptionsPanel
+from .widgets.log_panel import LogPanel
+from .widgets.markdown_editor import MarkdownEditor
+from .widgets.progress_panel import ProgressPanel
+from .widgets.strategy_table import StrategyTable
+
+
+class DeveloperView(ctk.CTkFrame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, fg_color=Color.WORKSPACE_BG,
+                         corner_radius=0, **kwargs)
+
+        self.source_zip: Path | None = None
+        self.tmp_dir: TemporaryDirectory | None = None
+        self.extract_dir: Path | None = None
+        self.pack: MRPack | None = None
+        self.merged: list[dict] = []
+        self.version = "1.0.0"
+        self._locked = False
+
+        self._build()
+
+    # ------------------------------------------------------------------
+    def _build(self):
+        self.grid_columnconfigure(0, weight=3)
+        self.grid_columnconfigure(1, weight=1,
+                                  minsize=Size.DEVELOPER_RIGHT_MIN_W)
+        self.grid_rowconfigure(0, weight=1)
+
+        self._build_left()
+        self._build_right()
+
+    def _build_left(self):
+        self.left = ctk.CTkFrame(self, fg_color=Color.WORKSPACE_BG,
+                                 corner_radius=0)
+        self.left.grid(row=0, column=0, sticky="nsew",
+                       padx=(Size.PAD_WORKSPACE, Size.GAP // 2),
+                       pady=Size.PAD_WORKSPACE)
+        self.left.grid_columnconfigure(0, weight=1)
+        self.left.grid_rowconfigure(1, weight=1)
+
+        drop_wrap = ctk.CTkFrame(self.left, fg_color=Color.TRANSPARENT)
+        drop_wrap.grid(row=0, column=0, sticky="ew")
+        drop_wrap.grid_columnconfigure(0, weight=1)
+
+        self.drop_pack = DropZone(
+            drop_wrap,
+            title="拖入启动器导出的整合包 ZIP",
+            subtitle="支持 .mrpack / .zip",
+            height=Size.DROP_H_WORK,
+            mode="zip",
+            on_drop=self._on_pack_dropped,
+            highlight=True)
+        self.drop_pack.grid(row=0, column=0, sticky="ew")
+
+        self.clear_btn = ctk.CTkButton(
+            drop_wrap, text="清除", width=80, height=28,
+            font=Font.SMALL, corner_radius=Size.RADIUS_BUTTON,
+            fg_color=Color.LOG_BG, hover_color=Color.BORDER,
+            text_color=Color.TEXT_SECONDARY,
+            command=self._on_clear_click)
+        self.clear_btn.grid(row=1, column=0, sticky="e", pady=(6, 0))
+
+        self.strategy_table = StrategyTable(self.left, title="更新策略")
+        self.strategy_table.grid(row=1, column=0, sticky="nsew",
+                                 pady=(Size.GAP, 0))
+
+        self.main_btn = ctk.CTkButton(
+            self.left, text="开始制作更新包", height=Size.MAIN_BTN_H,
+            font=Font.BTN_LARGE, corner_radius=Size.RADIUS_DROP,
+            fg_color=Color.ACCENT, hover_color=Color.ACCENT_HOVER,
+            text_color=Color.TEXT_ON_ACCENT,
+            command=self._on_build_click)
+        self.main_btn.grid(row=2, column=0, sticky="ew",
+                           pady=(Size.GAP, 0))
+
+    def _build_right(self):
+        self.right = ctk.CTkFrame(self, fg_color=Color.WORKSPACE_BG,
+                                  corner_radius=0)
+        self.right.grid(row=0, column=1, sticky="nsew",
+                        padx=(Size.GAP // 2, Size.PAD_WORKSPACE),
+                        pady=Size.PAD_WORKSPACE)
+        self.right.grid_columnconfigure(0, weight=1)
+        self.right.grid_rowconfigure(0, weight=1)
+
+        self.editor = MarkdownEditor(self.right)
+        self.editor.grid(row=0, column=0, sticky="nsew")
+
+        self.export_options = ExportOptionsPanel(self.right)
+        self.export_options.grid(row=1, column=0, sticky="ew",
+                                 pady=(Size.GAP, 0))
+
+        self.progress_panel = ProgressPanel(self.right)
+        self.progress_panel.grid(row=2, column=0, sticky="ew",
+                                 pady=(Size.GAP, 0))
+        self.progress_panel.grid_remove()
+
+        self.log = LogPanel(self.right, title="日志",
+                            on_clear=self._on_log_clear)
+        self.log.grid(row=3, column=0, sticky="ew", pady=(Size.GAP, 0))
+
+    # ------------------------------------------------------------------
+    def _on_pack_dropped(self, paths: list[Path]):
+        if self._locked:
+            return
+
+        zip_candidates = [
+            p for p in paths
+            if p.suffix.lower() in (".zip", ".mrpack")
+        ]
+        if not zip_candidates:
+            self.log.log("error", "请拖入 .zip 或 .mrpack 文件")
+            return
+
+        self.source_zip = zip_candidates[0]
+        try:
+            size = self.source_zip.stat().st_size
+        except OSError:
+            size = 0
+        self.drop_pack.set_text(title=self.source_zip.name,
+                                subtitle=human_size(size))
+        # 导入成功：取消引导高亮
+        try:
+            self.drop_pack.set_highlight(False)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        self.log.clear()
+        self.log.log("info", "解析导出包...")
+        self.main_btn.configure(text="解析中...", state="disabled")
+
+        zip_path = self.source_zip
+
+        def worker():
+            pack, err = parse_mrpack(zip_path)
+            if err or pack is None:
+                self.after(0, lambda e=err: self._on_parse_error(e))
+                return
+            self.after(0, lambda p=pack: self._on_parse_done(p))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_parse_error(self, err: str):
+        self.log.log("error", f"解析失败：{err}")
+        self.main_btn.configure(text="开始制作更新包", state="normal")
+
+    def _on_parse_done(self, pack: MRPack):
+        self.pack = pack
+        self.merged = merge_files(pack)
+        folders = top_level_folders(self.merged)
+
+        # 解压到临时目录，用于收集根文件
+        try:
+            self.tmp_dir = TemporaryDirectory(prefix="pulses_dev_parse_")
+            self.extract_dir = Path(self.tmp_dir.name)
+            if self.source_zip:
+                with zipfile.ZipFile(self.source_zip, "r") as zf:
+                    zf.extractall(self.extract_dir)
+        except Exception as e:  # noqa: BLE001
+            self.log.log("warn", f"解压失败：{e}")
+            self.extract_dir = None
+
+        # 收集根目录散文件
+        file_items: set[str] = set()
+        try:
+            ovr = self.extract_dir / "overrides" if self.extract_dir \
+                else None
+            if ovr and ovr.is_dir():
+                for e in ovr.iterdir():
+                    if e.is_file():
+                        file_items.add(e.name)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        all_items = list(folders) + sorted(file_items)
+        self.strategy_table.set_folders(all_items, file_items=file_items)
+
+        # 读黑名单
+        blacklist = db.get_blacklist() if db.get_db_path() else []
+        self.strategy_table.set_blacklist(blacklist)
+
+        self.export_options.set_options(db.get_export_options())
+        self._log_pack_summary(pack, folders, file_items)
+
+        self.main_btn.configure(text="开始制作更新包", state="normal")
+
+    def _log_pack_summary(self, pack: MRPack, folders: list[str],
+                          file_items: set[str]):
+        self.log.log("info", "─── 导出包信息 ───")
+        self.log.log("info", f"名称：{pack.name or '未命名'}")
+        self.log.log("info", f"版本：{pack.version_id or '未知'}")
+        self.log.log("info", f"依赖：{pack.dependencies or '无'}")
+
+        counts: dict[str, int] = {}
+        for item in self.merged:
+            path = item.get("path", "")
+            top = path.split("/", 1)[0] if "/" in path else "（根目录）"
+            counts[top] = counts.get(top, 0) + 1
+
+        if counts:
+            self.log.log("info", "─── 文件统计 ───")
+            for name in sorted(counts, key=lambda x: -counts[x]):
+                self.log.log("info", f"{name}：{counts[name]} 个")
+            self.log.log("info", f"合计：{len(self.merged)} 个文件")
+        else:
+            self.log.log("warn", "导出包中没有可更新的文件")
+
+        self.log.log("info",
+                     f"共 {len(folders)} 个文件夹，"
+                     f"{len(file_items)} 个根文件参与策略")
+
+    # ------------------------------------------------------------------
+    def _on_clear_click(self):
+        if self._locked:
+            return
+        self.source_zip = None
+        self.pack = None
+        self.merged = []
+        self.extract_dir = None
+        if self.tmp_dir is not None:
+            try:
+                self.tmp_dir.cleanup()
+            except Exception:  # noqa: BLE001, S110
+                pass
+            self.tmp_dir = None
+
+        self.drop_pack.set_text(title="拖入启动器导出的整合包 ZIP",
+                                subtitle="支持 .mrpack / .zip")
+        try:
+            self.drop_pack.set_highlight(True)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        self.strategy_table.set_folders([])
+
+        try:
+            self.editor.set_markdown("")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        try:
+            self.export_options.set_options(db.get_export_options())
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        try:
+            self.progress_panel.grid_remove()
+            self.progress_panel.reset("就绪")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        self.main_btn.configure(text="开始制作更新包", state="normal")
+
+        self.log.clear()
+        self.log.log("info", "已清除当前导出包，回到初始状态")
+
+    def _on_log_clear(self):
+        self.log.clear()
+        if self.pack is not None:
+            self.log.log("info", f"导出包：{self.pack.name or '未命名'}")
+
+    # ------------------------------------------------------------------
+    def _on_build_click(self):
+        pack = self.pack
+        source_zip = self.source_zip
+
+        if pack is None or source_zip is None:
+            self.log.log("error", "尚未导入导出包")
+            return
+
+        if db.get_db_path() is None:
+            self.log.log("warn", "尚未设置数据库，部分配置可能无法保存")
+
+        base = source_zip.stem or "pack"
+        default_name = f"{base}_update.eapack"
+
+        out = filedialog.asksaveasfilename(
+            title="保存更新包",
+            defaultextension=".eapack",
+            filetypes=[("Pulses Easier 更新包", "*.eapack"),
+                       ("所有文件", "*.*")],
+            initialfile=default_name)
+        if not out:
+            return
+
+        out_path = Path(out)
+        self._set_locked(True)
+        self.main_btn.configure(text="制作中...", state="disabled")
+        self.progress_panel.reset("准备中...")
+        self.progress_panel.grid()
+
+        strategies = self.strategy_table.get_strategies()
+        changelog = self.editor.get_markdown()
+        opts = self.export_options.get_options()
+        disabled_items = self.strategy_table.get_blacklist()
+
+        if db.get_db_path() is not None:
+            try:
+                db.set_export_options(opts)
+                db.set_blacklist(disabled_items)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        def worker():
+            ok = self._do_export(out_path, source_zip, pack,
+                                 strategies, changelog,
+                                 disabled_items)
+            self.after(0, lambda: self._on_build_done(ok, out_path))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _do_export(self, out_path: Path, source_zip: Path, pack: MRPack,
+                   strategies: dict, changelog: str,
+                   excluded_folders: list[str]) -> Path | None:
+        try:
+            self.tmp_dir = TemporaryDirectory(prefix="pulses_dev_")
+            self.extract_dir = Path(self.tmp_dir.name)
+            with zipfile.ZipFile(source_zip, "r") as zf:
+                zf.extractall(self.extract_dir)
+
+            def _log(level: str, msg: str) -> None:
+                self.after(0, self.log.log, level, msg)
+
+            def _prog(done: int, total: int, label: str) -> None:
+                self.after(0, self.progress_panel.update_progress,
+                           done, total, label)
+
+            return export_eapack(
+                source_dir=self.extract_dir,
+                source_zip=source_zip,
+                out_path=out_path,
+                pack=pack,
+                merged_files=self.merged,
+                strategies=strategies,
+                changelog_md=changelog,
+                version=self.version,
+                excluded_folders=excluded_folders,
+                log=_log,
+                progress=_prog)
+        except Exception as e:  # noqa: BLE001
+            self.after(0, self.log.log, "error", f"导出失败：{e}")
+            return None
+
+    def _on_build_done(self, result, out_path: Path):
+        self._set_locked(False)
+        self.main_btn.configure(text="开始制作更新包", state="normal")
+
+        if result is not None:
+            self.progress_panel.update_progress(1, 1, "完成 ✓")
+            self.log.log("info", "更新包制作完成 ✓")
+            self._open_folder(out_path)
+        else:
+            self.progress_panel.update_progress(0, 1, "失败")
+            self.log.log("error", "更新包制作失败")
+
+    @staticmethod
+    def _open_folder(path: Path):
+        try:
+            folder = path.parent
+            if os.name == "nt":
+                os.startfile(str(folder))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    # ------------------------------------------------------------------
+    def _set_locked(self, locked: bool):
+        self._locked = locked
+        state = "disabled" if locked else "normal"
+        try:
+            self.clear_btn.configure(state=state)
+        except Exception:  # noqa: BLE001, S110
+            pass

@@ -1,0 +1,9 @@
+{
+  "include": ["app", "main.py"],
+  "exclude": ["**/__pycache__", "**/node_modules"],
+  "typeCheckingMode": "basic",
+  "reportAttributeAccessIssue": "warning",
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none",
+  "reportOptionalMemberAccess": "warning"
+}

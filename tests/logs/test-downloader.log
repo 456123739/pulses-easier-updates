@@ -1,0 +1,46 @@
+test_abort_returns_all_tasks (__main__.TestAbort.test_abort_returns_all_tasks) ... ok
+test_abort_stops_quickly (__main__.TestAbort.test_abort_stops_quickly) ... ok
+test_all_sources_stall_fails_bounded (__main__.TestFallback.test_all_sources_stall_fails_bounded) ... ok
+test_http_404_not_saved (__main__.TestFallback.test_http_404_not_saved)
+G2 回归：404 错误页不能落盘。 ... ok
+test_retryable_status_retried (__main__.TestFallback.test_retryable_status_retried) ... ok
+test_stall_source_switches (__main__.TestFallback.test_stall_source_switches)
+慢源触发 stall → 换到正常源。 ... ok
+test_truncated_body_fails (__main__.TestFallback.test_truncated_body_fails) ... ok
+test_unknown_size_chunked (__main__.TestFallback.test_unknown_size_chunked)
+G5 回归：无 Content-Length（chunked）也能下完。 ... ok
+test_url_fallback_second_source_used (__main__.TestFallback.test_url_fallback_second_source_used)
+G1 回归：第 2 个 URL 必须真的被尝试。 ... ok
+test_url_fallback_three_sources (__main__.TestFallback.test_url_fallback_three_sources) ... ok
+test_byte_progress_monotonic (__main__.TestHashAndProgress.test_byte_progress_monotonic) ... ok
+test_callbacks_order_and_failure_only_final (__main__.TestHashAndProgress.test_callbacks_order_and_failure_only_final) ... ok
+test_caller_arithmetic_matches_player_view (__main__.TestHashAndProgress.test_caller_arithmetic_matches_player_view)
+复刻 player_view 的统计口径： ... ok
+test_file_progress_never_exceeds_total (__main__.TestHashAndProgress.test_file_progress_never_exceeds_total) ... ok
+test_results_one_entry_per_task (__main__.TestHashAndProgress.test_results_one_entry_per_task) ... ok
+test_streaming_hash_mismatch_rejected (__main__.TestHashAndProgress.test_streaming_hash_mismatch_rejected) ... ok
+test_streaming_hash_ok (__main__.TestHashAndProgress.test_streaming_hash_ok) ... ok
+test_defaults_present (__main__.TestInit.test_defaults_present) ... ok
+test_empty_task_list (__main__.TestInit.test_empty_task_list) ... ok
+test_estimate_eta (__main__.TestInit.test_estimate_eta) ... ok
+test_invalidate_options (__main__.TestInit.test_invalidate_options) ... ok
+test_public_api_shape (__main__.TestInit.test_public_api_shape) ... ok
+test_multipart_writes_correct_data (__main__.TestParts.test_multipart_writes_correct_data) ... ok
+test_part_with_meta_full_range_is_accepted (__main__.TestParts.test_part_with_meta_full_range_is_accepted)
+sidecar 明确记录全覆盖时，应当直接收尾（不重下）。 ... ok
+test_preallocated_part_not_treated_as_complete (__main__.TestParts.test_preallocated_part_not_treated_as_complete)
+G4 回归：预分配（全零）的 .part 不能被当成下载完成。 ... ok
+test_range_ignored_is_rejected (__main__.TestParts.test_range_ignored_is_rejected)
+G3 回归：源忽略 Range 时必须拒绝，不能写出错位文件。 ... ok
+test_range_ignored_then_fallback_source (__main__.TestParts.test_range_ignored_then_fallback_source)
+忽略 Range 的源 + 正常源 → 必须最终成功且内容正确。 ... ok
+test_resume_uses_range (__main__.TestParts.test_resume_uses_range) ... ok
+test_connection_reuse (__main__.TestScheduling.test_connection_reuse) ... ok
+test_parallel_slots_and_content (__main__.TestScheduling.test_parallel_slots_and_content) ... ok
+test_redirect_followed (__main__.TestScheduling.test_redirect_followed) ... ok
+test_subdirectory_creation (__main__.TestScheduling.test_subdirectory_creation) ... ok
+
+----------------------------------------------------------------------
+Ran 32 tests in 15.913s
+
+OK
