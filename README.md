@@ -3,12 +3,12 @@
 Minecraft 整合包更新管理工具（开发者端 + 玩家端），界面基于 CustomTkinter，
 目标平台 Windows 10。
 
-> 本仓库是 **下载引擎 v0.2.0 更新版**。
+> 本仓库是 **下载引擎 v0.2.1 更新版**。
 
 ## 下载
 
 * 只需替换文件 → 下载更新包（无需登录）：
-  [`release/pulses-easier-download-engine-v0.2.0.zip`](release/pulses-easier-download-engine-v0.2.0.zip)
+  [`release/pulses-easier-download-engine-v0.2.1.zip`](release/pulses-easier-download-engine-v0.2.1.zip)
 * 本次改动明细 → [`CHANGELOG.md`](CHANGELOG.md)
 
 更新包内按项目原有目录结构组织，解压后直接覆盖即可：
@@ -16,7 +16,7 @@ Minecraft 整合包更新管理工具（开发者端 + 玩家端），界面基�
 ```
 app/core/downloader.py                  ← 下载引擎主体
 app/core/database.py                    ← 新增配置项默认值
-app/core/__init__.py                    ← 版本号 0.1.0 → 0.2.0
+app/core/__init__.py                    ← 版本号 0.1.0 → 0.2.1
 app/ui/widgets/preferences_dialog.py    ← 新配置项的类型登记
 app/ui/player_view.py                   ← 槽位面板收起回调桥接
 app/ui/widgets/slot_panel.py            ← 标题栏 + 收起按钮
@@ -49,7 +49,7 @@ python main.py
 分片进度聚合（单调不回退）、单连接边下边算哈希 + `posix_fallocate` +
 陈旧 keep-alive 透明重试、返回语义与调用方统计口径对齐。
 
-**按磁盘类型限制并发（v0.2.0 新增）**：自动探测缓存目录落在 SSD / 机械盘 /
+**按磁盘类型限制并发（v0.2.1 新增）**：自动探测缓存目录落在 SSD / 机械盘 /
 网络盘 / 可移动盘上，按类型给「并发文件数」和「单文件分片线程数」设上限，
 **只能调低不能调高**。机械盘默认压到 4 个文件、且不分片——机械盘是寻道瓶颈，
 多开文件和多段随机写都会明显变慢。探测失败一律不干预，可用

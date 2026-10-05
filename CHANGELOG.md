@@ -1,6 +1,6 @@
 # Pulses Easier 更新日志
 
-## v0.2.0 — 下载引擎增量改进（2026-10-05）
+## v0.2.1 — 下载引擎增量改进 + 按磁盘类型限制并发（2026-10-05）
 
 本次只改下载链路与它直接相关的配置，**不重写既有架构**：
 两级槽位池（多线程槽位 → 单线程重试队列）、分片直写、快速筛除(B2) 全部保留。
@@ -17,7 +17,7 @@
 | `app/core/downloader.py` | 本次改动 | 下载引擎主体：5 个缺陷修复 + 5 项性能/健壮性改进 |
 | `app/core/database.py` | 本次改动 | 新增配置项默认值与首选项说明（纯追加，旧库自动兼容） |
 | `app/ui/widgets/preferences_dialog.py` | 本次改动 | 新配置项的类型登记（整数/浮点，各 1 行） |
-| `app/core/__init__.py` | 本次改动 | 版本号 `0.1.0` → `0.2.0` |
+| `app/core/__init__.py` | 本次改动 | 版本号 `0.1.0` → `0.2.1` |
 | `app/ui/player_view.py` | 你方最新版 | 槽位面板「收起」回调桥接（`on_toggle`） |
 | `app/ui/widgets/slot_panel.py` | 你方最新版 | 标题栏 + 收起按钮，回调 `on_toggle(False)` |
 
@@ -27,10 +27,10 @@
 文件校验（md5）：
 
 ```
-c937460735479571b91142c9071dd129  app/core/downloader.py
-07bfb3376f3bbd58bef1d947f2bbb26f  app/core/database.py
-b6b98dd5372202b688b85edbab57b24c  app/core/__init__.py
-6201564768d2337195bce7bbb5b0a92e  app/ui/widgets/preferences_dialog.py
+f21c4cc6ce07d1aceb6692a4cd15d83e  app/core/downloader.py
+a675db846157cfff688896d31646a08a  app/core/database.py
+fd75b61cb59464168411ea6276ce4e74  app/core/__init__.py
+ebd4517df974072f06043efc13d4b52c  app/ui/widgets/preferences_dialog.py
 dfe28178a5add1aabc01ca790d356971  app/ui/player_view.py
 a3aa5f7cc067736df87f8c63ea052e46  app/ui/widgets/slot_panel.py
 ```
