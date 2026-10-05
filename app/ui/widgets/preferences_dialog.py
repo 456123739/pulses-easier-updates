@@ -35,8 +35,14 @@ _INT_KEYS = {
     # 下载引擎增量项（1/0 开关 + 整数）
     "part_retry", "http_status_check", "part_meta_enabled",
     "cleanup_residual_parts",
+    # 按磁盘类型限制并发
+    "disk_aware_slots", "hdd_max_files", "hdd_part_threads",
+    "ssd_max_files", "ssd_part_threads",
+    "network_max_files", "network_part_threads",
+    "removable_max_files", "removable_part_threads",
+    "disk_probe_fallback",
 }
-_FLOAT_KEYS = {"speed_window", "read_poll_interval"}
+_FLOAT_KEYS = {"speed_window", "read_poll_interval", "disk_probe_timeout"}
 
 
 class _FieldRow:

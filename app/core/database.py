@@ -78,6 +78,19 @@ DEFAULT_DOWNLOAD_OPTIONS = {
     "retryable_status_retry": 1,    # 408/429/5xx 的额外重试次数
     "cleanup_residual_parts": 1,    # 下载结束清理残留 .part*
     "user_agent": "PulsesEasier/1.0",
+    # ---- 按磁盘类型限制并发（只能调低，不能调高） ----
+    "disk_aware_slots": 1,          # 1=按目标盘类型限制并发
+    "disk_type_override": "",       # ""=自动探测；可填 ssd/hdd/network/removable/unknown
+    "hdd_max_files": 4,             # 机械盘：同时下载的文件数上限
+    "hdd_part_threads": 1,          # 机械盘：单文件分片线程上限（1=不分片）
+    "ssd_max_files": 0,             # 固态：0=不额外限制
+    "ssd_part_threads": 0,
+    "network_max_files": 6,         # 网络盘 / 网盘挂载
+    "network_part_threads": 1,
+    "removable_max_files": 2,       # U 盘 / 移动硬盘 / 光驱
+    "removable_part_threads": 1,
+    "disk_probe_fallback": 1,       # Windows 下 IOCTL 失败时用 PowerShell 兜底
+    "disk_probe_timeout": 2.0,      # 兜底探测超时（秒）
 }
 
 DEFAULT_COMPARE_OPTIONS = {
@@ -172,6 +185,24 @@ DOWNLOAD_OPTION_META = [
     ("cleanup_residual_parts", "收尾清理残留分片",
      "一次下载结束后，是否清掉缓存目录里遗留的 .part / .part.meta。",
      "默认开启（1）；如果希望保留分片供下次续传，设为 0。"),
+    ("disk_aware_slots", "按磁盘类型自动限制并发",
+     ("自动探测缓存目录所在磁盘是固态/机械/网络盘，并按类型给"
+      "「同时下载的文件数」和「单文件分片线程数」设上限。"
+      "机械盘是寻道瓶颈，多开文件和多段随机写都会明显变慢。"),
+     ("默认开启（1）；只会在你配置的基础上**调低**，不会调高。"
+      "固态一般不会触发限制。")),
+    ("disk_type_override", "强制指定磁盘类型",
+     ("留空 = 自动探测。如果探测不准（例如虚拟盘、RAID、网盘挂载），"
+      "可以在这里直接指定。"),
+     "可选值：ssd / hdd / network / removable / unknown；留空表示自动。"),
+    ("hdd_max_files", "机械盘并发文件数上限",
+     "目标盘是机械盘时，同时下载几个文件。",
+     ("默认 4；机械盘上 2~4 比较合适，超过 4 磁头会来回寻道，"
+      "总体反而更慢。")),
+    ("hdd_part_threads", "机械盘单文件分片线程上限",
+     ("机械盘上对同一个文件做多段随机写会让磁头反复移动，"
+      "1 表示干脆不分片、顺序下载。"),
+     "默认 1（不分片）；如果是 SSD 缓存加速过的混合盘，可以试 2。"),
 ]
 
 COMPARE_OPTION_META = [

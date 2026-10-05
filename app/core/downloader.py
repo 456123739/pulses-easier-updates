@@ -134,6 +134,19 @@ _DEFAULTS = {
     "retryable_status_retry": 1,    # 408/429/5xx 额外重试次数
     "cleanup_residual_parts": 1,    # 1=下载结束时清理 target_dir 下残留 .part*
     "user_agent": "PulsesEasier/1.0",
+    # ---- G11：按磁盘类型限制并发（只能调低，不能调高） ----
+    "disk_aware_slots": 1,          # 1=按目标盘类型限制并发
+    "disk_type_override": "",       # ""=自动探测；可填 ssd/hdd/network/removable/unknown
+    "hdd_max_files": 4,             # 机械盘：同时下载的文件数上限
+    "hdd_part_threads": 1,          # 机械盘：单文件分片线程上限（1 = 不分片）
+    "ssd_max_files": 0,             # 固态：0 = 不额外限制
+    "ssd_part_threads": 0,          # 固态：0 = 不额外限制
+    "network_max_files": 6,         # 网络盘 / 网盘挂载
+    "network_part_threads": 1,
+    "removable_max_files": 2,       # U 盘 / 移动硬盘 / 光驱
+    "removable_part_threads": 1,
+    "disk_probe_fallback": 1,       # Windows 上 IOCTL 失败时允许 PowerShell 兜底
+    "disk_probe_timeout": 2.0,      # 兜底探测超时（秒）
 }
 
 CHUNK_SIZE = 256 * 1024
@@ -216,6 +229,373 @@ def _num(opts: dict, key: str, default: float) -> float:
         return float(raw)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return float(default)
+
+
+# ======================================================================
+# G11：按磁盘类型限制并发
+#
+# 为什么需要：SSD 上「多开文件 + 单文件分片」几乎线性收益，机械盘却是**寻道**
+# 瓶颈 —— 同时写多个文件、或对同一文件做多段随机写，都要让磁头来回跑。
+# 本机 SSD 实测：并发文件数 4→12 吞吐 87→106 MB/s，但 12→24 反而掉到 74 MB/s；
+# 机械盘上这个拐点低得多，代价也大得多（一次寻道 5~15ms，是 SSD 的上百倍）。
+#
+# 做法：探测 <target_dir> 落在哪种设备上，按类型给「同时下载的文件数」和
+# 「单文件分片线程数」设上限。上限**只能调低，不能调高**；探测失败一律当
+# unknown，完全不干预用户配置。
+#
+#   探测顺序（任一步成功即返回）
+#     Linux   : /proc/mounts 找挂载点 → 网络文件系统直接判定
+#               → /sys/class/block/<dev>/queue/rotational（dm 设备看 slaves）
+#     Windows : GetDriveTypeW（网络盘/可移动盘/光驱直接判定）
+#               → IOCTL_STORAGE_QUERY_PROPERTY 的 seek-penalty（有寻道代价=HDD）
+#               → 可选：PowerShell Get-Disk 兜底
+#   结果按「真实路径」缓存，一次进程只探测一次。
+# ======================================================================
+_NETWORK_FS = frozenset({
+    "nfs", "nfs4", "cifs", "smb3", "smbfs", "smb2", "sshfs", "fuse.sshfs",
+    "fuse.rclone", "fuse.smbnetfs", "fuse.davfs2", "davfs", "9p", "afs",
+    "ceph", "glusterfs", "fuse.glusterfs", "fuse.gvfsd-fuse", "fuse.curlftpfs",
+    "lustre", "beegfs", "panfs", "fuse.s3fs",
+})
+_OPTICAL_FS = frozenset({"iso9660", "udf"})
+
+# 磁盘类型 → (并发文件数上限的配置键, 分片线程上限的配置键)
+_DISK_POLICY_KEYS = {
+    "hdd": ("hdd_max_files", "hdd_part_threads"),
+    "network": ("network_max_files", "network_part_threads"),
+    "removable": ("removable_max_files", "removable_part_threads"),
+    "ssd": ("ssd_max_files", "ssd_part_threads"),
+}
+_DISK_TYPES = ("ssd", "hdd", "network", "removable", "unknown")
+
+_DISK_CACHE: dict[str, dict] = {}
+_DISK_CACHE_LOCK = threading.Lock()
+
+
+def _classify_fs(fstype: str) -> str | None:
+    """按文件系统类型做零成本判定（网络盘 / 光驱）。"""
+    fs = (fstype or "").strip().lower()
+    if fs in _NETWORK_FS:
+        return "network"
+    if fs in _OPTICAL_FS:
+        return "removable"
+    return None
+
+
+def _linux_mount_of(path: str) -> tuple[str, str] | None:
+    """返回 (设备, 文件系统类型)：最长匹配的挂载点。"""
+    target = os.path.realpath(path)
+    best_len = -1
+    found: tuple[str, str] | None = None
+    try:
+        with open("/proc/mounts", "r",
+                  encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                src, mnt, fstype = parts[0], parts[1], parts[2]
+                mnt = mnt.replace("\\040", " ").replace("\\011", "\t")
+                if mnt != "/":
+                    mnt = mnt.rstrip("/")
+                if mnt == "/" or target == mnt \
+                        or target.startswith(mnt + "/"):
+                    if len(mnt) > best_len:
+                        best_len = len(mnt)
+                        found = (src, fstype)
+    except OSError:
+        return None
+    return found
+
+
+def _linux_rotational(device: str) -> bool | None:
+    """True=机械盘，False=固态，None=无法判定。dm 设备看它的 slaves。"""
+    if not device or not device.startswith("/dev/"):
+        return None
+    name = os.path.basename(device)
+    if not name:
+        return None
+
+    if name.startswith("dm-") or name.startswith("md"):
+        slave_dir = f"/sys/class/block/{name}/slaves"
+        try:
+            slaves = sorted(os.listdir(slave_dir))
+        except OSError:
+            slaves = []
+        vals = [v for v in (_linux_rotational(f"/dev/{s}") for s in slaves)
+                if v is not None]
+        if not vals:
+            return None
+        return any(vals)          # 任一分层是机械盘 → 按机械盘对待
+
+    # 分区名 → 可能的整盘名：sdb2→sdb、nvme0n1p2→nvme0n1、mmcblk0p1→mmcblk0
+    candidates = [name]
+    stripped = name.rstrip("0123456789")
+    if stripped and stripped != name:
+        candidates.append(stripped)
+        if stripped.endswith("p"):
+            candidates.append(stripped[:-1])
+    for cand in candidates:
+        try:
+            with open(f"/sys/class/block/{cand}/queue/rotational",
+                      "r", encoding="ascii", errors="replace") as fh:
+                return fh.read().strip() == "1"
+        except OSError:
+            continue
+    return None
+
+
+def _windows_drive_of(path: str):
+    """返回 (盘符如 'C:', GetDriveTypeW 结果)；失败返回 None。"""
+    try:
+        import ctypes
+        drive = os.path.splitdrive(os.path.abspath(path))[0]
+        if not drive:
+            return None
+        dtype = ctypes.windll.kernel32.GetDriveTypeW(
+            ctypes.c_wchar_p(drive + "\\"))
+        return drive, int(dtype)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _windows_seek_penalty(drive: str) -> bool | None:
+    """
+    用 IOCTL_STORAGE_QUERY_PROPERTY(StorageDeviceSeekPenaltyProperty) 判断：
+    True=有寻道代价（机械盘），False=固态，None=探测失败。
+
+    以 0 访问权限打开卷句柄，普通用户即可查询，不需要管理员。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:  # noqa: BLE001
+        return None
+
+    class _Query(ctypes.Structure):
+        _fields_ = [("PropertyId", wintypes.DWORD),
+                    ("QueryType", wintypes.DWORD),
+                    ("AdditionalParameters", ctypes.c_ubyte * 8)]
+
+    class _SeekPenalty(ctypes.Structure):
+        _fields_ = [("Version", wintypes.DWORD),
+                    ("Size", wintypes.DWORD),
+                    ("IncursSeekPenalty", wintypes.BOOLEAN)]
+
+    ioctl = 0x2D1400            # IOCTL_STORAGE_QUERY_PROPERTY
+    prop_seek_penalty = 7       # StorageDeviceSeekPenaltyProperty
+    try:
+        k32 = ctypes.windll.kernel32
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+            wintypes.HANDLE]
+        handle = k32.CreateFileW("\\\\.\\" + drive, 0, 3, None, 3, 0, None)
+        invalid = ctypes.c_void_p(-1).value
+        if handle in (None, invalid):
+            return None
+        try:
+            query = _Query()
+            query.PropertyId = prop_seek_penalty
+            query.QueryType = 0
+            desc = _SeekPenalty()
+            returned = wintypes.DWORD(0)
+            ok = k32.DeviceIoControl(
+                handle, ioctl, ctypes.byref(query), ctypes.sizeof(query),
+                ctypes.byref(desc), ctypes.sizeof(desc),
+                ctypes.byref(returned), None)
+            if not ok:
+                return None
+            return bool(desc.IncursSeekPenalty)
+        finally:
+            k32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _windows_disk_type_fallback(drive: str, timeout: float) -> str | None:
+    """PowerShell 兜底（Get-Partition → Get-Disk 的 MediaType）。"""
+    letter = drive.rstrip(":").lstrip("\\/")
+    if not letter:
+        return None
+    script = ("(Get-Partition -DriveLetter {0} -ErrorAction Stop | "
+              "Get-Disk -ErrorAction Stop).MediaType").format(letter)
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-ExecutionPolicy", "Bypass", "-Command", script],
+            capture_output=True, text=True, timeout=max(0.5, timeout),
+            check=False)
+    except Exception:  # noqa: BLE001
+        return None
+    text = ((out.stdout or "") + " " + (out.stderr or "")).lower()
+    if "ssd" in text:
+        return "ssd"
+    if "hdd" in text:
+        return "hdd"
+    return None
+
+
+def detect_disk_type(path) -> dict:
+    """
+    探测 path 所在设备的类型。
+
+    返回 {"type": ssd|hdd|network|removable|unknown, "device", "fstype",
+          "source": 判定依据, "note": 补充说明}
+    任何异常都不会抛出，最差返回 unknown。
+    """
+    try:
+        key = os.path.realpath(str(path))
+    except Exception:  # noqa: BLE001
+        key = str(path)
+    with _DISK_CACHE_LOCK:
+        hit = _DISK_CACHE.get(key)
+    if hit is not None:
+        return dict(hit, cached=True)
+
+    opts = _get_options()
+    result: dict = {"type": "unknown", "device": "", "fstype": "",
+                    "source": "undetermined", "note": ""}
+    try:
+        if os.name == "nt":
+            info = _windows_drive_of(key)
+            if info is None:
+                result["note"] = "无法解析盘符"
+            else:
+                drive, dtype = info
+                result["device"] = drive
+                if dtype == 4:
+                    result.update(type="network",
+                                  source="GetDriveType=DRIVE_REMOTE")
+                elif dtype in (2, 5):
+                    result.update(type="removable",
+                                  source=f"GetDriveType={dtype}")
+                elif dtype in (3, 6):
+                    penalty = _windows_seek_penalty(drive)
+                    if penalty is True:
+                        result.update(type="hdd",
+                                      source="IOCTL seek-penalty=1")
+                    elif penalty is False:
+                        result.update(type="ssd",
+                                      source="IOCTL seek-penalty=0")
+                    elif _flag(opts, "disk_probe_fallback", True):
+                        fb = _windows_disk_type_fallback(
+                            drive, _num(opts, "disk_probe_timeout", 2.0))
+                        if fb:
+                            result.update(type=fb,
+                                          source="PowerShell Get-Disk")
+                        else:
+                            result["note"] = "IOCTL/PowerShell 均未给出结论"
+                    else:
+                        result["note"] = "IOCTL 未给出结论（兜底已关闭）"
+                else:
+                    result["note"] = f"GetDriveType={dtype} 未归类"
+        else:
+            info = _linux_mount_of(key)
+            if info is None:
+                result["note"] = "无法从 /proc/mounts 解析挂载点"
+            else:
+                src, fstype = info
+                result["device"] = src
+                result["fstype"] = fstype
+                cls = _classify_fs(fstype)
+                if cls is not None:
+                    result.update(type=cls, source=f"fstype={fstype}")
+                elif src.startswith("/dev/"):
+                    rot = _linux_rotational(src)
+                    if rot is True:
+                        result.update(
+                            type="hdd",
+                            source=f"{src} rotational=1 (sysfs)")
+                    elif rot is False:
+                        result.update(
+                            type="ssd",
+                            source=f"{src} rotational=0 (sysfs)")
+                    else:
+                        result["note"] = f"读不到 {src} 的 rotational"
+                else:
+                    result.update(source=f"非块设备挂载 ({src})")
+                    result["note"] = "可能是虚拟/网络挂载，按未知处理"
+    except Exception as e:  # noqa: BLE001
+        result["note"] = f"探测异常：{type(e).__name__}: {e}"
+
+    with _DISK_CACHE_LOCK:
+        _DISK_CACHE[key] = result
+    return dict(result, cached=False)
+
+
+def resolve_disk_policy(target_dir, opts: dict | None = None) -> dict:
+    """
+    算出本次下载实际采用的磁盘策略（不修改传入的 opts）。
+
+    返回的 multi_slots / effective_part_threads 已经过「只降不升」的限制。
+    """
+    if opts is None:
+        opts = _get_options()
+    info: dict = {"type": "unknown", "device": "", "fstype": "",
+                  "source": "disabled", "note": ""}
+    if _flag(opts, "disk_aware_slots", True):
+        forced = str(opts.get("disk_type_override", "") or "").strip().lower()
+        if forced in _DISK_TYPES:
+            info = {"type": forced, "device": "", "fstype": "",
+                    "source": "disk_type_override",
+                    "note": "由配置强制指定，未做探测"}
+        else:
+            info = detect_disk_type(target_dir)
+
+    kind = info.get("type", "unknown")
+    cfg_slots = max(1, int(_num(opts, "multi_slots", 12)))
+    cfg_parts = max(1, int(_num(opts, "part_threads", 4)))
+
+    keys = _DISK_POLICY_KEYS.get(kind)
+    max_files = 0
+    max_parts = 0
+    if keys is not None:
+        max_files = max(0, int(_num(opts, keys[0], 0)))
+        max_parts = max(0, int(_num(opts, keys[1], 0)))
+
+    eff_slots = min(cfg_slots, max_files) if max_files > 0 else cfg_slots
+    eff_parts = min(cfg_parts, max_parts) if max_parts > 0 else cfg_parts
+
+    note = str(info.get("note", "") or "")
+    if kind != "unknown" and (eff_slots != cfg_slots
+                              or eff_parts != cfg_parts):
+        note = (f"磁盘类型判定为 {kind}"
+                f"（{info.get('source', '')}）→ 并发文件数 "
+                f"{cfg_slots}→{eff_slots}，单文件分片线程 "
+                f"{cfg_parts}→{eff_parts}"
+                + (f"；{note}" if note else ""))
+    elif kind != "unknown":
+        note = (f"磁盘类型判定为 {kind}"
+                f"（{info.get('source', '')}），未触发额外限制"
+                + (f"；{note}" if note else ""))
+
+    return {
+        "type": kind,
+        "device": info.get("device", ""),
+        "fstype": info.get("fstype", ""),
+        "source": info.get("source", ""),
+        "max_files": max_files,
+        "part_threads_limit": max_parts,
+        "configured_multi_slots": cfg_slots,
+        "configured_part_threads": cfg_parts,
+        "multi_slots": eff_slots,
+        "effective_part_threads": eff_parts,
+        "note": note,
+    }
+
+
+def disk_policy_summary(target_dir, opts: dict | None = None) -> str:
+    """一行摘要，供日志/诊断使用。"""
+    p = resolve_disk_policy(target_dir, opts)
+    return (f"磁盘 {p['type']}（{p['device'] or '-'}"
+            f"{'/' + p['fstype'] if p['fstype'] else ''}，{p['source']}）"
+            f" 并发文件数 {p['multi_slots']}"
+            f"（配置 {p['configured_multi_slots']}）"
+            f" 分片线程 {p['effective_part_threads']}"
+            f"（配置 {p['configured_part_threads']}）")
 
 
 # ----------------------------------------------------------------------
@@ -1539,8 +1919,11 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
                 _sleep_backoff(opts, attempt)
 
         # -------- 分片：整个文件只尝试一次 --------
+        # G11：磁盘策略把分片线程压到 1（机械盘/U 盘/网络盘）时直接走单连接，
+        # 不做无意义的分片预分配与随机写。
         if (not single_mode
                 and not multi_attempted
+                and int(_num(opts, "part_threads", 4)) >= 2
                 and task.file_size >= MULTI_PART_THRESHOLD):
             multi_attempted = True
             res = _download_multi_part(
@@ -1616,6 +1999,27 @@ def download_files(
 
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    # G11：按目标盘类型限制并发（只降不升）。显式传入的 threads 参数优先，
+    # 但分片线程数在任何情况下都受磁盘上限约束。
+    disk_note = ""
+    if _flag(opts, "disk_aware_slots", True):
+        try:
+            policy = resolve_disk_policy(target_dir, opts)
+            if int(policy["effective_part_threads"]) \
+                    != max(1, int(_num(opts, "part_threads", 4))):
+                opts = dict(opts)
+                opts["part_threads"] = policy["effective_part_threads"]
+            if threads is None or threads <= 0:
+                multi_slots = int(policy["multi_slots"])
+            disk_note = str(policy.get("note", "") or "")
+        except Exception as e:  # noqa: BLE001
+            disk_note = f"磁盘类型探测失败（已忽略）：{type(e).__name__}: {e}"
+    if disk_note and log:
+        try:
+            log("info", disk_note)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     total = len(tasks)
     if total == 0:

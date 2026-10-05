@@ -23,6 +23,6 @@ test_slot_panel_signature (__main__.TestUiContract.test_slot_panel_signature) ..
 test_slot_panel_uses_on_toggle (__main__.TestUiContract.test_slot_panel_uses_on_toggle) ... ok
 
 ----------------------------------------------------------------------
-Ran 20 tests in 0.210s
+Ran 20 tests in 0.211s
 
 OK

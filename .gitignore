@@ -29,3 +29,6 @@ resources/
 # 测试用的自签证书与临时产物
 tests/_tls/
 tests/logs/*.tmp
+
+# 真实网络实测的临时下载目录
+_realworld/

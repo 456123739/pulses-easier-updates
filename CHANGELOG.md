@@ -114,6 +114,52 @@ a3aa5f7cc067736df87f8c63ea052e46  app/ui/widgets/slot_panel.py
 | G8 | 分片进度聚合 | 旧实现 `byte_cb` 上报的是**单片**字节数（0→片大小循环），并发分片时界面进度会反复回退。改为 `_FileProgress` 聚合「已完成 + 各在途分片」，对外单调、且带高水位夹紧。 |
 | G9 | 单连接边下边算哈希；`posix_fallocate` 预分配；陈旧 keep-alive 透明重试；指数退避+抖动 | 从 0 开始下载时用 `hashlib` 边下边算，省掉收尾的一次全文件重读（`hash_while_streaming`，默认开；续传时自动退回整文件校验）。分片预分配优先 `os.posix_fallocate`，不可用（典型：Windows）时回落 `truncate`。 |
 | G10 | 返回语义与调用方对齐 | 旧实现 `results` 只装"非 ok"的项，而 `player_view` 按 `成功 = len(results) - len(failed)` 统计、并靠 `if r.ok: _completed_files.append(...)` 收集已完成文件 —— 结果是**成功数永远是 0、已完成列表永远收集不到东西**，而且"先失败后被单线程池救回"的文件还会在列表里留一条失败记录。现在每个任务返回**恰好一条最终结果**；进度只在最终态推进（`done` 不会超过 `total`）；`on_file_failed` 只在最终失败时触发。 |
+| G11 | 按磁盘类型限制并发 | 见下面 §3.1。 |
+
+---
+
+## 三·一、G11：按磁盘类型限制并发（本轮新增）
+
+### 为什么
+
+SSD 上「多开文件 + 单文件分片」几乎线性收益，机械盘却是**寻道**瓶颈：
+同时写多个文件、或对同一文件做多段随机写，都要让磁头来回跑。一次寻道 5~15ms，
+是 SSD 的上百倍。本机 SSD 上就已经能看到拐点：并发文件数 4→12 时写入吞吐
+87→106 MB/s，但 12→24 时反而掉到 74 MB/s；机械盘上这个拐点低得多。
+
+### 怎么探测（任一步成功即返回；任何异常都不会抛出）
+
+| 平台 | 顺序 | 判定 |
+|---|---|---|
+| Linux | `/proc/mounts` 最长前缀匹配挂载点 | `nfs`/`cifs`/`smb3`/`sshfs`/`fuse.rclone`/`9p`… → **network**；`iso9660`/`udf` → **removable** |
+| Linux | `/sys/class/block/<dev>/queue/rotational` | `1` → **hdd**，`0` → **ssd**；分区名自动回溯到整盘（`sdb2→sdb`、`nvme0n1p2→nvme0n1`），`dm-*`/`md*` 看 `slaves`（任一层是机械盘就按机械盘对待） |
+| Windows | `GetDriveTypeW` | `DRIVE_REMOTE(4)` → **network**；`DRIVE_REMOVABLE(2)`/`DRIVE_CDROM(5)` → **removable** |
+| Windows | `IOCTL_STORAGE_QUERY_PROPERTY` + `StorageDeviceSeekPenaltyProperty` | 以 0 访问权限打开卷句柄查询，**普通用户即可**，不需要管理员；`IncursSeekPenalty=1` → **hdd** |
+| Windows | PowerShell `Get-Partition \| Get-Disk` 的 `MediaType` 兜底 | 仅在上一级失败且 `disk_probe_fallback=1` 时执行，带超时；可用 `disk_probe_fallback=0` 关掉 |
+
+结果按真实路径缓存，一个进程只探测一次。
+
+### 策略（**只能调低，不能调高**）
+
+| 磁盘类型 | 并发文件数上限 | 单文件分片线程上限 |
+|---|---|---|
+| `hdd` | `hdd_max_files` = **4** | `hdd_part_threads` = **1（即不分片）** |
+| `network` | `network_max_files` = **6** | `network_part_threads` = **1** |
+| `removable` | `removable_max_files` = **2** | `removable_part_threads` = **1** |
+| `ssd` | `ssd_max_files` = 0（不额外限制） | `ssd_part_threads` = 0（不额外限制） |
+| `unknown` | 不干预 | 不干预 |
+
+* 生效值 = `min(用户配置, 类型上限)`，绝不会把用户调小的值抬回去。
+* 分片线程被压到 1 时，`_attempt_file_inner` **直接跳过整条分片路径**
+  （不做无意义的预分配和随机写），大文件走顺序单连接。
+* 显式传入的 `threads=` 参数优先于并发文件数上限（分片线程上限始终生效）。
+* 探测结果与最终生效值会写进日志：
+  `磁盘类型判定为 hdd（…）→ 并发文件数 16→4，单文件分片线程 4→1`
+* 探测不准（虚拟盘、RAID、网盘挂载）时可以用 `disk_type_override`
+  直接指定 `ssd`/`hdd`/`network`/`removable`/`unknown`。
+* 公开了两个可直接调用的接口，UI 以后想显示也能用：
+  `downloader.resolve_disk_policy(dir, opts)` 与
+  `downloader.disk_policy_summary(dir, opts)`。
 
 ---
 
@@ -140,6 +186,15 @@ a3aa5f7cc067736df87f8c63ea052e46  app/ui/widgets/slot_panel.py
 | `backoff_jitter` | `0.3` | 退避抖动比例 |
 | `retryable_status_retry` | `1` | 408/425/429/5xx 的额外重试次数 |
 | `user_agent` | `PulsesEasier/1.0` | 请求 User-Agent |
+| ✅ `disk_aware_slots` | `1` | 按目标盘类型限制并发（总开关） |
+| ✅ `disk_type_override` | `""` | 留空=自动探测；可填 `ssd`/`hdd`/`network`/`removable`/`unknown` |
+| ✅ `hdd_max_files` | `4` | 机械盘并发文件数上限 |
+| ✅ `hdd_part_threads` | `1` | 机械盘单文件分片线程上限（1=不分片） |
+| `ssd_max_files` / `ssd_part_threads` | `0` / `0` | 固态：0=不额外限制 |
+| `network_max_files` / `network_part_threads` | `6` / `1` | 网络盘 / 网盘挂载 |
+| `removable_max_files` / `removable_part_threads` | `2` / `1` | U 盘 / 移动硬盘 / 光驱 |
+| `disk_probe_fallback` | `1` | Windows 下 IOCTL 失败时用 PowerShell 兜底 |
+| `disk_probe_timeout` | `2.0` | 兜底探测超时（秒） |
 
 初版已有的 16 个下载配置键默认值**全部未变**
 （`multi_slots` 在 `downloader._DEFAULTS` 是 12、在 `database.DEFAULT_DOWNLOAD_OPTIONS`
@@ -155,15 +210,15 @@ a3aa5f7cc067736df87f8c63ea052e46  app/ui/widgets/slot_panel.py
 
 | 场景 | 原版 | 改进版 | 结论 |
 |---|---|---|---|
-| HTTP 12×24KB（8 槽位） | 6.072s | **0.074s** | **81.8×** |
-| HTTP 3 个文件，双方出厂默认参数 | 61.57s（20.52s/文件） | **0.095s**（0.032s/文件） | **651×** |
-| HTTPS 8×8KB（8 槽位） | 4.097s | **1.060s** | **3.9×**（含共享 SSLContext） |
-| HTTPS 24×8KB（8 槽位） | 10.158s | **1.064s** | **9.6×** |
+| HTTP 12×24KB（8 槽位） | 6.072s | **0.076s** | **79.6×** |
+| HTTP 3 个文件，双方出厂默认参数 | 61.57s（20.52s/文件） | **0.097s**（0.032s/文件） | **638×** |
+| HTTPS 8×8KB（8 槽位） | 3.611s | **0.674s** | **5.4×**（含共享 SSLContext） |
+| HTTPS 24×8KB（8 槽位） | 10.156s | **1.091s** | **9.3×** |
 | 换源：10 个文件 `[404, 正常源]` | 成功 0/10 | **成功 10/10** | 换源真正生效 |
 | 预分配零填充 `.part`（无哈希） | ❌ 零填充被判成功 | ✅ 重新下载、内容正确 | 数据损坏修复 |
 | 未知大小（chunked） | ❌ 失败（12.1s） | ✅ 成功（0.0s） | 读空闲误判修复 |
 | 8 MiB 单文件 | 3.09s，无残片 | **0.07s**，无残片、无中间分片 | 分片直写 + rename 收尾 |
-| 12 个文件顺序下载 | 36.31s，连接 1 | **0.50s**，连接 1 | **73×**，keep-alive 复用正常 |
+| 12 个文件顺序下载 | 36.31s，连接 1 | **0.52s**，连接 1 | **70×**，keep-alive 复用正常 |
 
 ### 关于"拼接时间"
 
@@ -172,6 +227,72 @@ a3aa5f7cc067736df87f8c63ea052e46  app/ui/widgets/slot_panel.py
 最后拼起来」会产生 **3 倍** 磁盘 IO（写 + 读 + 再写），1 GB 文件仅拼接就要
 约 5 秒串行时间；本次改动没有引入任何拼接，也不会回到那条路。
 `*.part.[0-9]*` 中间文件在两个实现里都不产生（已实测确认为"无"）。
+
+### 真实网络实战测试（Modrinth 10 + CurseForge 10，共 69.0 MB）
+
+不只是本地模拟源。用项目**自己的**分类链路跑：
+
+```
+Modrinth 官方 API      → 10 个不同 mod（378KB ~ 18.3MB）
+CurseForge（元数据经    → 10 个不同 mod（20KB ~ 12.9MB）
+ mod.mcimirror.top 镜像，
+ 文件仍走 edge.forgecdn.net）
+        ↓
+differ.diff_packs_parallel()                     ← 项目自己的分类
+        ↓ added=20 modified=0 deleted=0
+PlayerView._collect_download_tasks_from_diff()   ← 项目自己的任务生成
+        ↓ 20 个 DownloadTask
+三轮对照：A 裸 urllib 顺序 / B 原版 downloader / C 新版 downloader
+        ↓ 每个文件逐字节 SHA1 校验
+```
+
+第一回合（20 个文件 / 69.0 MB，真实网络）：
+
+| 方式 | 耗时 | 平均吞吐 | SHA1 校验 | 说明 |
+|---|---|---|---|---|
+| **A** 裸 urllib 顺序（一个下完再下一个） | **567.91s** | 0.12 MB/s | **18/20** | 2 个文件因 120s 读超时**彻底失败**（无重试、无续传，只剩半截文件） |
+| **B** 原版 downloader（出厂默认） | **156.22s** | 0.44 MB/s | 20/20 | 日志里仍出现「读空闲超过 20s」；靠"预分配 `.part` 大小达标即当成下完"这条**危险捷径**救回 |
+| **C** 新版 downloader（本次交付） | **22.59s** | **3.05 MB/s** | 20/20 | 无一次停滞误判 |
+
+**C/A = 25.14×   C/B = 6.91×**（同一批文件、同一时刻的链路）
+
+> 这条链路本身很慢且抖动极大（单连接实测 84 KB/s ~ 1.3 MB/s，
+> 不同时刻能差 15 倍）。所以上面这组数字**不是**纯粹的引擎差距，
+> 但方向与量级都指向同一件事：**顺序单连接在这条链路上会被单个慢流拖死，
+> 而并发 + 快速甩掉慢源 + 失败续传才是决定性的。**
+> 随机网络抖动用下面的"轮转配对回合"单独量化。
+
+> 另外注意 B 的 20/20 是靠那条危险捷径拿到的：只要 `.part` 的大小凑够
+> `file_size`，它就认为文件已下完（**不校验内容**）。这正是 G4 修掉的缺陷——
+> 在真实网络上它确实"救"回了文件，但也正是同一段代码会把预分配的零填充
+> 文件判成下载成功。
+
+**轮转配对回合**（最小的 8 个文件 / 4.0 MB，跑 3 轮，每轮把 A/B/C 的先后顺序
+轮换，抵消网络随时间漂移；每臂开跑前先测一次「单连接取 256KB 的耗时」作为
+当刻网络基准）：
+
+| 方式 | 三轮耗时 | 中位 | 归一化（÷当刻网络基准）三轮 | 归一化中位 |
+|---|---|---|---|---|
+| A 裸 urllib 顺序 | 14.91 / 29.75 / 84.19 s | 29.75s | 10.97 / 30.61 / 129.05 | **30.61×** |
+| B 原版 downloader | 26.72 / 47.46 / 64.00 s | 47.46s | 39.56 / 53.01 / 17.96 | **39.56×** |
+| C 新版 downloader | 18.25 / 6.11 / 10.07 s | **10.07s** | 18.98 / 1.83 / 3.54 | **3.54×** |
+
+* 原始中位：**C/A = 2.96×，C/B = 4.71×**
+* 归一化中位：**C/A ≈ 8.6×，C/B ≈ 11.2×**
+
+同一批文件、同一台机器，三轮轮换顺序后 C 始终最快；把网络本身的快慢除掉
+以后差距更大，说明这不是"某一轮网络恰好快"的运气。
+
+**实战结论**
+
+| 观察 | 数据 |
+|---|---|
+| 全部文件真实可用性 | 20/20 SHA1 逐字节校验通过（C），B 也 20/20 但靠危险捷径，A 只有 18/20 |
+| 顺序单连接是最大瓶颈 | 单连接实测 84 KB/s~1.3 MB/s，且会因单个流卡死而拖垮整个队列 |
+| 并发是最主要的收益来源 | A→C 原始 25.1×、轮转中位 3.0×、归一化 8.6× |
+| 原版的核心代价是"白等超时" | 20 个文件 × 20s 读空闲 ÷ 12 槽位 ≈ 40s 纯浪费；小文件回合里 B 的中位归一化 39.56×（几乎全是等待时间） |
+| 失败处理决定成败 | A 丢掉 2 个文件（无重试无续传）；B/C 都靠续传/重试拿回全部 20 个 |
+| 磁盘策略在本机未触发 | 目标盘 `/dev/sdb2` rotational=0 → SSD → 不额外限制（日志有记录） |
 
 ---
 
@@ -206,8 +327,11 @@ a3aa5f7cc067736df87f8c63ea052e46  app/ui/widgets/slot_panel.py
 # 基础测试：编译 / 全模块导入 / 启动链路 / 配置一致性（20 项）
 python3 tests/test_basic.py
 
-# 功能测试：初始化 / 多线程调度 / 降级换源 / 超时 / 分片 / 进度 / 中止（32 项）
+# 功能测试：初始化 / 多线程调度 / 降级换源 / 超时 / 分片 / 进度 / 中止 / 磁盘策略（41 项）
 python3 tests/test_downloader.py
+
+# 真实网络实战：Modrinth 10 + CurseForge 10（约 70MB，跑完自动清理）
+python3 tests/realworld_test.py
 
 # 与原版的成对 A/B 实测（约 3.5 分钟）
 python3 tests/bench_ab.py
@@ -218,9 +342,12 @@ python3 tests/bench_ab.py
   （组类 → 构造主窗口 → `prepare_offscreen_warmup` 双端预热 →
   `get_boot_tasks` → 4 个 boot 任务全部执行）。注意：本机无 tkinter / 无显示器，
   **不覆盖真实 Tk 渲染**，Windows 10 上的界面仍需实机点一遍。
-* **功能测试 32/32 通过**：本地模拟源覆盖正常源、404、503、忽略 Range、
+* **功能测试 41/41 通过**：本地模拟源覆盖正常源、404、503、忽略 Range、
   慢源、停滞源、截断响应、chunked、重定向、预分配 `.part`、断点续传、
   哈希（边下边算 / 不匹配拒绝）、进度单调、回调顺序、中止响应时间。
+* 磁盘策略 7 项：文件系统类型归类、本机探测与缓存、探测失败不干预、
+  `disk_type_override` 五种取值、**只降不升**、机械盘策略下不进分片路径、
+  固态策略下正常分片、策略写进日志。
 * 逐项日志见 `tests/logs/`。
 
 ---
@@ -231,10 +358,11 @@ python3 tests/bench_ab.py
   Modrinth `POST /v2/version_files/update` 一次问清所有本地文件的更新版本
   （实测 7 个文件 1 次请求 0.87s，对比逐个 `GET /project/{slug}/version`
   9.16s / 4 个文件）；CurseForge `POST /v1/fingerprints` + `POST /v1/mods`。
-* **按磁盘类型限制"并发文件数"**：本机 SSD 上并发文件数从 12 升到 24 时写入
-  吞吐反而掉到 ~70%（87→106→74 MB/s），机械盘会放大数倍。可按
-  `/sys/block/*/queue/rotational`（Windows 用盘符类型）把 HDD 的
-  `multi_slots` 上限压到 4。
+* ~~按磁盘类型限制"并发文件数"~~ → **本轮已实现（G11）**。
+* **在真机上验证 Windows 的磁盘探测**：`GetDriveTypeW` 与
+  seek-penalty IOCTL 已在代码里按文档实现，但本机是 Linux，
+  **Windows 分支没有实机验证过**。上机后看一眼日志里的
+  `磁盘类型判定为 …` 是否符合实际；不对就用 `disk_type_override` 手工指定。
 * **绝不逐块 `fsync`**：实测 3.15ms/次，等于把吞吐压到 ~31 MB/s；
   当前实现不做逐块 fsync，改动中也没有引入，后续也不要加。
 * HTTP/2 多路复用（需要换掉 `http.client`，收益不确定，本轮未动）。

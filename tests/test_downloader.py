@@ -574,5 +574,148 @@ class TestAbort(TestBase):
         self.assertTrue(any(r.aborted for r in res))
 
 
+# ======================================================================
+# 7. 按磁盘类型限制并发（G11）
+# ======================================================================
+class TestDiskPolicy(TestBase):
+    def setUp(self):
+        super().setUp()
+        dl._DISK_CACHE.clear()
+
+    def test_classify_fs(self):
+        for fs in ("nfs", "nfs4", "cifs", "smb3", "sshfs", "fuse.rclone",
+                   "9p", "davfs"):
+            self.assertEqual(dl._classify_fs(fs), "network", fs)
+        self.assertEqual(dl._classify_fs("iso9660"), "removable")
+        self.assertEqual(dl._classify_fs("udf"), "removable")
+        for fs in ("ext4", "xfs", "btrfs", "ntfs", "apfs", "tmpfs", ""):
+            self.assertIsNone(dl._classify_fs(fs), fs)
+
+    def test_detect_local_disk(self):
+        info = dl.detect_disk_type(self.tmp)
+        self.assertIn(info["type"], dl._DISK_TYPES)
+        self.assertIn("source", info)
+        # 同一路径必须命中缓存
+        again = dl.detect_disk_type(self.tmp)
+        self.assertTrue(again.get("cached"))
+        self.assertEqual(again["type"], info["type"])
+
+    def test_probe_failure_is_unknown(self):
+        orig = dl._linux_mount_of
+        dl._linux_mount_of = lambda path: None
+        try:
+            dl._DISK_CACHE.clear()
+            info = dl.detect_disk_type(self.tmp)
+            self.assertEqual(info["type"], "unknown")
+            pol = dl.resolve_disk_policy(self.tmp, set_opts(
+                disk_type_override="", multi_slots=16, part_threads=4))
+            self.assertEqual(pol["multi_slots"], 16)
+            self.assertEqual(pol["effective_part_threads"], 4)
+        finally:
+            dl._linux_mount_of = orig
+            dl._DISK_CACHE.clear()
+
+    def test_override_limits_are_downgrade_only(self):
+        cases = {
+            "hdd": (4, 1),
+            "network": (6, 1),
+            "removable": (2, 1),
+            "ssd": (16, 4),
+            "unknown": (16, 4),
+        }
+        for kind, (files, parts) in cases.items():
+            pol = dl.resolve_disk_policy(self.tmp, set_opts(
+                disk_type_override=kind, multi_slots=16, part_threads=4))
+            self.assertEqual(pol["multi_slots"], files, kind)
+            self.assertEqual(pol["effective_part_threads"], parts, kind)
+
+        # 用户配置本来就低于上限 → 只降不升，不能反被抬高
+        pol = dl.resolve_disk_policy(self.tmp, set_opts(
+            disk_type_override="hdd", multi_slots=2, part_threads=1))
+        self.assertEqual(pol["multi_slots"], 2)
+        self.assertEqual(pol["effective_part_threads"], 1)
+
+    def test_disabled_switch_has_no_effect(self):
+        pol = dl.resolve_disk_policy(self.tmp, set_opts(
+            disk_aware_slots=0, disk_type_override="hdd",
+            multi_slots=16, part_threads=4))
+        self.assertEqual(pol["multi_slots"], 16)
+        self.assertEqual(pol["effective_part_threads"], 4)
+
+    def _multipart_gate_probe(self, kind, part_threads):
+        """
+        探针：走完整的 download_files 入口（磁盘策略在这一层生效），
+        看给定磁盘类型下会不会进入分片路径。
+        用 404 源让单连接必然失败，从而走到「第 3 次：分片」那一支。
+        """
+        called = []
+        orig = dl._download_multi_part
+
+        def spy(*a, **k):
+            called.append(1)
+            return orig(*a, **k)
+
+        set_opts(disk_type_override=kind, multi_slots=16,
+                 part_threads=part_threads, retry_same_url=0,
+                 retryable_status_retry=0, retry_backoff_ms=10,
+                 backoff_max_ms=20, connect_timeout=3,
+                 read_idle_timeout=3, stall_timeout=3,
+                 single_stall_timeout=3, single_url_timeout=6)
+        dl._DISK_CACHE.clear()
+        dl._download_multi_part = spy
+        try:
+            total = 6 * 1024 * 1024
+            task = dl.DownloadTask(
+                "dead.bin", [self.srv.url("missing", "dead")],
+                sha1="", file_size=total)
+            results = dl.download_files([task], target_dir=self.tmp,
+                                        threads=None)
+        finally:
+            dl._download_multi_part = orig
+        return called, results
+
+    def test_hdd_override_skips_multipart(self):
+        """part_threads 被磁盘策略压到 1 → 根本不进入分片路径。"""
+        called, results = self._multipart_gate_probe("hdd", 4)
+        self.assertEqual(called, [], "机械盘策略下仍然进入了分片路径")
+        self.assertFalse(results[0].ok)
+        self.assertGreaterEqual(STATS.count("/missing/dead"), 1)
+
+    def test_ssd_override_keeps_multipart(self):
+        called, _results = self._multipart_gate_probe("ssd", 4)
+        self.assertEqual(len(called), 1, "固态策略下分片路径被误关")
+
+    def test_hdd_policy_downloads_big_file_sequentially(self):
+        """机械盘策略下 6 MiB 文件必须完整、且全程不发 Range。"""
+        total = 6 * 1024 * 1024
+        data = payload("hddbig", total)
+        logs = []
+
+        def fake_log(level, msg):
+            logs.append((level, msg))
+
+        set_opts(disk_type_override="hdd", multi_slots=16, part_threads=4)
+        dl._DISK_CACHE.clear()
+        results = dl.download_files(
+            [dl.DownloadTask("hddbig.bin",
+                             [self.srv.url("data", "hddbig", total)],
+                             sha256=sha256_of(data), file_size=total)],
+            target_dir=self.tmp, threads=None, log=fake_log)
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].ok, results[0].error)
+        self.assert_content("hddbig.bin", data)
+        self.assertEqual([r for r in STATS.ranges if r], [],
+                         f"机械盘策略下仍然发了分片请求：{STATS.ranges}")
+        self.assertTrue(any("hdd" in m for _lv, m in logs),
+                        f"没有把磁盘策略写进日志：{logs}")
+
+    def test_summary_line(self):
+        text = dl.disk_policy_summary(self.tmp, set_opts(
+            disk_type_override="hdd", multi_slots=16, part_threads=4))
+        self.assertIn("hdd", text)
+        self.assertIn("16", text)
+        self.assertIn("4", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

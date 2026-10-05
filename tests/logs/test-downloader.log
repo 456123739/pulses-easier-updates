@@ -1,5 +1,16 @@
 test_abort_returns_all_tasks (__main__.TestAbort.test_abort_returns_all_tasks) ... ok
 test_abort_stops_quickly (__main__.TestAbort.test_abort_stops_quickly) ... ok
+test_classify_fs (__main__.TestDiskPolicy.test_classify_fs) ... ok
+test_detect_local_disk (__main__.TestDiskPolicy.test_detect_local_disk) ... ok
+test_disabled_switch_has_no_effect (__main__.TestDiskPolicy.test_disabled_switch_has_no_effect) ... ok
+test_hdd_override_skips_multipart (__main__.TestDiskPolicy.test_hdd_override_skips_multipart)
+part_threads 被磁盘策略压到 1 → 根本不进入分片路径。 ... ok
+test_hdd_policy_downloads_big_file_sequentially (__main__.TestDiskPolicy.test_hdd_policy_downloads_big_file_sequentially)
+机械盘策略下 6 MiB 文件必须完整、且全程不发 Range。 ... ok
+test_override_limits_are_downgrade_only (__main__.TestDiskPolicy.test_override_limits_are_downgrade_only) ... ok
+test_probe_failure_is_unknown (__main__.TestDiskPolicy.test_probe_failure_is_unknown) ... ok
+test_ssd_override_keeps_multipart (__main__.TestDiskPolicy.test_ssd_override_keeps_multipart) ... ok
+test_summary_line (__main__.TestDiskPolicy.test_summary_line) ... ok
 test_all_sources_stall_fails_bounded (__main__.TestFallback.test_all_sources_stall_fails_bounded) ... ok
 test_http_404_not_saved (__main__.TestFallback.test_http_404_not_saved)
 G2 回归：404 错误页不能落盘。 ... ok
@@ -41,6 +52,6 @@ test_redirect_followed (__main__.TestScheduling.test_redirect_followed) ... ok
 test_subdirectory_creation (__main__.TestScheduling.test_subdirectory_creation) ... ok
 
 ----------------------------------------------------------------------
-Ran 32 tests in 15.913s
+Ran 41 tests in 15.789s
 
 OK
