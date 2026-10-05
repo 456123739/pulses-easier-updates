@@ -716,6 +716,244 @@ class TestDiskPolicy(TestBase):
         self.assertIn("16", text)
         self.assertIn("4", text)
 
+    def test_probe_disk_cache_warms_and_skips_reprobe(self):
+        """
+        启动时探一次就该够：之后 resolve 只做字典命中，
+        不再碰 /proc/mounts、sysfs（Windows 上则是 IOCTL / PowerShell）。
+        """
+        calls = {"n": 0}
+        orig = dl._linux_mount_of
+
+        def counting(path):
+            calls["n"] += 1
+            return orig(path)
+
+        dl._linux_mount_of = counting
+        try:
+            dl.clear_disk_cache()
+            info = dl.probe_disk_cache(self.tmp)
+            self.assertIn(info["type"], dl._DISK_TYPES)
+            self.assertTrue(info.get("probed_at_startup"))
+            self.assertEqual(calls["n"], 1)
+
+            for _ in range(5):
+                dl.resolve_disk_policy(self.tmp, set_opts(
+                    disk_type_override="", multi_slots=16, part_threads=4))
+            self.assertEqual(calls["n"], 1,
+                             f"启动探过之后又探测了 {calls['n'] - 1} 次")
+        finally:
+            dl._linux_mount_of = orig
+            dl.clear_disk_cache()
+
+    def test_clear_disk_cache_forces_reprobe(self):
+        dl.clear_disk_cache()
+        dl.probe_disk_cache(self.tmp)
+        dl.clear_disk_cache()
+        self.assertEqual(dl._DISK_CACHE, {})
+
+
+# ======================================================================
+# 8. 分片策略按大小分级（静态，不做动态拆分）
+# ======================================================================
+class TestSizeTiers(TestBase):
+    def test_part_count_tiers(self):
+        o = set_opts()
+        cases = [(1, 1), (3, 1), (4, 2), (8, 2), (16, 2),
+                 (20, 3), (64, 8), (100, 8), (1024, 8)]
+        for mb, want in cases:
+            got = dl._planned_part_count(mb * 1024 * 1024, o)
+            self.assertEqual(got, want, f"{mb}MiB → {got}，期望 {want}")
+
+    def test_part_count_respects_config(self):
+        o = set_opts(target_part_size=4 * 1024 * 1024, max_part_count=4,
+                     multi_part_min_bytes=2 * 1024 * 1024)
+        self.assertEqual(dl._planned_part_count(1 * 1024 * 1024, o), 1)
+        self.assertEqual(dl._planned_part_count(8 * 1024 * 1024, o), 2)
+        self.assertEqual(dl._planned_part_count(64 * 1024 * 1024, o), 4)
+
+    def test_actual_ranges_match_planned_count(self):
+        o = set_opts()
+        total = 20 * 1024 * 1024
+        n = dl._planned_part_count(total, o)
+        ranges = dl._part_ranges(total, n)
+        self.assertEqual(len(ranges), n)
+        self.assertEqual(ranges[0][0], 0)
+        self.assertEqual(ranges[-1][1], total - 1)
+        for i in range(len(ranges) - 1):
+            self.assertEqual(ranges[i][1] + 1, ranges[i + 1][0],
+                             "分片区间不连续")
+
+    def test_small_file_never_multiparts(self):
+        """< multi_part_min_bytes 的文件即使单连接失败也不该走分片。"""
+        calls = []
+        orig = dl._download_multi_part
+
+        def spy(*a, **k):
+            calls.append(1)
+            return orig(*a, **k)
+
+        set_opts(multi_part_min_bytes=4 * 1024 * 1024, retry_same_url=0,
+                 retryable_status_retry=0, retry_backoff_ms=10,
+                 disk_aware_slots=0)
+        dl._download_multi_part = spy
+        try:
+            task = dl.DownloadTask("small.bin",
+                                   [self.srv.url("missing", "small")],
+                                   sha1="", file_size=2 * 1024 * 1024)
+            dl.download_files([task], target_dir=self.tmp, threads=1)
+        finally:
+            dl._download_multi_part = orig
+        self.assertEqual(calls, [], "2MiB 文件不该进分片路径")
+
+    def test_large_file_multi_first_when_enabled(self):
+        """large_file_multi_first_bytes>0 时，超大文件应先试分片。"""
+        total = 20 * 1024 * 1024
+        data = payload("mfirst", total)
+        order = []
+        orig_multi = dl._download_multi_part
+        orig_single = dl._try_single_url
+
+        def spy_multi(*a, **k):
+            order.append("multi")
+            return orig_multi(*a, **k)
+
+        def spy_single(*a, **k):
+            order.append("single")
+            return orig_single(*a, **k)
+
+        dl._download_multi_part = spy_multi
+        dl._try_single_url = spy_single
+        try:
+            set_opts(large_file_multi_first_bytes=16 * 1024 * 1024,
+                     disk_aware_slots=0, part_threads=4)
+            res = dl.download_files(
+                [dl.DownloadTask("mfirst.bin",
+                                 [self.srv.url("data", "mfirst", total)],
+                                 sha256=sha256_of(data), file_size=total)],
+                target_dir=self.tmp)
+        finally:
+            dl._download_multi_part = orig_multi
+            dl._try_single_url = orig_single
+        self.assertTrue(res[0].ok, res[0].error)
+        self.assert_content("mfirst.bin", data)
+        self.assertEqual(order[:1], ["multi"],
+                         f"没有先试分片：{order[:4]}")
+
+    def test_multipart_after_single_by_default(self):
+        """默认 0：仍然是单连接优先，分片只是后手。"""
+        total = 20 * 1024 * 1024
+        data = payload("sfirst", total)
+        order = []
+        orig_multi = dl._download_multi_part
+        orig_single = dl._try_single_url
+
+        def spy_multi(*a, **k):
+            order.append("multi")
+            return orig_multi(*a, **k)
+
+        def spy_single(*a, **k):
+            order.append("single")
+            return orig_single(*a, **k)
+
+        dl._download_multi_part = spy_multi
+        dl._try_single_url = spy_single
+        try:
+            set_opts(large_file_multi_first_bytes=0, disk_aware_slots=0,
+                     part_threads=4)
+            res = dl.download_files(
+                [dl.DownloadTask("sfirst.bin",
+                                 [self.srv.url("data", "sfirst", total)],
+                                 sha256=sha256_of(data), file_size=total)],
+                target_dir=self.tmp)
+        finally:
+            dl._download_multi_part = orig_multi
+            dl._try_single_url = orig_single
+        self.assertTrue(res[0].ok, res[0].error)
+        self.assert_content("sfirst.bin", data)
+        self.assertEqual(order, ["single"], f"应只走单连接：{order}")
+
+
+# ======================================================================
+# 9. 耐心重试与主池并行（没有串行尾巴）
+# ======================================================================
+class TestPatientOverlap(TestBase):
+    def test_patient_retry_overlaps_main_pool(self):
+        """
+        一个文件在主池里立刻失败后，耐心重试应当**马上**开始，
+        而不是等主池里所有文件都跑完（旧实现是两段串行，会形成尾巴）。
+        """
+        events = []
+        lock = threading.Lock()
+        orig = dl._attempt_file
+
+        def fake_attempt(task, target_dir, byte_cb, should_abort, opts,
+                         single_mode=False):
+            idx = int(task.rel_path.split("-")[1].split(".")[0])
+            ts = time.perf_counter()
+            if single_mode:
+                with lock:
+                    events.append(("patient_start", idx, ts))
+                time.sleep(0.05)
+                with lock:
+                    events.append(("patient_end", idx, time.perf_counter()))
+                return dl._AttemptOutcome(True)
+            if idx == 0:
+                # 第 0 个文件在主池里"秒失败"，立刻降级
+                time.sleep(0.02)
+                with lock:
+                    events.append(("aggr_end", idx, time.perf_counter()))
+                return dl._AttemptOutcome(False, "模拟失败")
+            time.sleep(0.40)
+            with lock:
+                events.append(("aggr_end", idx, time.perf_counter()))
+            return dl._AttemptOutcome(True)
+
+        dl._attempt_file = fake_attempt
+        try:
+            set_opts(multi_slots=6, single_slots=2, disk_aware_slots=0)
+            tasks = [dl.DownloadTask(f"f-{i}.bin", ["http://127.0.0.1/x"],
+                                     sha1="", file_size=1)
+                     for i in range(12)]
+            t0 = time.perf_counter()
+            results = dl.download_files(tasks, target_dir=self.tmp,
+                                        threads=None)
+            total = time.perf_counter() - t0
+        finally:
+            dl._attempt_file = orig
+
+        self.assertEqual(len(results), 12)
+        patient_starts = [ts for kind, _i, ts in events
+                          if kind == "patient_start"]
+        aggr_ends = [ts for kind, _i, ts in events if kind == "aggr_end"]
+        self.assertEqual(len(patient_starts), 1, "降级文件没有被耐心重试")
+        last_main_done = max(aggr_ends)
+        self.assertLess(
+            min(patient_starts), last_main_done,
+            "耐心重试是在主池全部结束之后才开始的（串行尾巴又回来了）")
+        # 串行的话总耗时会 ≥ 主池全部耗时 + 耐心耗时
+        self.assertLess(total, 1.6,
+                        f"耗时 {total:.2f}s，看起来退回了串行两段")
+
+    def test_all_failed_still_reports_every_task(self):
+        orig = dl._attempt_file
+
+        def always_fail(task, *a, **k):
+            return dl._AttemptOutcome(False, "永久失败")
+
+        set_opts(multi_slots=4, single_slots=2, disk_aware_slots=0,
+                 retry_backoff_ms=5, backoff_max_ms=10)
+        dl._attempt_file = always_fail
+        try:
+            tasks = [dl.DownloadTask(f"bad-{i}.bin", ["http://127.0.0.1/x"],
+                                     sha1="", file_size=1)
+                     for i in range(7)]
+            results = dl.download_files(tasks, target_dir=self.tmp,
+                                        threads=None)
+        finally:
+            dl._attempt_file = orig
+        self.assertEqual(len(results), 7)
+        self.assertTrue(all(not r.ok for r in results))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

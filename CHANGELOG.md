@@ -1,6 +1,6 @@
 # Pulses Easier 更新日志
 
-## v0.2.1 — 下载引擎增量改进 + 按磁盘类型限制并发（2026-10-05）
+## v0.2.2 — 下载引擎增量改进 + 磁盘策略 + 调度/分片细化（2026-10-05）
 
 本次只改下载链路与它直接相关的配置，**不重写既有架构**：
 两级槽位池（多线程槽位 → 单线程重试队列）、分片直写、快速筛除(B2) 全部保留。
@@ -14,10 +14,11 @@
 
 | 文件 | 归属 | 说明 |
 |---|---|---|
-| `app/core/downloader.py` | 本次改动 | 下载引擎主体：5 个缺陷修复 + 5 项性能/健壮性改进 |
+| `app/core/downloader.py` | 本次改动 | 下载引擎主体：5 个缺陷修复 + 5 项性能改进 + 磁盘策略 + 调度/分片细化 |
 | `app/core/database.py` | 本次改动 | 新增配置项默认值与首选项说明（纯追加，旧库自动兼容） |
-| `app/ui/widgets/preferences_dialog.py` | 本次改动 | 新配置项的类型登记（整数/浮点，各 1 行） |
-| `app/core/__init__.py` | 本次改动 | 版本号 `0.1.0` → `0.2.1` |
+| `app/ui/widgets/preferences_dialog.py` | 本次改动 | 新配置项的类型登记（整数/浮点） |
+| `app/ui/main_window.py` | 本次改动 | 新增启动 boot 任务「探测缓存盘类型」 |
+| `app/core/__init__.py` | 本次改动 | 版本号 `0.1.0` → `0.2.2` |
 | `app/ui/player_view.py` | 你方最新版 | 槽位面板「收起」回调桥接（`on_toggle`） |
 | `app/ui/widgets/slot_panel.py` | 你方最新版 | 标题栏 + 收起按钮，回调 `on_toggle(False)` |
 
@@ -27,10 +28,11 @@
 文件校验（md5）：
 
 ```
-f21c4cc6ce07d1aceb6692a4cd15d83e  app/core/downloader.py
-a675db846157cfff688896d31646a08a  app/core/database.py
-fd75b61cb59464168411ea6276ce4e74  app/core/__init__.py
-ebd4517df974072f06043efc13d4b52c  app/ui/widgets/preferences_dialog.py
+da793a8163425203d3388432f465807d  app/core/downloader.py
+724c2a87de52e6372b3b0b71a03c3297  app/core/database.py
+acbff869162321f5642609f857869309  app/core/__init__.py
+cbeed113bf34c6e354c12e1a9b301863  app/ui/main_window.py
+6d1e08f2849778217ea15f137b7ab3d5  app/ui/widgets/preferences_dialog.py
 dfe28178a5add1aabc01ca790d356971  app/ui/player_view.py
 a3aa5f7cc067736df87f8c63ea052e46  app/ui/widgets/slot_panel.py
 ```
@@ -163,6 +165,90 @@ SSD 上「多开文件 + 单文件分片」几乎线性收益，机械盘却是*
 
 ---
 
+## 三·二、调度与分片的三处调整（本轮）
+
+### G12 耐心重试不再是一条串行尾巴
+
+**原来**：三级池是严格串行的——多线程槽位池**全部跑完**，才开始单线程重试池。
+一个文件在主池里早早失败，却要等到最后一个正常文件下完才被重试；
+这期间它什么都没有做，纯粹是尾巴。20 个文件里 1 个需要耐心重试、
+重试花 30 秒，总耗时就凭空多 30 秒。
+
+**现在**：保留三级池的**职责划分**（激进档 / 耐心档），但把耐心池**提前开**：
+主池里每有一个文件降级，立刻提交给耐心池，与"还没下完的正常文件"重叠执行。
+
+* 耐心档的并发仍然由 `single_slots`（默认 4）封顶 → 不会出现 12 个槽位
+  全被卡住的文件占满；
+* 挂起连接数上限 = `multi_slots + single_slots` = 16，远低于
+  `max_connections = 128`；
+* 主池空掉之后再收尾扫一次队列，保证不漏；
+* 日志从「N 个文件进入单线程重试阶段」改成
+  「N 个文件进入耐心重试（与主池并行，最多 4 个同时）」。
+
+**验证**：`TestPatientOverlap.test_patient_retry_overlaps_main_pool` 用
+"12 个任务、6 槽位、第 0 个文件在主池里 20ms 秒失败"构造场景，断言
+**耐心重试的开始时刻早于主池最后一个任务的结束时刻**（旧实现必然晚于）。
+
+### G13 磁盘类型改为启动时探一次
+
+**原来**：`download_files` 每次调用都走一遍 `resolve_disk_policy`。虽然
+`detect_disk_type` 有按真实路径的缓存，但第一次仍要付探测成本——Windows 上
+`IOCTL` 失败走 PowerShell 兜底最坏 2 秒，刚好卡在"点开始下载"到"第一字节"
+之间。
+
+**现在**：下载目标固定是 `<database>/cache`，启动时就知道，所以
+
+* `main_window.get_boot_tasks()` 增加一条 boot 任务「探测缓存盘类型」，
+  在启动页的后台线程里调一次 `downloader.probe_disk_cache(cache_root)`；
+* 结果被 downloader 缓存，之后每次下载只做一次字典命中，不再碰
+  `/proc/mounts`、sysfs（Windows 上则是 IOCTL / PowerShell）；
+* 启动完成后把结论写进日志（`disk_policy_summary`），用户能看到实际判定；
+* 新增 `probe_disk_cache()` / `clear_disk_cache()` 两个接口，
+  换盘或换数据库目录时可以手动刷新。
+
+**验证**：`test_probe_disk_cache_warms_and_skips_reprobe` 包一层计数器，
+断言"启动探 1 次 + 之后连续 5 次 resolve"总共只探测 **1 次**。
+
+### G14 分片按大小分级（明确**不**做动态拆分）
+
+**原来**：一刀切——`>= 4 MiB` 就用固定 4 片，超过多少都一样。
+
+**现在**：分片数按文件大小**静态**算出来，启动前就确定、零协调成本：
+
+```
+< multi_part_min_bytes            → 1（不分片）
+否则 ceil(size / target_part_size) → 夹到 [2, max_part_count]
+```
+
+默认（4 MiB / 8 MiB / 8 片）的实际结果：
+
+| 文件大小 | 分片数 | 每片 |
+|---|---|---|
+| 1 MiB / 3 MiB | 1 | 不分片 |
+| 4 MiB / 8 MiB / 16 MiB | 2 | 2 / 4 / 8 MiB |
+| 20 MiB | 3 | 6.7 MiB |
+| 64 MiB 及以上 | 8（上限） | ≥8 MiB |
+
+另外新增 `large_file_multi_first_bytes`（默认 `0` = 关闭）：设成非 0 时，
+超过该大小的文件会**先试分片**再退回单连接。默认保持"单连接优先"。
+
+**为什么不做运行中动态拆片**（即"发现某片慢就把它对半拆开"）：
+
+1. **收益本来就小**：本机对 12~27 MB 文件实测多连接只有 **1.02~1.33×**；
+   而这次 20 个真实 mod 的实战里，吞吐全部来自**跨文件并发**，单文件分片
+   一次都没用上（20 个文件全部单连接成功）。
+2. **成本是实打实的**：动态拆片要做进度聚合、兄弟分片取消、区间簿记与
+   续传元数据合并，还要处理"拆出来的新片落到哪个 Range、和已有 .part
+   区间怎么对齐"；机械盘上多段随机写还会放大寻道。
+3. **首包成本被忽略不得**：每条新连接要先付一次连接建立 + TLS 握手
+   （本机实测 ~0.69s，**与文件大小无关**），片切得越碎，这笔固定开销占比越高。
+
+所以结论是：**按大小静态分级值得做（已做），动态拆片不值得做（不做）**。
+真要优化单文件速度，正确的旋钮是 `large_file_multi_first_bytes` 与
+`target_part_size`，而不是运行时拆片。
+
+---
+
 ## 四、新增配置项
 
 全部有默认值，**旧数据库不需要迁移**（`get_download_options()` 会与内置默认值合并）。
@@ -195,6 +281,10 @@ SSD 上「多开文件 + 单文件分片」几乎线性收益，机械盘却是*
 | `removable_max_files` / `removable_part_threads` | `2` / `1` | U 盘 / 移动硬盘 / 光驱 |
 | `disk_probe_fallback` | `1` | Windows 下 IOCTL 失败时用 PowerShell 兜底 |
 | `disk_probe_timeout` | `2.0` | 兜底探测超时（秒） |
+| ✅ `multi_part_min_bytes` | `4 MiB` | 小于该大小永不分片 |
+| ✅ `target_part_size` | `8 MiB` | 目标片大小，用来算初始分片数 |
+| ✅ `max_part_count` | `8` | 初始分片数上限 |
+| ✅ `large_file_multi_first_bytes` | `0` | >0 时超大文件先试分片（默认仍单连接优先） |
 
 初版已有的 16 个下载配置键默认值**全部未变**
 （`multi_slots` 在 `downloader._DEFAULTS` 是 12、在 `database.DEFAULT_DOWNLOAD_OPTIONS`
@@ -327,7 +417,7 @@ PlayerView._collect_download_tasks_from_diff()   ← 项目自己的任务生成
 # 基础测试：编译 / 全模块导入 / 启动链路 / 配置一致性（20 项）
 python3 tests/test_basic.py
 
-# 功能测试：初始化 / 多线程调度 / 降级换源 / 超时 / 分片 / 进度 / 中止 / 磁盘策略（41 项）
+# 功能测试：调度 / 降级换源 / 超时 / 分片分级 / 进度 / 中止 / 磁盘策略 / 耐心重试并行（51 项）
 python3 tests/test_downloader.py
 
 # 真实网络实战：Modrinth 10 + CurseForge 10（约 70MB，跑完自动清理）
@@ -342,10 +432,13 @@ python3 tests/bench_ab.py
   （组类 → 构造主窗口 → `prepare_offscreen_warmup` 双端预热 →
   `get_boot_tasks` → 4 个 boot 任务全部执行）。注意：本机无 tkinter / 无显示器，
   **不覆盖真实 Tk 渲染**，Windows 10 上的界面仍需实机点一遍。
-* **功能测试 41/41 通过**：本地模拟源覆盖正常源、404、503、忽略 Range、
+* **功能测试 51/51 通过**：本地模拟源覆盖正常源、404、503、忽略 Range、
   慢源、停滞源、截断响应、chunked、重定向、预分配 `.part`、断点续传、
   哈希（边下边算 / 不匹配拒绝）、进度单调、回调顺序、中止响应时间。
-* 磁盘策略 7 项：文件系统类型归类、本机探测与缓存、探测失败不干预、
+* 本轮新增 10 项：分片分级表、按配置夹取、区间连续性、小文件永不分片、
+  大文件先手分片（可配）、默认仍单连接优先、启动探测只做一次、
+  清缓存后可重探、耐心重试与主池并行、全失败仍返回全部任务。
+* 磁盘策略 8 项：文件系统类型归类、本机探测与缓存、探测失败不干预、
   `disk_type_override` 五种取值、**只降不升**、机械盘策略下不进分片路径、
   固态策略下正常分片、策略写进日志。
 * 逐项日志见 `tests/logs/`。

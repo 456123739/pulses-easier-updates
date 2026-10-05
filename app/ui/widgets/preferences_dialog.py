@@ -41,6 +41,9 @@ _INT_KEYS = {
     "network_max_files", "network_part_threads",
     "removable_max_files", "removable_part_threads",
     "disk_probe_fallback",
+    # 分片策略：按大小分级
+    "multi_part_min_bytes", "target_part_size", "max_part_count",
+    "large_file_multi_first_bytes",
 }
 _FLOAT_KEYS = {"speed_window", "read_poll_interval", "disk_probe_timeout"}
 

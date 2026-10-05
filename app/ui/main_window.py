@@ -139,6 +139,7 @@ class MainWindow(ctk.CTk):
         return [
             ("加载主题资源", self._boot_theme),
             ("检查拖拽支持", self._boot_check_dnd),
+            ("探测缓存盘类型", self._boot_probe_disk),
             ("清理下载残留", self._boot_clean_parts),
             ("探测渲染引擎", self._boot_check_renderer),
         ]
@@ -155,6 +156,26 @@ class MainWindow(ctk.CTk):
     def _boot_check_dnd(self):
         try:
             from tkinterdnd2 import DND_FILES  # noqa: F401
+            return True, ""
+        except Exception:  # noqa: BLE001
+            return False, ""
+
+    def _boot_probe_disk(self):
+        """
+        启动时探一次缓存盘类型（下载目标固定是 <database>/cache）。
+
+        Windows 上 IOCTL 失败要走 PowerShell 兜底，最坏约 2 秒；放在下载前会
+        明显拖慢首包，放在启动页（本来就有后台任务）则完全无感。
+        探测结果被 downloader 缓存，之后每次下载只做一次字典命中。
+        """
+        try:
+            from ..core import cache as cache_mod
+            from ..core import downloader as dl_mod
+            root = cache_mod.get_cache_root()
+            if root is None:
+                return True, ""          # 还没设置数据库目录，等用的时候再探
+            info = dl_mod.probe_disk_cache(root)
+            self._boot_disk_type = info.get("type", "unknown")
             return True, ""
         except Exception:  # noqa: BLE001
             return False, ""
@@ -196,6 +217,22 @@ class MainWindow(ctk.CTk):
                 try:
                     self.player_view.log.log(
                         "info", f"已清理 {n} 个未完成的下载文件")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        try:
+            kind = getattr(self, "_boot_disk_type", "")
+            if kind and kind != "unknown":
+                try:
+                    from ..core import cache as cache_mod
+                    from ..core import downloader as dl_mod
+                    root = cache_mod.get_cache_root()
+                    if root is not None:
+                        self.player_view.log.log(
+                            "info", dl_mod.disk_policy_summary(
+                                root, dl_mod._get_options()))
                 except Exception:  # noqa: BLE001, S110
                     pass
         except Exception:  # noqa: BLE001, S110

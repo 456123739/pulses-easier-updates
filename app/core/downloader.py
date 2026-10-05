@@ -147,6 +147,11 @@ _DEFAULTS = {
     "removable_part_threads": 1,
     "disk_probe_fallback": 1,       # Windows 上 IOCTL 失败时允许 PowerShell 兜底
     "disk_probe_timeout": 2.0,      # 兜底探测超时（秒）
+    # ---- 分片策略：按大小分级（静态，不做动态拆分） ----
+    "multi_part_min_bytes": 4 * 1024 * 1024,   # 小于此值永不分片
+    "target_part_size": 8 * 1024 * 1024,       # 目标片大小，用来算初始分片数
+    "max_part_count": 8,                       # 初始分片数上限
+    "large_file_multi_first_bytes": 0,         # >0 时，超过该大小的文件先试分片（默认 0=仍先试单连接）
 }
 
 CHUNK_SIZE = 256 * 1024
@@ -596,6 +601,33 @@ def disk_policy_summary(target_dir, opts: dict | None = None) -> str:
             f"（配置 {p['configured_multi_slots']}）"
             f" 分片线程 {p['effective_part_threads']}"
             f"（配置 {p['configured_part_threads']}）")
+
+
+def probe_disk_cache(target_dir) -> dict:
+    """
+    主动探测并写入缓存（供**启动阶段**调用）。
+
+    下载目标固定是 `<database>/cache`，启动时就已知，所以让启动页的
+    boot 任务探一次即可；后续每次下载只做一次字典命中，不用再碰 sysfs /
+    IOCTL / PowerShell（Windows 上兜底探测最坏要 2 秒，放在下载前会明显卡首包）。
+    """
+    try:
+        key = os.path.realpath(str(target_dir))
+    except Exception:  # noqa: BLE001
+        key = str(target_dir)
+    with _DISK_CACHE_LOCK:
+        _DISK_CACHE.pop(key, None)       # 允许启动时强制刷新
+    info = detect_disk_type(target_dir)
+    info["probed_at_startup"] = True
+    with _DISK_CACHE_LOCK:
+        _DISK_CACHE[key] = info
+    return info
+
+
+def clear_disk_cache():
+    """清空磁盘类型缓存（换盘 / 换数据库目录后可用）。"""
+    with _DISK_CACHE_LOCK:
+        _DISK_CACHE.clear()
 
 
 # ----------------------------------------------------------------------
@@ -1592,6 +1624,31 @@ def _ensure_part_size(part_file: Path, total: int, opts: dict):
 # ----------------------------------------------------------------------
 # A：分片直写最终文件
 # ----------------------------------------------------------------------
+def _planned_part_count(total: int, opts: dict) -> int:
+    """
+    按文件大小**静态**决定初始分片数（不做运行中动态拆分）。
+
+    小文件单连接最省事：多开连接要先付一次连接建立 + TLS 握手
+    （本机实测 ~0.69s/连接，与文件大小无关），片太小的话这笔开销比省下的
+    传输时间还多。所以策略是分级的：
+
+        < multi_part_min_bytes          → 不分片（1）
+        否则 ceil(size / target_part_size)，再夹到 [2, max_part_count]
+
+    例（默认 4MiB / 8MiB / 8 片）：8MiB→2 片、20MiB→3 片、
+    64MiB→8 片、1GiB→8 片（每片 128MiB）。
+
+    之所以不做"运行中按速度动态拆片"：早先实测 12~27MB 文件的多连接收益
+    只有 1.02~1.33×，而动态拆片要额外付出进度聚合、兄弟分片取消、
+    区间簿记、以及机械盘上更多随机寻道的代价，得不偿失。
+    """
+    if total < int(_num(opts, "multi_part_min_bytes", MULTI_PART_THRESHOLD)):
+        return 1
+    target = max(1, int(_num(opts, "target_part_size", 8 * 1024 * 1024)))
+    cap = max(1, int(_num(opts, "max_part_count", 8)))
+    return max(2, min(cap, (total + target - 1) // target))
+
+
 def _part_ranges(total: int, count: int) -> list[tuple[int, int]]:
     if count <= 1 or total <= 0:
         return [(0, total)]
@@ -1715,7 +1772,7 @@ def _download_multi_part(url: str, target: Path, task: DownloadTask,
         done_ranges = _merge_ranges(
             [(s, min(e, total - 1)) for s, e in raw if s < total])
 
-    ranges = _part_ranges(total, MULTI_PART_COUNT)
+    ranges = _part_ranges(total, _planned_part_count(total, opts))
     if len(ranges) <= 1:
         return _PartResult(False, "分片数不足")
 
@@ -1874,10 +1931,57 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
     last_err = "无可用下载链接"
     tried: list[str] = []
 
+    # 分片适用性（G11 磁盘策略把分片线程压到 1 时整条分片路径都不走）
+    multi_allowed = (
+        not single_mode
+        and int(_num(opts, "part_threads", 4)) >= 2
+        and _planned_part_count(task.file_size, opts) >= 2)
+    multi_first_at = int(_num(opts, "large_file_multi_first_bytes", 0))
+    multi_first = (multi_allowed and multi_first_at > 0
+                   and task.file_size >= multi_first_at)
+
+    def _multi_once(url: str):
+        """整个文件最多只做一次分片尝试；返回 None 表示这次不适用。"""
+        nonlocal multi_attempted
+        if not multi_allowed or multi_attempted:
+            return None
+        multi_attempted = True
+        return _download_multi_part(url, target, task, task.file_size,
+                                    progress, should_abort, opts)
+
     for url in task.urls:
         if _is_abort(should_abort):
             return _AttemptOutcome(False, "用户中止", aborted=True)
         tried.append(url)
+
+        # -------- 分片（可选先手）：整个文件最多尝试一次 --------
+        # G11：磁盘策略把分片线程压到 1（机械盘/U 盘/网络盘）时直接走单连接，
+        # 不做无意义的分片预分配与随机写。
+        # large_file_multi_first_bytes>0 时，超大文件可以先试分片再退回单连接；
+        # 默认 0 = 保持"单连接优先"（实测多连接对单文件只有 1.02~1.33×）。
+        if multi_first:
+            res = _multi_once(url)
+            if res is not None:
+                if res.aborted:
+                    return _AttemptOutcome(False, "用户中止", aborted=True)
+                if res.fast_stalled:
+                    return _AttemptOutcome(False, res.error,
+                                           fast_stalled=True)
+                if res.range_unsupported:
+                    # G3：这个源不支持分段 → 换下一个源继续试
+                    last_err = res.error
+                    continue
+                if res.ok:
+                    v_ok, v_err = _verify(target, task)
+                    if v_ok:
+                        return _AttemptOutcome(True)
+                    last_err = f"{url} → {v_err}"
+                    try:
+                        target.unlink()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+                else:
+                    last_err = res.error
 
         # -------- 单连接：本 URL 独立配额 --------
         retryable_left = max(
@@ -1918,37 +2022,30 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
             if attempt < max_attempts:
                 _sleep_backoff(opts, attempt)
 
-        # -------- 分片：整个文件只尝试一次 --------
-        # G11：磁盘策略把分片线程压到 1（机械盘/U 盘/网络盘）时直接走单连接，
-        # 不做无意义的分片预分配与随机写。
-        if (not single_mode
-                and not multi_attempted
-                and int(_num(opts, "part_threads", 4)) >= 2
-                and task.file_size >= MULTI_PART_THRESHOLD):
-            multi_attempted = True
-            res = _download_multi_part(
-                url, target, task, task.file_size,
-                progress, should_abort, opts)
-            if res.aborted:
-                return _AttemptOutcome(False, "用户中止", aborted=True)
-            if res.fast_stalled:
-                return _AttemptOutcome(False, res.error,
-                                       fast_stalled=True)
-            if res.range_unsupported:
-                # G3：这个源不支持分段 → 换下一个源继续试（不再写坏文件）
-                last_err = res.error
-                continue
-            if res.ok:
-                v_ok, v_err = _verify(target, task)
-                if v_ok:
-                    return _AttemptOutcome(True)
-                last_err = f"{url} → {v_err}"
-                try:
-                    target.unlink()
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            else:
-                last_err = res.error
+        # -------- 分片（后手，默认路径） --------
+        if not multi_first:
+            res = _multi_once(url)
+            if res is not None:
+                if res.aborted:
+                    return _AttemptOutcome(False, "用户中止", aborted=True)
+                if res.fast_stalled:
+                    return _AttemptOutcome(False, res.error,
+                                           fast_stalled=True)
+                if res.range_unsupported:
+                    # G3：这个源不支持分段 → 换下一个源继续试（不再写坏文件）
+                    last_err = res.error
+                    continue
+                if res.ok:
+                    v_ok, v_err = _verify(target, task)
+                    if v_ok:
+                        return _AttemptOutcome(True)
+                    last_err = f"{url} → {v_err}"
+                    try:
+                        target.unlink()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+                else:
+                    last_err = res.error
 
     if len(tried) > 1:
         last_err = f"{last_err}（已尝试 {len(tried)} 个源）"
@@ -2116,10 +2213,82 @@ def download_files(
         _store(task, res)
         return res
 
+    def _run_single(task: DownloadTask) -> DownloadResult:
+        """耐心档：放宽超时、关掉快速筛除，给不稳定源最后一次机会。"""
+        if _is_abort(should_abort):
+            res = DownloadResult(task, False, None, "用户中止",
+                                 aborted=True)
+            _store(task, res)
+            _report_final(task, False, "用户中止", aborted=True)
+            return res
+        if on_file_started is not None:
+            try:
+                on_file_started(task)
+            except Exception:  # noqa: BLE001, S110
+                pass
+        try:
+            outcome = _attempt_file(task, target_dir, byte_progress,
+                                    should_abort, opts,
+                                    single_mode=True)
+        except Exception as e:  # noqa: BLE001
+            outcome = _AttemptOutcome(
+                False, f"内部异常：{type(e).__name__}: {e}")
+
+        if outcome.aborted:
+            res = DownloadResult(task, False, None, "用户中止",
+                                 aborted=True)
+            _store(task, res)
+            _report_final(task, False, "用户中止", aborted=True)
+            return res
+        if outcome.ok:
+            target = target_dir / task.rel_path
+            res = DownloadResult(task, True, target, "")
+            _store(task, res)
+            _report_final(task, True, "")
+            return res
+
+        if on_file_failed is not None:
+            try:
+                on_file_failed(task, outcome.error)
+            except Exception:  # noqa: BLE001, S110
+                pass
+        res = DownloadResult(task, False, None, outcome.error)
+        _store(task, res)
+        _report_final(task, False, outcome.error)
+        return res
+
+    # -------------------- 主池 + 耐心池（并行） --------------------
+    # 为什么不是"主池全部结束再跑耐心池"：那样降级文件会形成一条**串行尾巴**
+    # （第一个阶段跑完才开始第二阶段）。而慢速/失败的文件本来就在早期就暴露
+    # 出来了，让它们立刻进耐心池，就能和"还没下完的正常文件"重叠。
+    # 耐心档的并发仍由 single_slots 封顶，所以不会出现"12 个槽位全被卡住的
+    # 文件占满"的局面。
+    multi_workers = max(1, multi_slots)
+    single_workers = max(1, single_slots)
+    patient_futures: dict = {}
+
+    def _drain_retries(patient_pool) -> int:
+        """把 retry_queue 里新产生的降级文件立刻提交给耐心池。"""
+        moved = 0
+        while True:
+            try:
+                t = retry_queue.get_nowait()
+            except Exception:  # noqa: BLE001
+                break
+            if _is_abort(should_abort):
+                res = DownloadResult(t, False, None, "用户中止",
+                                     aborted=True)
+                _store(t, res)
+                _report_final(t, False, "用户中止", aborted=True)
+                continue
+            patient_futures[patient_pool.submit(_run_single, t)] = t
+            moved += 1
+        return moved
+
     try:
-        multi_workers = max(1, multi_slots)
-        with ThreadPoolExecutor(max_workers=multi_workers) as pool:
-            futures = {pool.submit(_run_multi, t): t for t in tasks}
+        with ThreadPoolExecutor(max_workers=multi_workers) as main_pool, \
+                ThreadPoolExecutor(max_workers=single_workers) as patient_pool:
+            futures = {main_pool.submit(_run_multi, t): t for t in tasks}
             for fut in as_completed(futures):
                 try:
                     fut.result()
@@ -2128,97 +2297,36 @@ def download_files(
                     res = DownloadResult(t, False, None, str(e))
                     _store(t, res)
                     _report_final(t, False, str(e))
+                _drain_retries(patient_pool)
+            # 主池已空：收尾再扫一遍（最后完成的那些 future 之后产生的降级）
+            _drain_retries(patient_pool)
+            if patient_futures and log:
+                try:
+                    log("info",
+                        f"{len(patient_futures)} 个文件进入耐心重试"
+                        f"（与主池并行，最多 {single_workers} 个同时）")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            for pf in as_completed(list(patient_futures)):
+                t = patient_futures[pf]
+                try:
+                    pf.result()
+                except Exception as e:  # noqa: BLE001
+                    res = DownloadResult(t, False, None, str(e))
+                    _store(t, res)
+                    _report_final(t, False, str(e))
     except Exception as e:  # noqa: BLE001
         if log:
             try:
-                log("error", f"多线程槽位池异常：{e}")
+                log("error", f"下载池异常：{e}")
             except Exception:  # noqa: BLE001, S110
                 pass
-
-    # -------------------- 单线程重试槽位 --------------------
-    retry_tasks: list[DownloadTask] = []
-    while not retry_queue.empty():
-        try:
-            retry_tasks.append(retry_queue.get_nowait())
-        except Exception:  # noqa: BLE001
-            break
-
-    if retry_tasks and not _is_abort(should_abort):
-        if log:
-            try:
-                log("info",
-                    f"{len(retry_tasks)} 个文件进入单线程重试阶段")
-            except Exception:  # noqa: BLE001, S110
-                pass
-
-        def _run_single(task: DownloadTask) -> DownloadResult:
-            if _is_abort(should_abort):
-                res = DownloadResult(task, False, None, "用户中止",
-                                     aborted=True)
-                _store(task, res)
-                _report_final(task, False, "用户中止", aborted=True)
-                return res
-            if on_file_started is not None:
-                try:
-                    on_file_started(task)
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            try:
-                outcome = _attempt_file(task, target_dir, byte_progress,
-                                        should_abort, opts,
-                                        single_mode=True)
-            except Exception as e:  # noqa: BLE001
-                outcome = _AttemptOutcome(
-                    False, f"内部异常：{type(e).__name__}: {e}")
-
-            if outcome.aborted:
-                res = DownloadResult(task, False, None, "用户中止",
-                                     aborted=True)
-                _store(task, res)
-                _report_final(task, False, "用户中止", aborted=True)
-                return res
-            if outcome.ok:
-                target = target_dir / task.rel_path
-                res = DownloadResult(task, True, target, "")
-                _store(task, res)
-                _report_final(task, True, "")
-                return res
-
-            if on_file_failed is not None:
-                try:
-                    on_file_failed(task, outcome.error)
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            res = DownloadResult(task, False, None, outcome.error)
-            _store(task, res)
-            _report_final(task, False, outcome.error)
-            return res
-
-        try:
-            single_workers = max(1, single_slots)
-            with ThreadPoolExecutor(max_workers=single_workers) as pool:
-                futures = {pool.submit(_run_single, t): t
-                           for t in retry_tasks}
-                for fut in as_completed(futures):
-                    try:
-                        fut.result()
-                    except Exception as e:  # noqa: BLE001
-                        t = futures[fut]
-                        res = DownloadResult(t, False, None, str(e))
-                        _store(t, res)
-                        _report_final(t, False, str(e))
-        except Exception as e:  # noqa: BLE001
-            if log:
-                try:
-                    log("error", f"单线程重试池异常：{e}")
-                except Exception:  # noqa: BLE001, S110
-                    pass
-    elif retry_tasks:
-        for t in retry_tasks:
-            res = DownloadResult(t, False, None, "用户中止",
-                                 aborted=True)
-            _store(t, res)
-            _report_final(t, False, "用户中止", aborted=True)
+        # 池子异常退出：把所有还没定论的任务按中止收尾，保证结果齐全
+        for t in tasks:
+            if id(t) not in outcome_map:
+                res = DownloadResult(t, False, None, f"下载池异常：{e}")
+                _store(t, res)
+                _report_final(t, False, str(e))
 
     if _flag(opts, "cleanup_residual_parts", True):
         _cleanup_residual_parts(target_dir)
