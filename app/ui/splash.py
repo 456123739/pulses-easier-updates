@@ -15,15 +15,14 @@ splash.py — 启动页
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 
 import customtkinter as ctk
 
 from ..core import database as db
+from ..paths import asset as _asset
 from ..theme import Color, Font
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_LOGO_PATH = _PROJECT_ROOT / "assets" / "Pulses0-new.png"
+_LOGO_PATH = _asset("Pulses0-new.png")
 
 _CHROMA_KEY = "#010203"
 

@@ -23,14 +23,14 @@ from ..core import recent
 from ..core.pack_info import ModpackInfo, read_modpack_info
 from ..core.pack_locator import locate_modpack
 from ..core.state import AppState
+from ..paths import asset as _asset
 from ..theme import Color, Font, Size
 from .widgets.drop_zone import DropZone
 from .widgets.info_card import InfoCard
 from .widgets.more_panel import MorePanel
 from .widgets.whitelist_panel import WhitelistPanel
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_LOGO_PATH = _PROJECT_ROOT / "assets" / "logo.png"
+_LOGO_PATH = _asset("logo.png")
 
 
 class Sidebar(ctk.CTkFrame):

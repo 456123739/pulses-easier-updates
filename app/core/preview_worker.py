@@ -26,13 +26,15 @@ def _open_with_browser(html_path: Path) -> None:
         pass
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
+def main(argv: list[str] | None = None) -> int:
+    """argv 省略时用 sys.argv[1:]（`-m app.core.preview_worker` 的用法）。"""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
         print("usage: python -m app.core.preview_worker <html_file>",
               file=sys.stderr)
         return 1
 
-    html_path = Path(sys.argv[1])
+    html_path = Path(argv[0])
     if not html_path.is_file():
         print(f"file not found: {html_path}", file=sys.stderr)
         return 1
