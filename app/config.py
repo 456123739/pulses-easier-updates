@@ -95,8 +95,15 @@ LOCAL_ONLY_FILES = frozenset({
 })
 
 
+def is_transient_name(name: str) -> bool:
+    """搬运/替换过程中留下的临时名（不能参与比对）。"""
+    n = str(name)
+    return n.endswith(".pulses_new") or ".pulses_tmp" in n
+
+
 def is_local_only_name(name: str) -> bool:
-    return str(name) in LOCAL_ONLY_FILES
+    n = str(name)
+    return n in LOCAL_ONLY_FILES or is_transient_name(n)
 
 
 def is_local_only_dir(name: str) -> bool:

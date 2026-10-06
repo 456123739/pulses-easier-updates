@@ -24,6 +24,7 @@ import customtkinter as ctk
 from ..config import Strategy, default_strategy_for_dir
 from ..core.apply_rules import resolve_strategy
 from ..core import cache as cache_mod
+from ..core import checkpoint as cp_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
 from ..core import resume as resume_mod
@@ -42,6 +43,7 @@ from ..core.mrpack import (
 from ..core.pack_detector import PackKind, detect_pack_kind
 from ..core.pack_info import ModpackInfo, read_modpack_info
 from ..core.state import AppState
+from ..core import recover as recover_mod
 from ..core import transfer
 from ..core.updater import (
     PlanSource,
@@ -919,6 +921,21 @@ class PlayerView(ctk.CTkFrame):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _recover_apply_leftovers(self):
+        """就地自检（幂等、便宜）：回滚没做完的目录替换、删搬运临时文件。"""
+        if self.pack_info is None:
+            return
+        try:
+            root = self.pack_info.path
+            if not recover_mod.has_leftovers(root):
+                return
+            stats = recover_mod.recover_leftovers(root, self.log.log)
+            text = recover_mod.summary(stats)
+            if text:
+                self.log.log("warn", f"上次更新没有正常结束：{text}")
+        except Exception as e:  # noqa: BLE001
+            self.log.log("warn", f"自检残留失败：{e}")
+
     def _scan_worker(self):
         # 全程用局部快照：线程跑起来之后 self.* 可能被别的操作改动
         update_zip = self.update_zip
@@ -927,6 +944,10 @@ class PlayerView(ctk.CTkFrame):
         if update_zip is None or pack_info is None:
             raise RuntimeError("更新包或整合包信息已丢失")
         assert update_zip is not None
+
+        # 比对之前先把上次中断留下的残渣收拾干净：
+        # 否则半个目录 / .pulses_new 会被当成"玩家本地文件"算进差异里
+        self._recover_apply_leftovers()
 
         self._temp_dir = self._make_work_dir()
         if self._temp_dir is None:
@@ -1826,6 +1847,7 @@ class PlayerView(ctk.CTkFrame):
                 report = execute_plan(plan, pack_root, source=source,
                                       log=_log, **options)
                 failed = verify_after_update(plan, pack_root)
+                cp_mod.mark_applied(pack_root)
                 self.after(0, lambda r=report, f=failed:
                            self._on_complete_done(r, f))
             except Exception as e:  # noqa: BLE001
@@ -2098,6 +2120,7 @@ class PlayerView(ctk.CTkFrame):
                 4 * 1024 * 1024, int(_num("apply_batch_mb", 96)) * 1024 * 1024),
             "batch_pause_ms": max(
                 0.0, min(200.0, _num("apply_batch_pause_ms", 12))),
+            "space_check": bool(int(_num("apply_space_check", 1))),
         }
 
     def _hash_for(self, rel_key: str) -> str:
@@ -2190,6 +2213,9 @@ class PlayerView(ctk.CTkFrame):
                                       log=_log, progress=_progress,
                                       **options)
                 failed = verify_after_update(plan, old_root)
+                # 校验也跑完了才写 applied：如果进程死在上面这两步之间，
+                # 检查点会停在 verify，下次启动能发现"上次收尾没做完"
+                cp_mod.mark_applied(old_root)
                 self.after(0, lambda r=report, f=failed:
                            self._on_apply_done(r, f))
             except Exception as e:  # noqa: BLE001
@@ -2294,7 +2320,11 @@ class PlayerView(ctk.CTkFrame):
 
     def _on_apply_error(self, msg: str):
         self.log.log("error", f"更新失败：{msg}")
-        self._set_hint("更新失败", color=Color.ERROR)
+        short = str(msg).strip()
+        if len(short) > 60:
+            short = short[:57] + "…"
+        self._set_hint(f"更新失败：{short}" if short else "更新失败",
+                       color=Color.ERROR)
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
         self._uninstall_close_guard()

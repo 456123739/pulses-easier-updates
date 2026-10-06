@@ -49,6 +49,10 @@ BATCH_BYTES = 96 * 1024 * 1024
 BATCH_PAUSE_MS = 12.0
 
 
+class InsufficientSpace(RuntimeError):
+    """目标磁盘放不下这次更新（开始前就拒绝，绝不留半截）。"""
+
+
 @dataclass
 class UpdatePlan:
     # 文件级操作
@@ -80,16 +84,24 @@ class SourceLayer:
     consume: bool = True                 # 搬运成功后是否删掉源文件
     ignore: Callable[[Path], bool] | None = None
 
-    def usable(self, rel: Path) -> bool:
-        if self.allowed is not None and rel.as_posix() not in self.allowed:
+    def __post_init__(self):
+        self.root = Path(self.root)
+        self._root_s = str(self.root)
+
+    def usable_key(self, key: str) -> bool:
+        """key 是包根相对路径的 posix 字符串。"""
+        if self.allowed is not None and key not in self.allowed:
             return False
         if self.ignore is not None:
             try:
-                if self.ignore(rel):
+                if self.ignore(Path(key)):
                     return False
             except Exception:  # noqa: BLE001
                 return False
         return True
+
+    def usable(self, rel: Path) -> bool:
+        return self.usable_key(rel.as_posix())
 
 
 class PlanSource:
@@ -106,13 +118,15 @@ class PlanSource:
 
     # -- 查找 ----------------------------------------------------------
     def find(self, rel: Path) -> tuple[Path, SourceLayer] | None:
+        # 这里是每个文件都要走的路径，用字符串拼路径比 Path 运算符快很多
+        key = rel.as_posix()
         for ly in self.layers:
-            if not ly.usable(rel):
+            if not ly.usable_key(key):
                 continue
-            p = ly.root / rel
+            p = os.path.join(ly._root_s, key)
             try:
-                if p.is_file():
-                    return p, ly
+                if os.path.isfile(p):
+                    return Path(p), ly
             except OSError:
                 continue
         return None
@@ -140,6 +154,7 @@ class PlanSource:
         files: list[Path] = []
         dirs: list[Path] = []
         seen: set[str] = set()
+        sub = rel_dir.as_posix()
         for ly in self.layers:
             base = ly.root / rel_dir
             try:
@@ -147,26 +162,23 @@ class PlanSource:
                     continue
             except OSError:
                 continue
-            for p in base.rglob("*"):
-                try:
-                    if p.is_dir():
-                        rel = p.relative_to(ly.root)
-                        key = rel.as_posix()
-                        if key in seen or not ly.usable(rel):
-                            continue
-                        seen.add(key)
-                        dirs.append(rel)
+            base_s = ly._root_s
+            cut = len(base_s) + 1
+            # followlinks=True：与旧的 rglob 行为一致（软链接目录也要复制）
+            for root, dnames, fnames in os.walk(
+                    transfer.sys_path(base), followlinks=True):
+                for name in dnames:
+                    key = os.path.join(root, name)[cut:].replace(os.sep, "/")
+                    if key in seen or not ly.usable_key(key):
                         continue
-                    if not p.is_file():
+                    seen.add(key)
+                    dirs.append(Path(key))
+                for name in fnames:
+                    key = os.path.join(root, name)[cut:].replace(os.sep, "/")
+                    if key in seen or not ly.usable_key(key):
                         continue
-                except OSError:
-                    continue
-                rel = p.relative_to(ly.root)
-                key = rel.as_posix()
-                if key in seen or not ly.usable(rel):
-                    continue
-                seen.add(key)
-                files.append(rel)
+                    seen.add(key)
+                    files.append(Path(key))
         return files, dirs
 
     def has_dir(self, rel_dir: Path) -> bool:
@@ -188,12 +200,15 @@ class PlanSource:
         algo, _, hexd = (expect_hash or "").partition(":")
         if not hexd:
             algo, hexd = "sha1", ""
+        # 跨卷复制时优先交给系统的快速复制（Windows CopyFile2 / Linux
+        # sendfile）；只有需要逐块校验或节流时才用 Python 分块循环。
+        no_fast = bool(hexd) or pace_ms > 0
         return transfer.move_in(
             src, dst, preserve=not layer.consume,
             chunk_bytes=chunk_bytes, pace_ms=pace_ms,
             expect_size=expect_size, expect_hash=hexd,
             algo=algo or "sha1", ensure_parent=ensure_parent,
-            should_abort=should_abort)
+            no_fast_copy=no_fast, should_abort=should_abort)
 
     def take(self, rel: Path, dst: Path, *, expect_size: int = 0,
              expect_hash: str = "", chunk_bytes: int = transfer.CHUNK_BYTES,
@@ -207,22 +222,6 @@ class PlanSource:
             pair, dst, expect_size=expect_size, expect_hash=expect_hash,
             chunk_bytes=chunk_bytes, pace_ms=pace_ms,
             ensure_parent=ensure_parent, should_abort=should_abort)
-
-
-def _expand_dir_files(root: Path | None, rel: Path) -> list[Path]:
-    if root is None:
-        return []
-    base = root / rel
-    if not base.is_dir():
-        return []
-    result: list[Path] = []
-    for p in base.rglob("*"):
-        if p.is_file():
-            try:
-                result.append(p.relative_to(root))
-            except ValueError:
-                continue
-    return result
 
 
 def _is_added(rel: Path, diff) -> bool:
@@ -305,7 +304,10 @@ def build_plan(diff, checked, strategies,
                 plan.replace_dirs.append((rel, strat))
             elif change.kind == ChangeKind.DELETED:
                 if strat == Strategy.FULL_MATCH:
-                    plan.delete.extend(_expand_dir_files(old_root, rel))
+                    # 整目录删除：直接交给 rmtree 一次搞定。
+                    # 旧实现是把目录展开成上万个文件条目逐个 unlink
+                    # （实测 2 万个文件 2.3s vs rmtree 0.3s）。
+                    plan.delete.append(rel)
                 else:
                     plan.skip.append(rel)
             continue
@@ -439,6 +441,38 @@ def _replace_dir(rel: Path, strat: Strategy, old_root: Path,
     return True, last
 
 
+def estimate_copy_bytes(plan: UpdatePlan, old_root: Path,
+                        source: PlanSource) -> int:
+    """
+    估算这次应用**真正需要额外磁盘空间**的字节数。
+
+    同卷搬运是 rename/硬链接（只改目录项，不占新空间），跨卷才真的写
+    新数据；整目录替换期间旧目录会先改名留在原地，也会占着空间，
+    所以对跨卷部分按"新内容大小"估算。
+    """
+    try:
+        target_dev = os.stat(
+            transfer.sys_path(transfer._existing_ancestor(old_root))).st_dev
+    except OSError:
+        return 0
+    rels = list(plan.copy)
+    for files in plan.dir_files.values():
+        rels.extend(Path(f) for f in files)
+    total = 0
+    for rel in rels:
+        pair = source.find(rel)
+        if pair is None:
+            continue
+        src = pair[0]
+        try:
+            if os.stat(transfer.sys_path(src)).st_dev == target_dev:
+                continue
+            total += src.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 # ----------------------------------------------------------------------
 # 失败重试（按用户要求：写入失败自动重试 1 次，仍失败才算失败）
 # ----------------------------------------------------------------------
@@ -473,6 +507,7 @@ def execute_plan(
     pace_ms: float = 0.0,
     batch_bytes: int = BATCH_BYTES,
     batch_pause_ms: float = BATCH_PAUSE_MS,
+    space_check: bool = True,
     should_abort=None,
 ) -> dict:
     """
@@ -515,14 +550,19 @@ def execute_plan(
     total_steps = len(copy_list) + len(delete_list) + len(replace_list)
     step = 0
 
-    cp = cp_mod.Checkpoint(
-        pack_root=str(old_root),
-        stage="apply",
-        done=[],
-        remaining=[p.as_posix() for p, _ in replace_list],
-        new_root=str(new_root or ""),
-    )
-    cp_mod.save_checkpoint(cp)
+    # 开始时先确认放得下：写一半才发现没空间，比一开始就拒绝糟糕得多
+    if space_check:
+        need = estimate_copy_bytes(plan, old_root, source)
+        ok, msg = transfer.have_space_for(need, old_root)
+        if not ok:
+            _log("error", msg + "（本次更新尚未改动任何文件）")
+            raise InsufficientSpace(msg)
+
+    cpw = cp_mod.CheckpointWriter(
+        old_root, stage="apply",
+        new_root=str(new_root or ""))
+    cpw.cp.remaining = [p.as_posix() for p, _ in replace_list]
+    cpw.save(force=True)
 
     # 阶段 0：目录级替换（先做，保证整块被替换）
     for rel, strat in replace_list:
@@ -554,11 +594,10 @@ def execute_plan(
         _prog(step, total_steps)
 
     # 阶段 1：文件级新增 + 替换（原子搬运 + 按字节分批让出）
-    cp.stage = "copy"
-    cp_mod.save_checkpoint(cp)
+    cpw.stage("copy")
     batch = 0
     ready_dirs: set[str] = {old_root.as_posix()}
-    for i, rel in enumerate(copy_list):
+    for rel in copy_list:
         key = rel.as_posix()
         expect_size = int(plan.expect_size.get(key, 0) or 0)
         expect_hash = plan.expect_hash.get(key, "")
@@ -574,17 +613,18 @@ def execute_plan(
             continue
 
         # 父目录只建一次（同一个 mods/ 下几千个文件时，这一条最关键）
-        parent = (old_root / rel).parent
+        dst = old_root / rel
+        parent = dst.parent
         parent_key = parent.as_posix()
         need_parent = parent_key not in ready_dirs
 
-        def _copy(pr=pair, r=rel, k=key, es=expect_size, eh=expect_hash,
+        def _copy(pr=pair, d=dst, k=key, es=expect_size, eh=expect_hash,
                   p=parent, pk=parent_key, mk=need_parent) -> bool:
             if mk and pk not in ready_dirs:
                 transfer.mkdirs(p)
                 ready_dirs.add(pk)
             res = source.move_pair(
-                pr, old_root / r, expect_size=es, expect_hash=eh,
+                pr, d, expect_size=es, expect_hash=eh,
                 chunk_bytes=chunk_bytes, pace_ms=pace_ms,
                 ensure_parent=False, should_abort=should_abort)
             if res.ok:
@@ -595,31 +635,29 @@ def execute_plan(
             _log("error", f"写入失败 {k}：{res.error}")
             return False
 
+        before_bytes = report["bytes"]
         if _retry_once(_copy, _log, f"写入 {key}"):
             report["applied"] += 1
-            cp.done.append(key)
-            if key in cp.remaining:
-                cp.remaining.remove(key)
+            cpw.done(key)
         else:
             report["failed"].append(
                 {"rel": key, "error": "写入失败（已重试 1 次）"})
+        copied = report["bytes"] - before_bytes
         step += 1
         _prog(step, total_steps)
 
-        # 每搬够一批就让出磁盘/CPU（同卷移动不产生 IO，这里几乎不会触发）
-        batch += expect_size or chunk_bytes
+        # 每"真的复制"够一批就让出磁盘/CPU。
+        # 注意：同卷移动 bytes_copied=0 —— 没有 IO 就不该暂停，
+        # 旧写法按 chunk_bytes 记，等于每搬 24 个文件就睡一次。
+        batch += copied or 0
         if batch >= batch_bytes:
             batch = 0
             if batch_pause_ms > 0:
                 time.sleep(batch_pause_ms / 1000.0)
             else:
                 time.sleep(0)
-        if i % 25 == 24:
-            cp_mod.save_checkpoint(cp)
 
-    cp.stage = "delete"
-    cp.remaining = [p.as_posix() for p in delete_list]
-    cp_mod.save_checkpoint(cp)
+    cpw.stage("delete", remaining=[p.as_posix() for p in delete_list])
 
     # 阶段 2：删除（永久删除）
     for rel in delete_list:
@@ -635,18 +673,18 @@ def execute_plan(
 
         if _retry_once(_delete, _log, f"删除 {rel.as_posix()}"):
             report["deleted"] += 1
-            cp.done.append(rel.as_posix())
+            cpw.done(rel.as_posix())
         else:
             report["failed"].append(
                 {"rel": rel.as_posix(), "error": "删除失败（已重试 1 次）"})
         step += 1
         _prog(step, total_steps)
 
-    # 保留检查点（stage=applied）：只用于判断"上一次更新是否正常结束"，
-    # 不提供回滚功能；下一次对同一个包执行更新时会覆盖它。
-    cp.stage = "applied"
-    cp.remaining = []
-    cp_mod.save_checkpoint(cp)
+    # 收尾：落到 verify 阶段。**不代表更新已经完成**——应用后校验由调用方
+    # （player_view）执行，校验通过后才由 mark_applied() 写成 applied。
+    # 这样"搬运完了但校验途中被强杀"也能在下次启动被发现（旧实现在这里
+    # 直接写 applied，scan_checkpoints 会把它当成正常结束静默清掉）。
+    cpw.finish("verify")
 
     _log("info",
          f"完成：应用 {report['applied']}，"

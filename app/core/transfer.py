@@ -201,6 +201,7 @@ def _digest_for(algo: str):
 def move_in(src: Path, dst: Path, *, preserve: bool = False,
             chunk_bytes: int = CHUNK_BYTES, pace_ms: float = 0.0,
             expect_size: int = 0, expect_hash: str = "",
+            no_fast_copy: bool = False,
             algo: str = "sha1", ensure_parent: bool = True,
             should_abort=None) -> TransferResult:
     """
@@ -215,6 +216,7 @@ def move_in(src: Path, dst: Path, *, preserve: bool = False,
     """
     src = Path(src)
     dst = Path(dst)
+    _no_fast_copy = bool(no_fast_copy)
     if not src.is_file():
         return TransferResult(False, "源文件不存在")
 
@@ -264,7 +266,33 @@ def move_in(src: Path, dst: Path, *, preserve: bool = False,
                 _unlink_quiet(tmp)
                 return TransferResult(False, friendly_os_error(e, "写入失败"))
 
-    # ---- 慢路径：分块复制到临时名，再原子替换 ----
+    # ---- 慢路径 A：不需要逐块校验/节流 → 交给系统的快速复制 ----
+    # Windows 上 shutil.copy2 会走 CopyFile2（内核态复制），Linux 上走
+    # sendfile；比 Python 层面的读写循环快得多。写完仍然落到临时名，
+    # 所以原子性不变。
+    if not expect_hash and pace_ms <= 0 and not _no_fast_copy:
+        try:
+            _unlink_quiet(tmp)
+            shutil.copy2(sys_path(src), sys_path(tmp))
+            if expect_size and os.stat(sys_path(tmp)).st_size != expect_size:
+                raise RuntimeError(
+                    f"大小不符（期望 {expect_size}，"
+                    f"实际 {os.stat(sys_path(tmp)).st_size}）")
+            os.replace(sys_path(tmp), sys_path(dst))
+        except RuntimeError as e:
+            _unlink_quiet(tmp)
+            return TransferResult(False, str(e))
+        except OSError as e:
+            _unlink_quiet(tmp)
+            return TransferResult(False, friendly_os_error(e, "写入失败"))
+        except Exception as e:  # noqa: BLE001
+            _unlink_quiet(tmp)
+            return TransferResult(False, friendly_os_error(e, "写入失败"))
+        if not preserve:
+            _unlink_quiet(src)
+        return TransferResult(True, moved=False)
+
+    # ---- 慢路径 B：分块复制（要算摘要 / 要按块节流时） ----
     digest = _digest_for(algo) if expect_hash else None
     written = 0
     try:

@@ -410,7 +410,7 @@ class TestVerifyAndCheckpoint(_Base):
         self.assertEqual(report["failed"], [])
         self.assertEqual(verify_after_update(plan, old, new), [])
 
-    def test_execute_plan_marks_applied_and_leaves_no_checkpoint_gap(self):
+    def test_execute_plan_stops_at_verify_until_checked(self):
         from app.core import checkpoint as cp_mod
         from app.config import Strategy
         from app.core.updater import UpdatePlan, execute_plan
@@ -424,10 +424,20 @@ class TestVerifyAndCheckpoint(_Base):
         from app.core.checkpoint import _pack_hash
         path = (self.dbdir / "cache" / "checkpoints"
                 / f"{_pack_hash(old)}.json")
+        # execute_plan 只负责"搬运完成"→ stage=verify（校验是调用方的事）
+        # 这样"搬运完了但校验途中被杀"下次启动能发现
         self.assertTrue(path.is_file())
         self.assertEqual(json.loads(path.read_text("utf-8"))["stage"],
+                         "verify")
+        # 停在 verify = "搬运完了但收尾没做完"：必须被当成中断上报
+        mid = [c for c in cp_mod.scan_checkpoints()
+               if c.pack_root == str(old)]
+        self.assertEqual(len(mid), 1)
+        self.assertEqual(mid[0].stage, "verify")
+        # 调用方校验通过后写 applied → 才算"正常结束"
+        cp_mod.mark_applied(old)
+        self.assertEqual(json.loads(path.read_text("utf-8"))["stage"],
                          "applied")
-        # 已完成的不该出现在"中断"列表里（并且会被清理）
         self.assertEqual([c for c in cp_mod.scan_checkpoints()
                           if c.pack_root == str(old)], [])
         self.assertFalse(path.is_file())

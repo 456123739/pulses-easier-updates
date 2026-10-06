@@ -335,7 +335,7 @@ class MainWindow(ctk.CTk):
         self.after(600, self._log_ignored_count)
 
     # ------------------------------------------------------------------
-    # 上次更新被强杀 → 只提示，不做任何文件改动
+    # 上次更新被强杀 → 就地自检残渣 + 提示"向前重跑"
     # ------------------------------------------------------------------
     _RECOVERY_STAGE_LABEL = {
         "apply": "正在替换目录",
@@ -346,37 +346,54 @@ class MainWindow(ctk.CTk):
 
     def _check_apply_recovery(self):
         """
-        发现"更新中途被强杀"的检查点：只提示 + 清检查点，**不自动改文件**。
+        发现"更新中途被强杀"的检查点：
 
-        恢复方向统一为"向前"：重新拖入同一个更新包再更新一次。
-        `build_plan` 是按整合包当前状态重新算 diff 的，缺什么补什么，
-        天然幂等；而"向后回滚"需要假设"更新后用户什么都没改过"，
-        这一点无法验证，容易把版本搞乱，所以不提供。
+          1) 先就地自检磁盘残渣（回滚没做完的目录替换、删搬运临时文件）
+             —— 这些残渣不收拾，整合包会一直带着"半个目录"跑
+          2) 再提示玩家"重新拖入同一个更新包再更新一次"
+
+        恢复方向统一为"向前"：重跑时 `build_plan` 按整合包**当前**状态
+        重新算 diff，缺什么补什么，天然幂等。"向后整体回滚"需要假设
+        "更新后用户什么都没改过"，无法验证，所以不提供。
         """
         try:
             from ..core import checkpoint as cp_mod
+            from ..core import recover as recover_mod
             cps = cp_mod.scan_checkpoints()
             if not cps:
                 return
             cp = cps[0]
-            name = Path(cp.pack_root).name or cp.pack_root
+            root = Path(cp.pack_root)
+            name = root.name or cp.pack_root
             stage = self._RECOVERY_STAGE_LABEL.get(cp.stage, cp.stage)
+            extra = ""
+            try:
+                stats = recover_mod.recover_leftovers(
+                    root, self.player_view.log.log)
+                text = recover_mod.summary(stats)
+                if text:
+                    extra = f"\n\n已经顺手处理掉磁盘上的残留：{text}。"
+            except Exception as e:  # noqa: BLE001
+                self.player_view.log.log("warn", f"自检残留失败：{e}")
             try:
                 self.player_view.log.log(
                     "warn", f"上次更新未正常结束（中断在：{stage}），"
                             f"建议重新拖入同一个更新包再更新一次")
             except Exception:  # noqa: BLE001, S110
                 pass
+            if cp.stage == "verify":
+                tip = ("搬运本身已经跑完（可能在最后校验时被中断）："
+                       "点「开始更新」重新比对一次就能确认。")
+            else:
+                tip = ("恢复办法：重新拖入同一个更新包，再点一次「开始更新」。\n"
+                       "Easier 会按整合包**当前**状态重新比对，缺什么补什么，"
+                       "一直跑到与更新包一致为止。\n\n")
             alert(
                 self, "上次更新没有正常结束",
                 f"检测到上次对整合包「{name}」的更新没有跑完"
-                f"（中断在：{stage}）。\n\n"
-                f"恢复办法：重新拖入同一个更新包，再点一次「开始更新」。\n"
-                f"Easier 会按整合包**当前**状态重新比对，缺什么补什么，"
-                f"一直跑到与更新包一致为止。\n\n"
-                f"本次不会自动改动任何文件。",
+                f"（中断在：{stage}）。\n\n{tip}{extra}",
                 level="warn")
-            cp_mod.clear_checkpoint(Path(cp.pack_root))
+            cp_mod.clear_checkpoint(root)
         except Exception:  # noqa: BLE001, S110
             pass
 
