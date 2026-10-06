@@ -89,6 +89,23 @@ def iter_source_files(src: Path, skip: tuple[str, ...] = DEFAULT_SKIP):
         yield rel
 
 
+def iter_source_dirs(src: Path, skip: tuple[str, ...] = DEFAULT_SKIP):
+    """列出要一起创建的目录（含空目录 —— 新建的库 projects/ 就是空的）。"""
+    root = Path(src)
+    if not root.is_dir():
+        return
+    for p in sorted(root.rglob("*")):
+        if not p.is_dir():
+            continue
+        try:
+            rel = p.relative_to(root)
+        except ValueError:
+            continue
+        if rel.parts and rel.parts[0] in skip:
+            continue
+        yield rel
+
+
 def plan(src, dst, skip: tuple[str, ...] = DEFAULT_SKIP) -> dict:
     """迁移前预览：搬多少、哪些会覆盖、目标是空/有效库。"""
     src_root, dst_root = Path(src), Path(dst)
@@ -103,7 +120,9 @@ def plan(src, dst, skip: tuple[str, ...] = DEFAULT_SKIP) -> dict:
         if (dst_root / rel).exists():
             conflicts.append(rel.as_posix())
     target = describe(dst_root)
-    return {"files": len(files), "bytes": total, "conflicts": conflicts,
+    dirs = list(iter_source_dirs(src_root, skip))
+    return {"dirs": len(dirs), "files": len(files), "bytes": total,
+            "conflicts": conflicts,
             "target_valid": target["valid"], "target_exists": target["exists"],
             "target_is_same": _same_path(src_root, dst_root),
             "skipped_dirs": list(skip)}
@@ -176,6 +195,17 @@ def migrate(src, dst, *, skip: tuple[str, ...] = DEFAULT_SKIP,
             f"from {src_root}\n", encoding="utf-8")
     except OSError as e:
         result["msg"] = friendly_os_error(e, "无法创建目标目录")
+        return result
+
+    # 先建目录结构（空目录也要建）
+    for rel in iter_source_dirs(src_root, skip):
+        try:
+            (dst_root / rel).mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            result["failed"].append({"rel": rel.as_posix(),
+                                     "error": friendly_os_error(e)})
+    if result["failed"]:
+        result["msg"] = "无法创建目标目录结构"
         return result
 
     for done, rel in enumerate(files):

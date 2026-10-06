@@ -121,6 +121,20 @@ class TestMigrate(unittest.TestCase):
         self.assertTrue(seen)
         self.assertEqual(seen[-1][0], seen[-1][1])       # 走到底
 
+    def test_migrate_creates_empty_dirs(self):
+        """新建的空库 projects/ 是空目录 —— 迁移后必须仍然算有效库。"""
+        empty = self.tmp / "empty-db"
+        db.create_database(empty)
+        self.assertEqual(list((empty / "projects").iterdir()), [])
+        dst = self.tmp / "empty-out"
+        res = mig.migrate(empty, dst)
+        self.assertTrue(res["ok"], res["msg"])
+        self.assertTrue((dst / "projects").is_dir(),
+                        "空目录没有被创建 → 目标库会被判为无效")
+        self.assertTrue(db.is_valid_database(dst))
+        ok, msg = mig.switch_to(dst)
+        self.assertTrue(ok, msg)
+
     def test_migrate_refuses_same_path(self):
         res = mig.migrate(self.src, self.src)
         self.assertFalse(res["ok"])
