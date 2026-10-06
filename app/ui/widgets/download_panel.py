@@ -41,6 +41,7 @@ class DownloadPanel(ctk.CTkFrame):
                  on_skip_all: Callable[[], None],
                  in_progress: bool = False,
                  on_notice: Callable[[str, str], None] | None = None,
+                 on_all_resolved: Callable[[], None] | None = None,
                  **kwargs):
         super().__init__(master, fg_color=Color.CARD_BG,
                          corner_radius=Size.RADIUS_CARD, **kwargs)
@@ -49,6 +50,9 @@ class DownloadPanel(ctk.CTkFrame):
         self.on_file_dropped = on_file_dropped
         self.on_skip_all = on_skip_all
         self.on_notice = on_notice
+        # 待补入列表被清空时回调：让上层能继续走"应用更新"，
+        # 而不是把面板一藏就再也没有出口
+        self.on_all_resolved = on_all_resolved
         self._in_progress = in_progress
         self._row_index = 0
 
@@ -297,10 +301,19 @@ class DownloadPanel(ctk.CTkFrame):
             if not resolved:
                 self._notice("error",
                              f"{p.name} 校验未通过，没有补入")
-        if not self._failed:
+
+        all_done = not self._failed
+        if all_done:
             try:
                 self.grid_remove()
             except Exception:  # noqa: BLE001, S110
                 pass
         self._refresh_title()
         self._refresh_empty()
+
+        # 回调放最后：上层可能在回调里把这个面板销毁
+        if all_done and self.on_all_resolved is not None:
+            try:
+                self.on_all_resolved()
+            except Exception:  # noqa: BLE001, S110
+                pass

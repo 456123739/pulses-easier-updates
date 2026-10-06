@@ -157,13 +157,24 @@ def export_eapack(
                 _log("warn", "缺少源 ZIP，index 文件将为空")
 
             # 4.2) overrides/
+            wrote_override = False
             for p in override_files:
                 rel = p.relative_to(ovr)
                 arcname = OVERRIDES_DIR + "/" + rel.as_posix()
                 zf.write(p, arcname)
+                wrote_override = True
                 step += 1
                 if step % 20 == 0 or step == total_steps - 1:
                     _prog(step, total_steps, f"打包 {rel.as_posix()}")
+
+            if not wrote_override:
+                # 必须**无条件**写出 overrides/ 目录条目。
+                # 玩家端用「解压目录里有没有 overrides/」决定内容根，
+                # 缺了它就会退化成"整合包根目录"，把本包自己的
+                # modrinth.index.json / ea_*.json / changelog.md 当成
+                # 更新内容写进玩家整合包根目录。
+                zf.writestr(zipfile.ZipInfo(OVERRIDES_DIR + "/"), b"")
+                _prog(step, total_steps, "写入 overrides/ 目录条目")
 
             # 4.3) changelog.md
             if changelog_md and changelog_md.strip():

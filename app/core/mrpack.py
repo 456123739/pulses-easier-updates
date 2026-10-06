@@ -17,9 +17,28 @@ from pathlib import Path
 
 INDEX_FILENAME = "modrinth.index.json"
 OVERRIDES_DIR = "overrides"
+CHANGELOG_FILENAME = "changelog.md"
+
+# 更新包根目录里的元数据文件名：它们**不是**更新内容。
+# 玩家端在"包内没有 overrides/ 目录"的老格式回退分支里必须排除它们，
+# 否则这些文件会被当成要应用的更新内容写进玩家整合包根目录。
+RESERVED_ROOT_NAMES = frozenset({
+    INDEX_FILENAME,
+    CHANGELOG_FILENAME,
+    "ea_settings.json",
+    "ea_hashes.json",
+    "ea_manifest.json",
+    "pulses_meta.json",
+    "resume.json",
+})
 
 # 需要合并 index 与 overrides 的文件夹（其余只取 overrides）
 MERGE_FOLDERS = {"mods", "resourcepacks", "shaderpacks", "tacz"}
+
+
+def is_reserved_root_name(name: str) -> bool:
+    """该文件名是否是更新包根目录的保留元数据文件（不区分大小写）。"""
+    return str(name).strip().lower() in RESERVED_ROOT_NAMES
 
 
 @dataclass

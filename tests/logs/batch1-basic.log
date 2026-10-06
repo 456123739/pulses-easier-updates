@@ -1,0 +1,40 @@
+test_compileall (__main__.TestCompile.test_compileall) ... ok
+test_defaults_match_database (__main__.TestConfigConsistency.test_defaults_match_database) ... ok
+test_get_download_options_contains_all_defaults (__main__.TestConfigConsistency.test_get_download_options_contains_all_defaults) ... ok
+test_meta_keys_exist (__main__.TestConfigConsistency.test_meta_keys_exist) ... ok
+test_preferences_types_cover_new_keys (__main__.TestConfigConsistency.test_preferences_types_cover_new_keys) ... ok
+test_set_and_reload_roundtrip (__main__.TestConfigConsistency.test_set_and_reload_roundtrip) ... ok
+test_candidates_ambiguous_returns_none_path (__main__.TestDownloadPanel.test_candidates_ambiguous_returns_none_path) ... ok
+test_candidates_exact_and_fuzzy (__main__.TestDownloadPanel.test_candidates_exact_and_fuzzy) ... ok
+test_candidates_single_remaining_fallback (__main__.TestDownloadPanel.test_candidates_single_remaining_fallback) ... ok
+test_drop_mismatch_reports (__main__.TestDownloadPanel.test_drop_mismatch_reports) ... ok
+test_drop_success_removes_item (__main__.TestDownloadPanel.test_drop_success_removes_item) ... ok
+test_drop_verify_failure_reports (__main__.TestDownloadPanel.test_drop_verify_failure_reports) ... ok
+test_links_of_returns_all_sources (__main__.TestDownloadPanel.test_links_of_returns_all_sources) ... ok
+test_links_text_has_filename_and_all_sources (__main__.TestDownloadPanel.test_links_text_has_filename_and_all_sources) ... ok
+test_normalize_keeps_version_numbers (__main__.TestDownloadPanel.test_normalize_keeps_version_numbers) ... ok
+test_normalize_strips_browser_copy_suffix (__main__.TestDownloadPanel.test_normalize_strips_browser_copy_suffix) ... ok
+test_panel_exposes_copy_and_open (__main__.TestDownloadPanel.test_panel_exposes_copy_and_open) ... ok
+test_same_basename_in_two_folders_tries_both (__main__.TestDownloadPanel.test_same_basename_in_two_folders_tries_both) ... ok
+test_core_modules_import (__main__.TestImportsCore.test_core_modules_import) ... ok
+test_downloader_does_not_import_gui (__main__.TestImportsCore.test_downloader_does_not_import_gui) ... ok
+test_main_module_import (__main__.TestImportsGui.test_main_module_import) ... ok
+test_ui_modules_import (__main__.TestImportsGui.test_ui_modules_import) ... ok
+test_boot_tasks_shape (__main__.TestStartupChain.test_boot_tasks_shape)
+boot_tasks 需要是可迭代的 (title, callable) 序列。 ... ok
+test_mainwindow_required_hooks (__main__.TestStartupChain.test_mainwindow_required_hooks) ... ok
+test_splash_signature (__main__.TestStartupChain.test_splash_signature) ... ok
+test_window_class_can_be_composed (__main__.TestStartupChain.test_window_class_can_be_composed) ... ok
+test_window_constructs_and_boots_under_stubs (__main__.TestStartupChain.test_window_constructs_and_boots_under_stubs)
+用桩模块把 main.py 的启动链路真正跑一遍： ... ok
+test_player_view_calls_download_files_with_expected_kwargs (__main__.TestUiContract.test_player_view_calls_download_files_with_expected_kwargs) ... ok
+test_player_view_result_semantics (__main__.TestUiContract.test_player_view_result_semantics)
+调用方按 `成功 = len(results) - len(failed)` 统计、并靠 ... ok
+test_player_view_slot_bridge (__main__.TestUiContract.test_player_view_slot_bridge) ... ok
+test_slot_panel_signature (__main__.TestUiContract.test_slot_panel_signature) ... ok
+test_slot_panel_uses_on_toggle (__main__.TestUiContract.test_slot_panel_uses_on_toggle) ... ok
+
+----------------------------------------------------------------------
+Ran 32 tests in 0.220s
+
+OK

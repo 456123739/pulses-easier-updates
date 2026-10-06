@@ -29,6 +29,7 @@ from pathlib import Path
 from ..config import CONTENT_DIR_MAP, ChangeKind, ContentType, Strategy
 from ..utils.files import safe_join
 from . import checkpoint as cp_mod
+from . import trash as trash_mod
 
 
 @dataclass
@@ -129,40 +130,146 @@ def build_plan(diff, checked, strategies,
 # ----------------------------------------------------------------------
 # 目录级操作
 # ----------------------------------------------------------------------
-def _replace_dir_full(src: Path, dst: Path, log: Callable[[str, str], None]):
-    """完全匹配：删旧目录 → 整目录复制"""
+def _unique_backup(dst: Path) -> Path:
+    """给 dst 找一个同目录下不存在的备份名（同卷 rename，可回滚）。"""
+    base = dst.name + ".pulses_bak"
+    cand = dst.with_name(base)
+    n = 1
+    while cand.exists():
+        cand = dst.with_name(f"{base}{n}")
+        n += 1
+    return cand
+
+
+def _replace_dir_full(src: Path, dst: Path, log: Callable[[str, str], None],
+                      pack_root: Path | None = None,
+                      rel: Path | None = None,
+                      session: Path | None = None) -> bool:
+    """
+    完全匹配：旧目录先进回收站 → 整目录复制。
+
+    旧实现是 `rmtree(dst)` 再 `copytree`，一旦复制失败（磁盘满 / 权限 /
+    进程被杀）玩家的整个目录就永久没了。现在旧目录先被移走（回收站，
+    同卷 rename），复制失败再把旧目录搬回来。
+
+    没有 pack_root/rel 上下文时（直接调用本函数的测试/脚本），退化为
+    「同目录改名备份」。
+    """
+    backup: Path | None = None
+    trashed: Path | None = None
+
+    if dst.exists():
+        if pack_root is not None and rel is not None:
+            res = trash_mod.move_to_trash(pack_root, [rel], session=session)
+            if res["moved"]:
+                trashed = Path(res["dir"])
+            else:
+                reason = (res["failed"][0]["error"] if res["failed"]
+                          else "回收站不可用")
+                log("error",
+                    f"替换目录失败 {dst.name}：旧目录无法移入回收站"
+                    f"（{reason}）")
+                return False
+        else:
+            try:
+                backup = _unique_backup(dst)
+                os.replace(dst, backup)
+            except Exception as e:  # noqa: BLE001
+                log("error", f"替换目录失败 {dst.name}：无法备份旧目录（{e}）")
+                return False
+
     try:
-        if dst.exists():
-            shutil.rmtree(dst)
         shutil.copytree(src, dst)
-        log("info", f"替换目录 {dst.name}")
-        return True
     except Exception as e:  # noqa: BLE001
         log("error", f"替换目录失败 {dst.name}：{e}")
+        # 回滚：清掉半成品，把旧目录搬回来
+        try:
+            if dst.exists():
+                shutil.rmtree(dst, ignore_errors=True)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        restored = False
+        if trashed is not None and rel is not None:
+            restored = trash_mod.restore_entry(trashed, rel)
+        elif backup is not None:
+            try:
+                os.replace(backup, dst)
+                restored = True
+            except Exception:  # noqa: BLE001, S110
+                restored = False
+        if not restored:
+            log("error", f"{dst.name} 的旧内容已备份，但自动回滚失败；"
+                         f"备份位置：{trashed or backup}")
+        else:
+            log("warn", f"替换目录 {dst.name} 已回滚到替换前的内容")
         return False
+
+    if backup is not None:
+        try:
+            shutil.rmtree(backup, ignore_errors=True)
+        except Exception:  # noqa: BLE001, S110
+            pass
+    log("info", f"替换目录 {dst.name}（旧目录已备份到回收站）")
+    return True
 
 
 def _replace_dir_overwrite(src: Path, dst: Path,
-                           log: Callable[[str, str], None]):
-    """替换重名：目录合并，同名覆盖"""
+                           log: Callable[[str, str], None],
+                           pack_root: Path | None = None,
+                           rel: Path | None = None,
+                           session: Path | None = None) -> bool:
+    """
+    替换重名：目录合并，同名覆盖。
+
+    被覆盖的旧文件先备份到回收站（同一会话），因此该策略不会永久丢数据。
+    只在 dst 里已存在同名文件时才产生备份，不会无谓地复制整个目录。
+    """
+    backups: list[Path] = []
     try:
         dst.mkdir(parents=True, exist_ok=True)
+
+        if (pack_root is not None and rel is not None
+                and session is not None and src.is_dir()):
+            for root, _dirs, files in os.walk(src):
+                try:
+                    sub = Path(root).relative_to(src)
+                except ValueError:
+                    continue
+                for f in files:
+                    target_rel = Path(rel) / sub / f
+                    try:
+                        if (pack_root / target_rel).is_file():
+                            backups.append(target_rel)
+                    except OSError:
+                        continue
+            if backups:
+                trash_mod.move_to_trash(pack_root, backups, session=session)
+
         shutil.copytree(src, dst, dirs_exist_ok=True)
-        log("info", f"合并目录 {dst.name}（同名覆盖）")
+        log("info", f"合并目录 {dst.name}（同名覆盖，"
+                    f"备份 {len(backups)} 个被覆盖文件）")
         return True
     except Exception as e:  # noqa: BLE001
         log("error", f"合并目录失败 {dst.name}：{e}")
+        # 回滚被移走的旧文件
+        for target_rel in backups:
+            try:
+                trash_mod.restore_entry(session, target_rel)  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001, S110
+                pass
         return False
 
 
 def _replace_dir_skip(src: Path, dst: Path,
-                      log: Callable[[str, str], None]):
+                      log: Callable[[str, str], None],
+                      pack_root: Path | None = None,
+                      rel: Path | None = None) -> bool:
     """跳过重名：目录合并，同名跳过"""
     try:
         dst.mkdir(parents=True, exist_ok=True)
         for root, _dirs, files in os.walk(src):
-            rel = Path(root).relative_to(src)
-            target_dir = dst / rel
+            rel_dir = Path(root).relative_to(src)
+            target_dir = dst / rel_dir
             target_dir.mkdir(parents=True, exist_ok=True)
             for f in files:
                 s = Path(root) / f
@@ -223,6 +330,16 @@ def execute_plan(
     )
     cp_mod.save_checkpoint(cp)
 
+    # 本次更新的回收站会话：所有备份（目录替换 + 删除）共用一个会话，
+    # 便于整批回滚，也避免同一秒内的多次操作互相覆盖 manifest。
+    trash_session: Path | None = None
+
+    def _ensure_session() -> Path:
+        nonlocal trash_session
+        if trash_session is None:
+            trash_session = trash_mod.new_session(old_root)
+        return trash_session
+
     # 阶段 0：目录级替换（先做，保证整块被替换）
     for rel, strat in replace_list:
         src = new_root / rel
@@ -232,11 +349,16 @@ def execute_plan(
             _prog(step, total_steps)
             continue
         if strat == Strategy.FULL_MATCH:
-            ok = _replace_dir_full(src, dst, _log)
+            session = _ensure_session() if dst.exists() else None
+            ok = _replace_dir_full(src, dst, _log, pack_root=old_root,
+                                   rel=rel, session=session)
         elif strat == Strategy.REPLACE_SAME:
-            ok = _replace_dir_overwrite(src, dst, _log)
+            session = _ensure_session() if dst.is_dir() else None
+            ok = _replace_dir_overwrite(src, dst, _log, pack_root=old_root,
+                                        rel=rel, session=session)
         else:  # SKIP_SAME
-            ok = _replace_dir_skip(src, dst, _log)
+            ok = _replace_dir_skip(src, dst, _log, pack_root=old_root,
+                                   rel=rel)
         if ok:
             report["applied"] += 1
         else:
@@ -274,8 +396,8 @@ def execute_plan(
     # 阶段 2：删除（回收站）
     if delete_list:
         if use_trash:
-            from . import trash as trash_mod
-            tr = trash_mod.move_to_trash(old_root, delete_list)
+            tr = trash_mod.move_to_trash(old_root, delete_list,
+                                         session=_ensure_session())
             report["trash_dir"] = str(tr["dir"])
             for item in tr["moved"]:
                 report["deleted"] += 1
@@ -300,6 +422,9 @@ def execute_plan(
 
     cp.stage = "done"
     cp_mod.clear_checkpoint(old_root)
+
+    if trash_session is not None:
+        report["trash_dir"] = str(trash_session)
 
     _log("info",
          f"完成：应用 {report['applied']}，"

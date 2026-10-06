@@ -78,26 +78,81 @@ def _hash_file(path: Path, algo: str = "sha1") -> str:
     return h.hexdigest()
 
 
-def folder_hash(folder: Path) -> str:
-    """文件夹级哈希：相对路径 + 大小 + mtime 拼接后 SHA-256，不读内容"""
-    entries: list[str] = []
+def _folder_manifest(folder: Path | None) -> tuple[list[tuple[str, int]], int]:
+    """
+    遍历目录，返回 ([(相对路径, 大小)], 总字节)。
+
+    不存在/不可读 → ([], 0)。
+    """
+    entries: list[tuple[str, int]] = []
+    total = 0
+    if folder is None:
+        return entries, total
+    folder = Path(folder)
+    if not folder.is_dir():
+        return entries, total
     try:
         for dirpath, _dirnames, filenames in os.walk(folder):
             for name in filenames:
                 abs_path = Path(dirpath) / name
                 try:
                     rel = abs_path.relative_to(folder).as_posix()
-                    st = abs_path.stat()
-                    entries.append(f"{rel}|{st.st_size}|{int(st.st_mtime)}")
+                    size = abs_path.stat().st_size
                 except OSError:
                     continue
+                entries.append((rel, size))
+                total += size
     except OSError:
-        return ""
+        return [], 0
+    entries.sort()
+    return entries, total
+
+
+# 超过这个体积就只做"路径+大小"比较（避免为了确认一致性读入 GB 级内容）
+_FOLDER_DEEP_MAX_BYTES = 256 * 1024 * 1024
+
+
+def folder_hash(folder: Path | None, content: bool = True) -> str:
+    """
+    文件夹级哈希：相对路径 + 大小（+ 内容 SHA-1）。
+
+    content=False 时只算路径与大小（不读内容，快）。
+    **刻意不包含 mtime**：更新包是现解压出来的，zip 不还原 mtime，
+    一旦把 mtime 算进摘要，内容完全相同的目录也会被判定为
+    「已修改」，进而触发整目录替换（历史上导致过玩家本地文件被清空）。
+    """
+    entries, _total = _folder_manifest(folder)
     h = hashlib.sha256()
-    for line in sorted(entries):
-        h.update(line.encode("utf-8"))
+    for rel, size in entries:
+        h.update(rel.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(str(size).encode("ascii"))
+        if content:
+            h.update(b"\x00")
+            h.update(_hash_file(Path(folder) / rel, "sha1").encode("ascii"))
         h.update(b"\n")
     return h.hexdigest()
+
+
+def folders_differ(a: Path | None, b: Path | None) -> bool:
+    """
+    两个目录的**内容**是否不同。
+
+    两级判定：
+      1) 先用「相对路径 + 大小」排除明显差异（廉价，不读内容）；
+      2) 相同再逐个文件比内容哈希（消除"同名同大小但内容不同"
+         漏判，同时不受 mtime 影响）。
+    目录总体积超过 _FOLDER_DEEP_MAX_BYTES 时只做第 1 级。
+    """
+    ea, ta = _folder_manifest(a)
+    eb, tb = _folder_manifest(b)
+    if not ea and not eb:
+        return False
+    if ea != eb:
+        return True
+    if ta > _FOLDER_DEEP_MAX_BYTES or tb > _FOLDER_DEEP_MAX_BYTES:
+        return False
+    return folder_hash(a, content=True) != folder_hash(b, content=True)
 
 
 def _pick_hash(hashes: dict | None) -> tuple[str | None, str | None]:
@@ -297,9 +352,7 @@ def _diff_whitelist_dir(
             deleted.append(Change(Path(full_rel), ChangeKind.DELETED,
                                   is_folder_level=True))
         else:
-            old_fh = folder_hash(old_sub) if old_sub else ""
-            new_fh = folder_hash(new_sub) if new_sub else ""
-            if old_fh != new_fh:
+            if folders_differ(old_sub, new_sub):
                 modified.append(Change(Path(full_rel), ChangeKind.MODIFIED,
                                        is_folder_level=True))
 
@@ -420,9 +473,7 @@ def diff_packs_parallel(
             result.modified.extend(modified)
             result.deleted.extend(deleted)
         else:
-            old_fh = folder_hash(old_dir) if old_dir else ""
-            new_fh = folder_hash(new_dir) if new_dir else ""
-            if old_fh != new_fh:
+            if folders_differ(old_dir, new_dir):
                 result.modified.append(
                     Change(Path(name), ChangeKind.MODIFIED,
                            is_folder_level=True))

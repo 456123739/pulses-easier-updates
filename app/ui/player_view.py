@@ -28,7 +28,9 @@ from ..core import resume as resume_mod
 from ..core.differ import DiffResult, diff_packs_parallel
 from ..core.downloader import DownloadTask, download_files
 from ..core.mrpack import (
+    MERGE_FOLDERS,
     index_top_folders,
+    is_reserved_root_name,
     merge_files,
     parse_mrpack,
     top_level_folders,
@@ -61,6 +63,7 @@ _SPEED_SAMPLES = 6
 _PHASE_IDLE = "idle"
 _PHASE_DOWNLOAD = "download"
 _PHASE_APPLY = "apply"
+_PHASE_MANUAL = "manual"      # 等待用户手动补入失败文件
 
 
 class PlayerView(ctk.CTkFrame):
@@ -76,6 +79,9 @@ class PlayerView(ctk.CTkFrame):
         self._temp_dir: TemporaryDirectory | None = None
         self._new_root: Path | None = None
         self._overrides_root: Path | None = None
+        # True = 包内没有 overrides/，内容根退化为解压根目录（老格式）；
+        # 这种模式下必须排除包自身的元数据文件（否则会被当成更新内容）
+        self._overrides_fallback: bool = False
         self._cache_root: Path | None = None
         self.diff: DiffResult | None = None
         self._merged: list[dict] = []
@@ -90,6 +96,7 @@ class PlayerView(ctk.CTkFrame):
         self._phase: str = _PHASE_IDLE
         self._phase_started_at: float = 0.0
         self._abort_flag: bool = False
+        self._skip_after_abort: bool = False
         self._download_thread: threading.Thread | None = None
         self._resume_after_scan: bool = False
 
@@ -409,6 +416,11 @@ class PlayerView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def _on_modpack_changed(self, path: Path | None):
+        if self._phase != _PHASE_IDLE:
+            # 更新流程进行中：不许换包/清空（否则会用错的整合包执行更新）。
+            # 侧边栏此时也被 app_state.lock() 挡住，这里是兜底。
+            self.log.log("warn", "更新流程进行中，暂时不能更换整合包")
+            return
         if path is None:
             self.pack_info = None
             self._reset_pack_state()
@@ -473,6 +485,9 @@ class PlayerView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def _on_update_pack_dropped(self, paths: list[Path]):
+        if self._phase != _PHASE_IDLE:
+            self.log.log("warn", "更新流程进行中，暂时不能更换更新包")
+            return
         if self.app_state.is_locked:
             return
 
@@ -703,6 +718,8 @@ class PlayerView(ctk.CTkFrame):
     # 阶段 1：比对
     # ------------------------------------------------------------------
     def _start_scan(self):
+        if self._phase != _PHASE_IDLE:
+            return
         if self.update_zip is None or self.pack_info is None:
             return
 
@@ -737,8 +754,12 @@ class PlayerView(ctk.CTkFrame):
         overrides_dir = extract_dir / "overrides"
         if overrides_dir.is_dir():
             self._overrides_root = overrides_dir
+            self._overrides_fallback = False
         else:
+            # 老格式/裸 ZIP：内容根退化为解压根目录，此时包自身的元数据
+            # 文件必须被排除（否则会被当成更新内容写进玩家整合包根目录）
             self._overrides_root = extract_dir
+            self._overrides_fallback = True
 
         pack, err = parse_mrpack(self.update_zip)
         merged: list[dict] = []
@@ -747,8 +768,10 @@ class PlayerView(ctk.CTkFrame):
             self._new_root = self._overrides_root
             folders = self._top_folders(self._overrides_root)
             file_items = self._root_file_items(self._overrides_root)
-            mapping = {f: self._default_strategy_for(self.pack_kind)
-                       for f in list(folders) + list(file_items)}
+            mapping = {f: self._default_strategy_for_top(f, False)
+                       for f in folders}
+            mapping.update({f: self._default_strategy_for_top(f, True)
+                            for f in file_items})
             self.after(0, lambda m=mapping, fs=folders, fi=file_items:
                        self._apply_strategies(m, fs, fi))
         else:
@@ -757,8 +780,10 @@ class PlayerView(ctk.CTkFrame):
             self._new_root = extract_dir
             folders = sorted(set(top_level_folders(merged)) | index_tops)
             file_items = self._root_file_items(self._overrides_root)
-            mapping = {f: self._default_strategy_for(self.pack_kind)
-                       for f in list(folders) + list(file_items)}
+            mapping = {f: self._default_strategy_for_top(f, False)
+                       for f in folders}
+            mapping.update({f: self._default_strategy_for_top(f, True)
+                            for f in file_items})
             self.after(0, lambda m=mapping, fs=folders, fi=file_items:
                        self._apply_strategies(m, fs, fi))
 
@@ -843,7 +868,7 @@ class PlayerView(ctk.CTkFrame):
             return items
         try:
             for entry in root.iterdir():
-                if entry.is_file():
+                if entry.is_file() and not is_reserved_root_name(entry.name):
                     items.add(entry.name)
         except OSError:
             pass
@@ -882,7 +907,9 @@ class PlayerView(ctk.CTkFrame):
         def _is_checked(top: str) -> bool:
             if not checked_map:
                 return True
-            return bool(checked_map.get(top, True))
+            # 与 updater.build_plan / change_list._will_skip 保持一致：
+            # 缺省视为"未勾选 = 不应用"
+            return bool(checked_map.get(top, False))
 
         needed: set[str] = set()
         for ch in diff.added + diff.modified:
@@ -932,9 +959,31 @@ class PlayerView(ctk.CTkFrame):
         return tasks
 
     def _default_strategy_for(self, kind: PackKind) -> str:
+        """
+        非白名单顶层目录/根文件的默认策略。
+
+        更新包（UPDATE）：目录级比对只能"合并"，默认必须是**替换重名**
+        （同名覆盖、不删除）。默认"完全匹配"会在玩家本地目录里做
+        rmtree + copytree，把玩家自己写的配置一并清掉。
+        导出包（EXPORT）：保持历史语义（整包镜像）。
+        """
         if kind == PackKind.EXPORT:
             return Strategy.FULL_MATCH.value
-        return ""
+        return Strategy.REPLACE_SAME.value
+
+    def _default_strategy_for_top(self, top: str, is_file: bool) -> str:
+        """
+        单个顶层项的默认策略。
+
+        - 白名单内容文件夹（mods/resourcepacks/shaderpacks/tacz）走文件级
+          比对，需要能删除"新版已移除"的条目 → 完全匹配；
+        - 其余目录是文件夹级比对 → 替换重名（合并覆盖，绝不删玩家文件）。
+        """
+        if self.pack_kind == PackKind.EXPORT:
+            return Strategy.FULL_MATCH.value
+        if not is_file and top in MERGE_FOLDERS:
+            return Strategy.FULL_MATCH.value
+        return Strategy.REPLACE_SAME.value
 
     def _apply_strategies(self, mapping: dict,
                           folders: list[str],
@@ -956,7 +1005,9 @@ class PlayerView(ctk.CTkFrame):
 
         for f in list(folders) + list(file_items):
             if not mapping.get(f):
-                mapping[f] = Strategy.FULL_MATCH.value
+                # 兜底也必须是"不删玩家文件"的策略
+                is_file = f in (file_items or set())
+                mapping[f] = self._default_strategy_for_top(f, is_file)
 
         all_items = list(folders) + sorted(file_items)
         self.strategy_table.set_folders(all_items, file_items=file_items)
@@ -1018,6 +1069,8 @@ class PlayerView(ctk.CTkFrame):
     # 阶段 2：下载
     # ------------------------------------------------------------------
     def _start_download_and_apply(self):
+        if self._phase != _PHASE_IDLE:
+            return
         if not self._download_tasks:
             self._start_apply()
             return
@@ -1029,6 +1082,10 @@ class PlayerView(ctk.CTkFrame):
 
         self._phase = _PHASE_DOWNLOAD
         self._abort_flag = False
+        self._skip_after_abort = False
+        # 下载阶段就锁定：否则"处理中"还能拖入新包/清空整合包，
+        # 而下载线程仍持有旧目录（会用错的包执行更新）
+        self.app_state.lock()
         self._install_close_guard()
 
         started = time()
@@ -1110,7 +1167,8 @@ class PlayerView(ctk.CTkFrame):
                 on_file_dropped=self._on_file_dropped,
                 on_skip_all=self._on_skip_all_failed,
                 in_progress=in_progress,
-                on_notice=self.log.log)
+                on_notice=self.log.log,
+                on_all_resolved=self._on_all_failures_resolved)
             self.download_panel.grid(row=0, column=0, sticky="nsew")
         except Exception:  # noqa: BLE001
             self.download_panel = None
@@ -1222,29 +1280,48 @@ class PlayerView(ctk.CTkFrame):
     def _on_download_done(self, results):
         self.progress.set_file_progress(None)
 
+        # 已经进入应用阶段（例如"全部跳过"的等待线程先一步接手）：
+        # 这里不能再改 phase / 按钮 / 提示
+        if self._phase == _PHASE_APPLY:
+            return
+
         failed = [r for r in results if not r.ok and not r.aborted]
         aborted = any(r.aborted for r in results)
 
         if aborted:
             self.log.log("warn", "下载已中止")
-            self._set_hint("已中止下载")
+            if self._skip_after_abort:
+                # 用户点了「全部跳过」：由等待线程接手应用，这里只收尾
+                self._set_hint("正在停止剩余下载…")
+                return
             self._phase = _PHASE_IDLE
+            self._set_hint("已中止下载")
             self._uninstall_close_guard()
             self.app_state.unlock()
+            self._set_button_state(_BTN_CONFIRM)
+            self._refresh_ui_state()
             return
 
         self.log.log("info",
                      f"下载完成：成功 {len(results) - len(failed)}，"
                      f"失败 {len(failed)}")
+        # 下载正常收尾：清掉"跳过后续应用"的待办标记，
+        # 后续 _apply_after_abort 会因 phase 已是 APPLY 而自动让路
+        self._skip_after_abort = False
 
         if not failed:
             if self._cache_root:
                 resume_mod.clear_resume(self._cache_root)
             self._destroy_download_panel()
+            self._phase = _PHASE_IDLE
             self._set_hint("下载完成，开始应用更新…")
             self._start_apply()
             return
 
+        # 有文件下不下来：进入「等待手动补入」终态。
+        # 用户补入全部文件 → on_all_resolved 回调继续应用；
+        # 用户点「全部跳过」→ 直接应用。
+        self._phase = _PHASE_MANUAL
         self._write_resume()
         if self.download_panel is not None:
             try:
@@ -1255,7 +1332,19 @@ class PlayerView(ctk.CTkFrame):
         self.placeholder.grid_remove()
         if self.download_panel is not None:
             self.download_panel.grid()
-        self._set_hint(f"下载结束，{len(failed)} 个文件待手动补入")
+        self._set_hint(f"下载结束，{len(failed)} 个文件待手动补入"
+                       f"（补入完成会自动继续，或点「全部跳过」）")
+        self._refresh_ui_state()
+
+    def _on_all_failures_resolved(self):
+        """DownloadPanel 回调：待补入列表已清空（全部校验通过）。"""
+        if self._phase != _PHASE_MANUAL:
+            return
+        self.log.log("info", "失败文件已全部补入并通过校验，继续应用更新")
+        self._phase = _PHASE_IDLE
+        self._destroy_download_panel()
+        self._set_hint("补入完成，开始应用更新…")
+        self._start_apply()
 
     def _destroy_download_panel(self):
         if self.download_panel is not None:
@@ -1300,14 +1389,63 @@ class PlayerView(ctk.CTkFrame):
         return True
 
     def _on_skip_all_failed(self):
+        if self._phase == _PHASE_APPLY:
+            return
         self.log.log("warn", "跳过所有下载失败的文件")
+        if self._phase == _PHASE_DOWNLOAD:
+            # 下载可能仍在进行：先中止并等它真正停下来，再应用。
+            # 否则会在下载线程还在写缓存目录时开始 execute_plan，
+            # 甚至与 _on_download_done 里的那次应用并发写同一个整合包。
+            self._skip_after_abort = True
+            self._abort_flag = True
+            self._set_hint("正在停止剩余下载…")
+            self._destroy_download_panel()
+            thread = self._download_thread
+
+            def _waiter():
+                if thread is not None and thread.is_alive():
+                    thread.join(timeout=60.0)
+                try:
+                    self.after(0, self._apply_after_abort)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+            threading.Thread(target=_waiter, daemon=True).start()
+            return
+
+        # 已经是"等待补入"态（下载线程早已结束）
+        self._phase = _PHASE_IDLE
         self._destroy_download_panel()
         self._start_apply()
+
+    def _apply_after_abort(self):
+        """「全部跳过」：下载线程停下后继续应用。"""
+        self._skip_after_abort = False
+        if self._phase == _PHASE_APPLY:
+            return
+        self._phase = _PHASE_IDLE
+        self._destroy_download_panel()
+        self._set_hint("已跳过剩余文件，开始应用更新…")
+        self._start_apply()
+
+    def _join_download_thread(self, timeout: float = 5.0) -> bool:
+        """等下载线程结束。返回是否确认已结束。"""
+        t = self._download_thread
+        if t is None or not t.is_alive():
+            return True
+        t.join(timeout=timeout)
+        return not t.is_alive()
 
     # ------------------------------------------------------------------
     # 阶段 3：应用
     # ------------------------------------------------------------------
     def _start_apply(self):
+        # 并发保护：同一时刻只允许一个 execute_plan 在写整合包
+        if self._phase == _PHASE_APPLY:
+            return
+        if self._phase == _PHASE_DOWNLOAD:
+            # 下载还没收尾，等 _on_download_done / _apply_after_abort
+            return
         if (self.diff is None or self.pack_info is None
                 or self._overrides_root is None):
             return
@@ -1327,6 +1465,9 @@ class PlayerView(ctk.CTkFrame):
 
         self._phase = _PHASE_APPLY
         self.app_state.lock()
+        # 关闭守卫必须在这里装：所有进入应用阶段的路径（含
+        # "无需下载直接应用"和 resume 直通）都要有强关警告
+        self._install_close_guard()
         self._set_button_state(_BTN_BUSY)
         self.progress.set_file_progress(None)
         self.progress.set(0.0, animate=False)
@@ -1362,11 +1503,17 @@ class PlayerView(ctk.CTkFrame):
             merged.mkdir(parents=True, exist_ok=True)
             if self._overrides_root and self._overrides_root.is_dir():
                 for p in self._overrides_root.rglob("*"):
-                    if p.is_file():
-                        rel = p.relative_to(self._overrides_root)
-                        dst = merged / rel
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(p, dst)
+                    if not p.is_file():
+                        continue
+                    rel = p.relative_to(self._overrides_root)
+                    # 老格式回退（内容根 = 解压根目录）时，包自身的元数据
+                    # 文件绝不能进入应用源
+                    if self._overrides_fallback and len(rel.parts) == 1 \
+                            and is_reserved_root_name(rel.name):
+                        continue
+                    dst = merged / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(p, dst)
             if self._cache_root.is_dir():
                 for p in self._cache_root.rglob("*"):
                     if p.is_file() and not p.name.endswith(".part") \
@@ -1454,6 +1601,18 @@ class PlayerView(ctk.CTkFrame):
                 level="warn",
                 danger=True,
                 on_result=self._handle_close_download)
+        elif self._phase == _PHASE_MANUAL:
+            confirm(
+                self.winfo_toplevel(),
+                "放弃本次更新？",
+                "还有文件没有下完，正在等待你手动补入。\n\n"
+                "关闭将放弃本次更新（已下载的部分会保留，"
+                "下次启动会询问是否继续）。",
+                confirm_text="关闭",
+                cancel_text="继续补入",
+                level="warn",
+                danger=True,
+                on_result=self._handle_close_download)
         elif self._phase == _PHASE_APPLY:
             confirm(
                 self.winfo_toplevel(),
@@ -1480,10 +1639,22 @@ class PlayerView(ctk.CTkFrame):
 
         def _wait_and_close():
             t = self._download_thread
-            if t is not None:
-                t.join(timeout=3.0)
+            stopped = True
+            if t is not None and t.is_alive():
+                t.join(timeout=5.0)
+                stopped = not t.is_alive()
             if self._cache_root:
-                resume_mod.cleanup_stale_parts(self._cache_root)
+                # 线程还没停就清理 .part 会和它抢文件：可能导致正在写的
+                # 分片被删掉，随后判为失败。只有确认停下才清理。
+                if stopped:
+                    resume_mod.cleanup_stale_parts(self._cache_root)
+                else:
+                    try:
+                        self.after(0, self.log.log, "warn",
+                                   "下载线程未在 5 秒内结束，"
+                                   "已跳过残留分片清理")
+                    except Exception:  # noqa: BLE001, S110
+                        pass
                 self._write_resume()
             self.after(0, self._force_destroy)
 
@@ -1555,6 +1726,11 @@ class PlayerView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def _reset_pack_state(self):
+        # 防御：任何清理都必须先让下载线程停下来，否则它会继续往被清空的
+        # 缓存/解压目录里写文件
+        self._abort_flag = True
+        if not self._join_download_thread(timeout=5.0):
+            self.log.log("warn", "下载线程尚未结束，稍后可能仍有文件落盘")
         self.update_zip = None
         self.pack_kind = PackKind.UNKNOWN
         self.diff = None
@@ -1583,7 +1759,9 @@ class PlayerView(ctk.CTkFrame):
             pass
         self._phase = _PHASE_IDLE
         self._abort_flag = False
+        self._skip_after_abort = False
         self._resume_after_scan = False
+        self._overrides_fallback = False
         self._strategy_snapshot = {"checked": {}, "strategies": {}}
         if self._temp_dir is not None:
             try:
@@ -1614,6 +1792,9 @@ class PlayerView(ctk.CTkFrame):
         self._refresh_changelog_button()
 
     def _on_clear_pack_click(self):
+        if self._phase != _PHASE_IDLE:
+            self.log.log("warn", "更新流程进行中，暂时不能清空")
+            return
         if self.app_state.is_locked:
             return
         self._reset_pack_state()
