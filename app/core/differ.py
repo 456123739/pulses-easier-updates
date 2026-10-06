@@ -137,7 +137,7 @@ def folder_hash(folder: Path | None, content: bool = True) -> str:
         h.update(rel.encode("utf-8"))
         h.update(b"\x00")
         h.update(str(size).encode("ascii"))
-        if content:
+        if content and folder is not None:
             h.update(b"\x00")
             h.update(_hash_file(Path(folder) / rel, "sha1").encode("ascii"))
         h.update(b"\n")
@@ -329,7 +329,7 @@ def _diff_whitelist_dir(
             for fut in futures:
                 try:
                     full_rel, local_h, target_h = fut.result()
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, S112
                     continue
 
                 with lock:

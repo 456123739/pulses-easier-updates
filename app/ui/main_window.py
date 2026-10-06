@@ -334,6 +334,27 @@ class MainWindow(ctk.CTk):
         self.after(500, self._check_resume)
         self.after(600, self._log_ignored_count)
 
+    def _check_database(self):
+        """没配数据库时引导玩家选一个（首次运行 / 目录被删）。"""
+        try:
+            ensure_database(self)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _log_ignored_count(self):
+        """提示还有几条被忽略的"更新中断"记录。"""
+        try:
+            db_root = db.get_db_path()
+            if db_root is None:
+                return
+            n = resume_mod.count_ignored(db_root)
+            if n > 0:
+                self.player_view.log.log(
+                    "info", f"有 {n} 个已忽略的更新中断记录，"
+                            f"如需继续可重新拖入对应更新包")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     # ------------------------------------------------------------------
     # 上次更新被强杀 → 就地自检残渣 + 提示"向前重跑"
     # ------------------------------------------------------------------

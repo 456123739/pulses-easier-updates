@@ -891,7 +891,7 @@ class TestPatientOverlap(TestBase):
         orig = dl._attempt_file
 
         def fake_attempt(task, target_dir, byte_cb, should_abort, opts,
-                         single_mode=False):
+                         single_mode=False, log=None):
             idx = int(task.rel_path.split("-")[1].split(".")[0])
             ts = time.perf_counter()
             if single_mode:

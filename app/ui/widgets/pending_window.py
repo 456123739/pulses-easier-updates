@@ -89,7 +89,7 @@ class PendingWindow(ctk.CTkToplevel):
             self.configure(fg_color=Color.WINDOW_BG)
             self.protocol("WM_DELETE_WINDOW", self.hide_window)
             try:
-                self.transient(self.master)
+                self.transient(self.master)  # type: ignore[arg-type]
             except Exception:  # noqa: BLE001, S110
                 pass
         except Exception:  # noqa: BLE001, S110
@@ -185,7 +185,8 @@ class PendingWindow(ctk.CTkToplevel):
         for widget in (self.list_frame, nav):
             for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
                 try:
-                    widget.bind(seq, self._on_wheel, add="+")
+                    widget.bind(seq, self._on_wheel,
+                                add="+")  # type: ignore[arg-type]
                 except Exception:  # noqa: BLE001, S110
                     pass
 
@@ -399,7 +400,7 @@ class PendingWindow(ctk.CTkToplevel):
                     command=lambda r=rel: self._goto(r))
                 btn.grid(row=i, column=0, sticky="ew", padx=2, pady=1)
                 self._list_rows[rel] = btn
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001, S112
                 continue
 
     def _refresh_page(self):
@@ -470,7 +471,7 @@ class PendingWindow(ctk.CTkToplevel):
                     drop.grid()
                 else:
                     drop.grid_remove()
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001, S112
                 continue
         if not rel:
             return
@@ -486,7 +487,7 @@ class PendingWindow(ctk.CTkToplevel):
                     highlight=True)
                 drop.grid(row=0, column=0, sticky="nsew")
                 self._drops[rel] = drop
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001
                 return
         else:
             try:

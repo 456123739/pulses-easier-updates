@@ -171,7 +171,7 @@ def release_pack_cache(cache_root) -> tuple[bool, int]:
     except OSError:
         pass
     ok, _skip, _locked = _try_remove_dir(root)
-    return ok, size
+    return bool(ok), size
 
 
 def clean_orphan_parts() -> int:
@@ -223,7 +223,7 @@ def find_legacy_trash() -> list[str]:
             trash = Path(root).parent / ".pulses_trash"
             if trash.is_dir() and str(trash) not in found:
                 found.append(str(trash))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S112
             continue
     return found
 

@@ -107,7 +107,6 @@ import http.client
 import json
 import os
 import random
-import socket
 import ssl
 import threading
 import time
@@ -388,11 +387,11 @@ def _linux_mount_of(path: str) -> tuple[str, str] | None:
                 mnt = mnt.replace("\\040", " ").replace("\\011", "\t")
                 if mnt != "/":
                     mnt = mnt.rstrip("/")
-                if mnt == "/" or target == mnt \
-                        or target.startswith(mnt + "/"):
-                    if len(mnt) > best_len:
-                        best_len = len(mnt)
-                        found = (src, fstype)
+                if (mnt == "/" or target == mnt
+                        or target.startswith(mnt + "/")) \
+                        and len(mnt) > best_len:
+                    best_len = len(mnt)
+                    found = (src, fstype)
     except OSError:
         return None
     return found
@@ -406,7 +405,7 @@ def _linux_rotational(device: str) -> bool | None:
     if not name:
         return None
 
-    if name.startswith("dm-") or name.startswith("md"):
+    if name.startswith(("dm-", "md")):
         slave_dir = f"/sys/class/block/{name}/slaves"
         try:
             slaves = sorted(os.listdir(slave_dir))
@@ -509,8 +508,8 @@ def _windows_disk_type_fallback(drive: str, timeout: float) -> str | None:
     letter = drive.rstrip(":").lstrip("\\/")
     if not letter:
         return None
-    script = ("(Get-Partition -DriveLetter {0} -ErrorAction Stop | "
-              "Get-Disk -ErrorAction Stop).MediaType").format(letter)
+    script = (f"(Get-Partition -DriveLetter {letter} -ErrorAction Stop | "
+              f"Get-Disk -ErrorAction Stop).MediaType")
     try:
         import subprocess
         out = subprocess.run(
@@ -1051,7 +1050,7 @@ def _set_socket_timeout(resp, timeout: float) -> bool:
         sock = resp.fp.raw._sock  # type: ignore[attr-defined]
         sock.settimeout(timeout)
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     try:
         sock = resp.fp  # type: ignore[attr-defined]
@@ -1106,8 +1105,8 @@ class _FileProgress:
     分片失败时其"在途"字节被丢弃，但对外上报用 _high 夹住，保证不倒退。
     """
 
-    __slots__ = ("rel_path", "total", "_byte_cb", "_lock", "_done",
-                 "_inflight", "_high", "_last_ms", "_report_ms")
+    __slots__ = ("_byte_cb", "_done", "_high", "_inflight",
+                 "_last_ms", "_lock", "_report_ms", "rel_path", "total")
 
     def __init__(self, rel_path: str, total: int, byte_cb,
                  report_ms: float = BYTE_THROTTLE_MS):
@@ -1299,7 +1298,7 @@ def _stream_to_file(resp, f, progress: _FileProgress | None, part_id: int,
         poll = read_idle if read_idle > 0 else 30.0
     if read_idle > 0:
         poll = min(poll, read_idle)
-    # 让阻塞读在 poll 秒后抛 socket.timeout，好回到循环顶部做各种判定
+    # 让阻塞读在 poll 秒后抛 TimeoutError，好回到循环顶部做各种判定
     _set_socket_timeout(resp, poll)
 
     if single_mode:
@@ -1356,7 +1355,7 @@ def _stream_to_file(resp, f, progress: _FileProgress | None, part_id: int,
 
         try:
             chunk = resp.read1(to_read)
-        except socket.timeout:
+        except TimeoutError:
             # 到点还没数据 → 回到循环顶部重新评估（不再用 select 预判）
             continue
         except (urlerr.URLError, OSError) as e:
@@ -1395,7 +1394,8 @@ def _try_single_url(url: str, target: Path, part: Path,
                     should_abort,
                     opts: dict,
                     single_mode: bool = False,
-                    fast_stall: bool = False
+                    fast_stall: bool = False,
+                    log=None
                     ) -> _PartResult:
     """
     用单条连接下载（支持 Range 续传）。
@@ -1475,8 +1475,9 @@ def _try_single_url(url: str, target: Path, part: Path,
             elif start_at and _flag(opts, "range_validate", True) \
                     and not _content_range_start_ok(resp, start_at):
                 # 206 但起点不对（CDN 篡改/错配）→ 同样作废重下
-                log("warn", f"{url} 续传起点不匹配"
-                            f"（请求 {start_at}），已丢弃分片重下")
+                if log is not None:
+                    log("warn", f"{url} 续传起点不匹配"
+                                f"（请求 {start_at}），已丢弃分片重下")
                 start_at = 0
                 existing = 0
                 try:
@@ -1592,8 +1593,7 @@ def _covered_upto(limit: int, ranges) -> int:
     for s, e in ranges:
         if s > pos:
             break
-        if e + 1 > pos:
-            pos = e + 1
+        pos = max(pos, e + 1)
     if limit > 0:
         return min(pos, limit)
     return pos
@@ -2001,7 +2001,7 @@ def _download_multi_part(url: str, target: Path, task: DownloadTask,
 # ----------------------------------------------------------------------
 def _attempt_file(task: DownloadTask, target_dir: Path,
                   byte_cb, should_abort, opts: dict,
-                  single_mode: bool = False
+                  single_mode: bool = False, log=None
                   ) -> _AttemptOutcome:
     target = target_dir / task.rel_path
     part = target.with_suffix(target.suffix + ".part")
@@ -2009,7 +2009,7 @@ def _attempt_file(task: DownloadTask, target_dir: Path,
     try:
         return _attempt_file_inner(
             task, target_dir, byte_cb, should_abort, opts,
-            single_mode, target, part)
+            single_mode, target, part, log)
     finally:
         _cleanup_parts(part)
 
@@ -2017,7 +2017,8 @@ def _attempt_file(task: DownloadTask, target_dir: Path,
 def _attempt_file_inner(task: DownloadTask, target_dir: Path,
                         byte_cb, should_abort, opts: dict,
                         single_mode: bool,
-                        target: Path, part: Path) -> _AttemptOutcome:
+                        target: Path, part: Path,
+                        log=None) -> _AttemptOutcome:
     if _is_abort(should_abort):
         return _AttemptOutcome(False, "用户中止", aborted=True)
 
@@ -2115,7 +2116,7 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
             res = _try_single_url(
                 url, target, part, task, progress, should_abort, opts,
                 single_mode=single_mode,
-                fast_stall=use_fast_stall)
+                fast_stall=use_fast_stall, log=log)
             if res.aborted:
                 return _AttemptOutcome(False, "用户中止", aborted=True)
             if res.fast_stalled:
@@ -2284,7 +2285,7 @@ def download_files(
                 last_report["n"] = done
                 report = True
         # 进度回调移出锁：外部代码（UI）不应在持锁期间被调用
-        if report:
+        if report and progress is not None:
             try:
                 progress(done, total, task.rel_path)
             except Exception:  # noqa: BLE001, S110
@@ -2316,7 +2317,7 @@ def download_files(
         try:
             outcome = _attempt_file(task, target_dir, byte_progress,
                                     should_abort, opts,
-                                    single_mode=False)
+                                    single_mode=False, log=log)
         except Exception as e:  # noqa: BLE001
             outcome = _AttemptOutcome(
                 False, f"内部异常：{type(e).__name__}: {e}")
@@ -2362,7 +2363,7 @@ def download_files(
         try:
             outcome = _attempt_file(task, target_dir, byte_progress,
                                     should_abort, opts,
-                                    single_mode=True)
+                                    single_mode=True, log=log)
         except Exception as e:  # noqa: BLE001
             outcome = _AttemptOutcome(
                 False, f"内部异常：{type(e).__name__}: {e}")

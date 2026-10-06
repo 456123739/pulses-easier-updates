@@ -730,5 +730,101 @@ class TestResumeReusesCustomStrategies(_Base):
                         "续传记录必须在下载线程启动前落盘")
 
 
+# ======================================================================
+# 启动回调 / 模块级引用：不许出现"引用了不存在的东西"
+# （Pylance 报的 reportAttributeAccessIssue / F821 就是这一类，
+#   运行时表现是 AttributeError / NameError，而且往往被 try 吞掉）
+# ======================================================================
+class TestNoDanglingReferences(unittest.TestCase):
+    """不许出现"引用了不存在的东西"（启动回调 / import 期名字错误）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        if "customtkinter" not in sys.modules:
+            stubs.install()
+
+    def test_after_callbacks_exist(self):
+        """
+        `self.after(ms, self._xxx)` 会在注册的那一刻就取属性——
+        方法名写错/被误删时，它**后面**注册的回调全都失效。
+        真实事故：_check_database / _log_ignored_count 被误删，导致
+        on_boot_done 抛 AttributeError，"上次更新没正常结束"与"继续上次
+        更新"两个提示从来没出现过。
+        """
+        import importlib
+        import re
+        ui_root = Path(__file__).resolve().parent.parent / "app" / "ui"
+        problems: list[str] = []
+        scanned = 0
+        for path in sorted(ui_root.rglob("*.py")):
+            rel = path.relative_to(ui_root.parent.parent).with_suffix("")
+            mod_name = ".".join(rel.parts)
+            try:
+                mod = importlib.import_module(mod_name)
+            except Exception:  # noqa: BLE001
+                continue
+            src = path.read_text(encoding="utf-8")
+            # 只认"裸方法引用"（self._x 后面紧跟 , 或 )）：
+            # `self.after(0, self.widget.destroy)` 是实例属性链，不在检查范围
+            names = set(re.findall(
+                r"after\(\s*\d+\s*,\s*self\.([A-Za-z_][A-Za-z0-9_]*)\s*[,)]",
+                src))
+            if not names:
+                continue
+            scanned += 1
+            # 允许三类来源：本模块里 def 出来的、self.x = ... 赋值的、
+            # 以及 tkinter 自带方法（桩环境下拿不到基类，只能列白名单）
+            tk_base = {"destroy", "withdraw", "deiconify", "lift", "update",
+                       "quit", "focus_force", "winfo_toplevel"}
+            defined = set(re.findall(r"def ([A-Za-z_][A-Za-z0-9_]*)", src))
+            defined |= set(re.findall(
+                r"self\.([A-Za-z_][A-Za-z0-9_]*)\s*=", src))
+            defined |= tk_base
+            classes = [v for v in vars(mod).values() if isinstance(v, type)]
+            for n in sorted(names):
+                if n in defined:
+                    continue
+                if any(hasattr(c, n) for c in classes):
+                    continue
+                problems.append(f"{mod_name}.{n}")
+        self.assertGreater(scanned, 0, "没扫到任何 after 回调，正则失效了")
+        self.assertEqual(problems, [],
+                         f"after 回调引用了不存在的属性：{problems}")
+
+    def test_on_boot_done_runs_without_attribute_error(self):
+        """启动收尾不许抛异常（抛了就会静默丢掉后面的自检/续传提示）。"""
+        import main as main_mod
+        from app.ui.main_window import MainWindow
+        AppBase, _dnd = main_mod._pick_app_base()
+        Window = type("WindowClass", (MainWindow, AppBase), {})
+        app = Window()
+        self.assertFalse(app._boot_done)
+        app.on_boot_done()
+        self.assertTrue(app._boot_done)
+
+    def test_boot_callbacks_are_callable(self):
+        from app.ui.main_window import MainWindow
+        for name in ("_check_database", "_check_apply_recovery",
+                     "_check_resume", "_log_ignored_count"):
+            self.assertTrue(callable(getattr(MainWindow, name, None)),
+                            f"{name} 不存在或不可调用")
+
+    def test_every_app_module_imports(self):
+        """任何一个模块在 import 期就抛 NameError/AttributeError 都要挡住。"""
+        import importlib
+        root = Path(__file__).resolve().parent.parent / "app"
+        failed: list[str] = []
+        for path in sorted(root.rglob("*.py")):
+            rel = path.relative_to(root.parent).with_suffix("")
+            mod = ".".join(rel.parts)
+            if mod.endswith(".__init__"):
+                mod = mod[:-len(".__init__")]
+            try:
+                importlib.import_module(mod)
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"{mod}: {type(e).__name__}: {e}")
+        self.assertEqual(failed, [], "模块导入失败：" + "; ".join(failed))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
