@@ -15,6 +15,9 @@ resume.py — 下载中断恢复记录
     "pack_name": "整合包名",
     "version": "1.2.3",
     "ignored_at": 0.0,          # >0 表示用户已勾选"不再提醒"
+    "strategies": {...},        # 玩家为这次更新自定义的策略（可选）
+    "checked":    {...},        # 玩家这次的勾选状态（可选）
+    "strategies_customized": False,
   }
 
 存储位置：<cache_root>/resume.json
@@ -74,22 +77,34 @@ def write_resume(cache_root: Path, zip_path: Path,
                  completed: list[str], failed: list[str],
                  total: int, started_at: float,
                  pack_name: str = "", version: str = "",
-                 ignored_at: float | None = None) -> bool:
+                 ignored_at: float | None = None,
+                 strategies: dict | None = None,
+                 checked: dict | None = None,
+                 strategies_customized: bool | None = None) -> bool:
     """
     写入/覆盖 resume.json。
 
-    ignored_at：
-      - None → 保留原文件的 ignored_at（若存在），否则 0.0
-      - 显式传值 → 用该值覆盖（0.0 表示清除忽略状态）
+    ignored_at / strategies / checked / strategies_customized：
+      - None → **保留原文件里已有的值**（这样"重新定位更新包""不再提醒"
+        这类只改个别字段的调用不会把玩家自定义的策略弄丢）
+      - 显式传值 → 覆盖
     """
     cache_root = Path(cache_root)
     try:
         cache_root.mkdir(parents=True, exist_ok=True)
         resume_file = cache_root / RESUME_FILENAME
 
-        # 保留原 ignored_at
+        # 保留原字段（只改个别字段的调用方不必重复传）
+        prev = _read_existing(resume_file)
         if ignored_at is None:
-            ignored_at = _read_ignored_at(resume_file)
+            ignored_at = float(prev.get("ignored_at", 0.0) or 0.0)
+        if strategies is None:
+            strategies = prev.get("strategies") or {}
+        if checked is None:
+            checked = prev.get("checked") or {}
+        if strategies_customized is None:
+            strategies_customized = bool(
+                prev.get("strategies_customized", False))
 
         pack_root_str = ""
         if pack_root:
@@ -111,21 +126,30 @@ def write_resume(cache_root: Path, zip_path: Path,
             "pack_name": pack_name,
             "version": version,
             "ignored_at": float(ignored_at or 0.0),
+            "strategies": dict(strategies or {}),
+            "checked": dict(checked or {}),
+            "strategies_customized": bool(strategies_customized),
         }
         return _atomic_write_json(resume_file, data)
     except Exception:  # noqa: BLE001
         return False
 
 
+def _read_existing(resume_file: Path) -> dict:
+    """读原记录（用于保留未显式传入的字段），失败返回空 dict。"""
+    try:
+        if not resume_file.is_file():
+            return {}
+        data = json.loads(resume_file.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _read_ignored_at(resume_file: Path) -> float:
     """只读 ignored_at 字段，失败返回 0.0"""
     try:
-        if not resume_file.is_file():
-            return 0.0
-        data = json.loads(resume_file.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return 0.0
-        return float(data.get("ignored_at", 0.0) or 0.0)
+        return float(_read_existing(resume_file).get("ignored_at", 0.0) or 0.0)
     except Exception:  # noqa: BLE001
         return 0.0
 

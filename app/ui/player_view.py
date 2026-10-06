@@ -105,6 +105,11 @@ class PlayerView(ctk.CTkFrame):
         self._download_thread: threading.Thread | None = None
         self._last_results: list = []
         self._resume_after_scan: bool = False
+        # 续传时恢复玩家上次自定义的策略
+        self._resume_strategies: dict = {}
+        self._resume_checked: dict = {}
+        # 扫描后的"基线策略"（默认值 + 包内推荐值），用来判断玩家是否改过
+        self._baseline_strategies: dict = {}
 
         self._strategy_snapshot: dict = {"checked": {}, "strategies": {}}
 
@@ -495,6 +500,38 @@ class PlayerView(ctk.CTkFrame):
         elif not dirty and self._btn_state == _BTN_RESCAN:
             self._set_button_state(_BTN_CONFIRM)
 
+    def _restore_resume_strategies(self) -> bool:
+        """
+        续传时把玩家上次自定义的勾选/策略恢复回策略表。
+
+        规则（按用户确认）：**玩家自定义过就沿用玩家的**；
+        没自定义过（等于默认值 + 包内推荐值）就不动，直接用当前默认。
+        """
+        strat = dict(self._resume_strategies or {})
+        checked = dict(self._resume_checked or {})
+        if not strat and not checked:
+            return False
+        try:
+            self._resume_strategies, self._resume_checked = {}, {}
+            if checked:
+                blacklist = [name for name, ok in checked.items() if not ok]
+                self.strategy_table.set_blacklist(blacklist)
+            if strat:
+                self.strategy_table.set_strategies(strat)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _is_strategy_customized(self) -> bool:
+        """当前策略是否偏离了"默认 + 包内推荐"的基线。"""
+        if not self._baseline_strategies:
+            return False
+        cur = self.strategy_table.get_strategies()
+        if cur != self._baseline_strategies:
+            return True
+        checked = self.strategy_table.get_checked()
+        return any(not v for v in checked.values())
+
     def _is_strategy_dirty(self) -> bool:
         cur = {
             "checked": self.strategy_table.get_checked(),
@@ -757,6 +794,22 @@ class PlayerView(ctk.CTkFrame):
             self._completed_files = list(data.get("completed", []))
         except Exception:  # noqa: BLE001
             self._completed_files = []
+
+        # 玩家上次为这个更新包自定义过的策略：续传时要沿用
+        self._resume_strategies = {}
+        self._resume_checked = {}
+        if data.get("strategies_customized"):
+            try:
+                strat = data.get("strategies") or {}
+                if isinstance(strat, dict):
+                    self._resume_strategies = {str(k): str(v)
+                                               for k, v in strat.items()}
+                chk = data.get("checked") or {}
+                if isinstance(chk, dict):
+                    self._resume_checked = {str(k): bool(v)
+                                            for k, v in chk.items()}
+            except Exception:  # noqa: BLE001
+                self._resume_strategies, self._resume_checked = {}, {}
 
         self._resume_after_scan = False
         self._set_button_state(_BTN_RESUME)
@@ -1136,12 +1189,19 @@ class PlayerView(ctk.CTkFrame):
         all_items = list(folders) + sorted(file_items)
         self.strategy_table.set_folders(all_items, file_items=file_items)
         self.strategy_table.set_strategies(mapping)
+        # 基线 = 默认值 + 包内推荐值（未叠加玩家手改），用于判断"是否自定义过"
+        self._baseline_strategies = {
+            name: strat for name, strat in
+            self.strategy_table.get_strategies().items()}
         self._refresh_ui_state()
 
     def _on_scan_done(self):
         self._phase = _PHASE_IDLE
         if self.diff is None:
             return
+
+        if self._restore_resume_strategies():
+            self.log.log("info", "已恢复你上次为这个更新包设置的策略")
 
         checked = self.strategy_table.get_checked()
         strategies = self.strategy_table.get_strategies()
@@ -1252,6 +1312,10 @@ class PlayerView(ctk.CTkFrame):
                                                      with_engine=False))
         except Exception:  # noqa: BLE001, S110
             pass
+
+        # 一开始就落一份续传记录：进程被强杀时也能续传，
+        # 并把你这次用的策略一并存下来
+        self._write_resume()
 
         self._ensure_download_panel(in_progress=True)
         if self.download_panel is not None and \
@@ -1796,7 +1860,12 @@ class PlayerView(ctk.CTkFrame):
     def _install_close_guard(self):
         try:
             top = self.winfo_toplevel()
-            top.protocol("WM_DELETE_WINDOW", self._on_close_request)
+            installer = getattr(top, "install_close_guard", None)
+            if callable(installer):
+                # 主窗口支持叠加守卫（开发者端导出时会拒绝关闭）
+                installer("player", self._on_close_request)
+            else:
+                top.protocol("WM_DELETE_WINDOW", self._on_close_request)
         except Exception:  # noqa: BLE001, S110
             pass
         try:
@@ -1807,7 +1876,11 @@ class PlayerView(ctk.CTkFrame):
     def _uninstall_close_guard(self):
         try:
             top = self.winfo_toplevel()
-            top.protocol("WM_DELETE_WINDOW", top.destroy)
+            releaser = getattr(top, "release_close_guard", None)
+            if callable(releaser):
+                releaser("player")
+            else:
+                top.protocol("WM_DELETE_WINDOW", top.destroy)
         except Exception:  # noqa: BLE001, S110
             pass
         try:
@@ -1931,7 +2004,10 @@ class PlayerView(ctk.CTkFrame):
                 failed=list(pending),
                 total=len(self._download_tasks),
                 started_at=self._phase_started_at or time(),
-                pack_name=pack_name, version=version)
+                pack_name=pack_name, version=version,
+                strategies=self.strategy_table.get_strategies(),
+                checked=self.strategy_table.get_checked(),
+                strategies_customized=self._is_strategy_customized())
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -2000,6 +2076,9 @@ class PlayerView(ctk.CTkFrame):
         self._abort_flag = False
         self._skip_after_abort = False
         self._resume_after_scan = False
+        self._resume_strategies = {}
+        self._resume_checked = {}
+        self._baseline_strategies = {}
         self._overrides_fallback = False
         self._strategy_snapshot = {"checked": {}, "strategies": {}}
         self._discard_merged_source()

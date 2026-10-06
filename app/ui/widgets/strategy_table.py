@@ -203,12 +203,20 @@ class StrategyTable(ctk.CTkFrame):
     def get_strategies(self) -> dict[str, str]:
         return {name: r.strategy.value for name, r in self._rows.items()}
 
+    def _is_strategy_locked(self, name: str) -> bool:
+        """受保护项（mods）的策略不允许手动切换，固定"完全匹配"。"""
+        return name in self._protected
+
     def set_strategies(self, mapping: dict):
         self._suppress = True
         try:
             for name, strat in mapping.items():
                 r = self._rows.get(name)
                 if not r:
+                    continue
+                if self._is_strategy_locked(name):
+                    # 推荐策略 / 导入的配置 / 统一策略都不能改它
+                    self._force_locked(r)
                     continue
                 try:
                     s = Strategy(strat) if isinstance(strat, str) else strat
@@ -217,9 +225,18 @@ class StrategyTable(ctk.CTkFrame):
                 r.strategy = s
                 if r.group is not None:
                     r.group.set_value(s, animate=False, notify=False)
+            # 没出现在 mapping 里的受保护项也要固定
+            for r in self._rows.values():
+                if self._is_strategy_locked(r.folder):
+                    self._force_locked(r)
         finally:
             self._suppress = False
         self._fire_change("external")
+
+    def _force_locked(self, r: "_Row"):
+        r.strategy = Strategy.FULL_MATCH
+        if r.group is not None:
+            r.group.set_locked(True, Strategy.FULL_MATCH)
 
     # ------------------------------------------------------------------
     def _create_row_widgets(self, r: _Row):
@@ -228,7 +245,10 @@ class StrategyTable(ctk.CTkFrame):
         r.frame = frame
 
         is_file = r.folder in self._file_items
+        locked = self._is_strategy_locked(r.folder)
         label = f"📄 {r.folder}" if is_file else f"📁 {r.folder}"
+        if locked:
+            label += "（固定）"
 
         toggle = ToggleItem(
             frame, text=label, selected=r.checked,
@@ -243,10 +263,13 @@ class StrategyTable(ctk.CTkFrame):
         r.body = body
 
         group = StrategyGroup(
-            body, value=r.strategy,
+            body, value=(Strategy.FULL_MATCH if locked else r.strategy),
             on_change=lambda _s, name=r.folder: self._on_strategy(name))
         group.grid(row=0, column=0, sticky="w")
         r.group = group
+        if locked:
+            r.strategy = Strategy.FULL_MATCH
+            group.set_locked(True, Strategy.FULL_MATCH)
 
     def _apply_layout(self):
         enabled: list[_Row] = []
@@ -329,6 +352,12 @@ class StrategyTable(ctk.CTkFrame):
         self._fire_change("toggle")
 
     def _on_strategy(self, folder: str):
+        if self._is_strategy_locked(folder):
+            # 被锁定的行不允许手动切换（按钮已 disabled，这里是兜底）
+            r = self._rows.get(folder)
+            if r is not None:
+                self._force_locked(r)
+            return
         r = self._rows.get(folder)
         if r and r.group is not None:
             r.strategy = r.group.get()
@@ -407,7 +436,9 @@ class StrategyTable(ctk.CTkFrame):
                 pass
 
         for name, r in self._rows.items():
-            if name in strategies:
+            if self._is_strategy_locked(name):
+                self._force_locked(r)          # 固定项不接受导入的策略
+            elif name in strategies:
                 try:
                     r.strategy = Strategy(strategies[name])
                     if r.group is not None:

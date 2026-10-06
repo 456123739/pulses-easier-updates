@@ -29,6 +29,7 @@ from ..core.mrpack import (
 )
 from ..theme import Color, Font, Size
 from ..utils.files import human_size
+from .widgets.dialog import alert
 from .widgets.drop_zone import DropZone
 from .widgets.export_options import ExportOptionsPanel
 from .widgets.log_panel import LogPanel
@@ -383,6 +384,7 @@ class DeveloperView(ctk.CTkFrame):
 
         out_path = Path(out)
         self._set_locked(True)
+        self._install_close_guard()
         self.main_btn.configure(text="制作中...", state="disabled")
         self.progress_panel.reset("准备中...")
         self.progress_panel.grid()
@@ -441,6 +443,40 @@ class DeveloperView(ctk.CTkFrame):
             self.after(0, self._cleanup_export_tmp)
             return None
 
+    # ------------------------------------------------------------------
+    # 导出期间禁止关闭软件（更新包写到一半关掉会留下不完整的产物）
+    # ------------------------------------------------------------------
+    def _install_close_guard(self):
+        try:
+            top = self.winfo_toplevel()
+            installer = getattr(top, "install_close_guard", None)
+            if callable(installer):
+                installer("developer", self._on_close_blocked)
+            else:
+                top.protocol("WM_DELETE_WINDOW", self._on_close_blocked)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _uninstall_close_guard(self):
+        try:
+            top = self.winfo_toplevel()
+            releaser = getattr(top, "release_close_guard", None)
+            if callable(releaser):
+                releaser("developer")
+            else:
+                top.protocol("WM_DELETE_WINDOW", top.destroy)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _on_close_blocked(self):
+        try:
+            alert(self.winfo_toplevel(), "正在制作更新包",
+                  "更新包正在制作中，暂时无法关闭软件。\n\n"
+                  "请等制作完成（进度条走完）后再关闭。",
+                  level="warn")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def _cleanup_export_tmp(self):
         tmp = self.export_tmp_dir
         self.export_tmp_dir = None
@@ -453,6 +489,7 @@ class DeveloperView(ctk.CTkFrame):
 
     def _on_build_done(self, result, out_path: Path):
         self._set_locked(False)
+        self._uninstall_close_guard()
         self._cleanup_export_tmp()
         self.main_btn.configure(text="开始制作更新包", state="normal")
 

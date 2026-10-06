@@ -30,6 +30,7 @@ class StrategyGroup(ctk.CTkFrame):
 
         self.on_change = on_change
         self._value = value
+        self._locked = False
         self._btn_w = btn_width
         self._height = height
         self._buttons: list[ctk.CTkButton] = []
@@ -54,11 +55,36 @@ class StrategyGroup(ctk.CTkFrame):
                 text_color=(Color.STRATEGY_SELECTED_TX if selected
                             else Color.TEXT_SECONDARY),
                 border_width=0,
-                command=lambda s=strat: self.set_value(s, animate=True))
+                command=lambda s=strat: self._on_click(s))
             btn.grid(row=0, column=i, sticky="nsew", padx=0, pady=0)
             self._buttons.append(btn)
 
     # ------------------------------------------------------------------
+    def _on_click(self, value: Strategy):
+        """用户点击：被锁定的行忽略点击（值只能由程序设置）。"""
+        if self._locked:
+            return
+        self.set_value(value, animate=True)
+
+    def set_locked(self, locked: bool, value: Strategy | None = None):
+        """
+        锁定/解锁这一行：锁定时按钮不可点，且（传入 value 时）把值固定成它。
+
+        用于"mods 的策略不允许手动切换"（mods 必须完全匹配，
+        否则新版移除的 mod 永远删不掉）。
+        """
+        self._locked = bool(locked)
+        if locked and value is not None and value != self._value:
+            self.set_value(value, animate=False, notify=False)
+        for btn in self._buttons:
+            try:
+                btn.configure(state="disabled" if self._locked else "normal")
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    def is_locked(self) -> bool:
+        return self._locked
+
     def set_value(self, value: Strategy, animate: bool = True,
                   notify: bool = True):
         if value == self._value:

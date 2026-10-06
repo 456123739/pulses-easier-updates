@@ -41,6 +41,10 @@ class MainWindow(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         self._current = "玩家"
+        # 关闭守卫（可叠加）：owner → 处理函数
+        #   player    → 下载/应用进行中：强警告，允许强制关闭
+        #   developer → 正在制作更新包：**不允许关闭**
+        self._close_guards: dict = {}
         self._switching = False
         self._boot_done = False
         self._warmed_up = False
@@ -203,6 +207,48 @@ class MainWindow(ctk.CTk):
             return True, ""
         except Exception:  # noqa: BLE001
             return False, ""
+
+    # ------------------------------------------------------------------
+    # 关闭守卫（两个视图共用一个顶层窗口的 WM_DELETE_WINDOW）
+    # ------------------------------------------------------------------
+    def install_close_guard(self, owner: str, handler):
+        """
+        注册一个关闭守卫。owner 用于区分来源：
+            player    → 下载/应用进行中：强警告，允许强制关闭
+            developer → 正在制作更新包：**不允许关闭**
+        多个守卫同时存在时按 developer > player 的优先级派发。
+        """
+        self._close_guards[owner] = handler
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._dispatch_close)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def release_close_guard(self, owner: str):
+        self._close_guards.pop(owner, None)
+        try:
+            if self._close_guards:
+                self.protocol("WM_DELETE_WINDOW", self._dispatch_close)
+            else:
+                self.protocol("WM_DELETE_WINDOW", self.destroy)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _dispatch_close(self):
+        """把关闭请求交给优先级最高的守卫；一个都没有才真的关窗。"""
+        for owner in ("developer", "player"):
+            handler = self._close_guards.get(owner)
+            if handler is None:
+                continue
+            try:
+                handler()
+                return
+            except Exception:  # noqa: BLE001
+                continue
+        try:
+            self.destroy()
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def on_exit_cleanup(self):
         """退出前清理工作目录（main.py 在 os._exit 之前调用）。"""

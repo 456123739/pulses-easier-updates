@@ -506,5 +506,228 @@ class TestExitCleanup(_Base):
         self.assertIsNone(app.player_view._temp_dir)
 
 
+# ======================================================================
+# 后续追加：策略锁定 / 开发者端关闭守护 / 续传沿用自定义策略
+# ======================================================================
+class TestProtectedStrategyLocked(_Base):
+    """mods 的策略不允许手动切换，固定"完全匹配"。"""
+
+    def _table(self):
+        from app.ui.widgets.strategy_table import StrategyTable
+        t = StrategyTable(None)          # 默认 protected_folders=["mods"]
+        t.set_folders(["mods", "config"])
+        return t
+
+    def test_recommended_cannot_change_mods(self):
+        from app.config import Strategy
+        t = self._table()
+        t.set_strategies({"mods": Strategy.SKIP_SAME.value,
+                          "config": Strategy.SKIP_SAME.value})
+        got = t.get_strategies()
+        self.assertEqual(got["mods"], Strategy.FULL_MATCH.value)
+        self.assertEqual(got["config"], Strategy.SKIP_SAME.value)
+
+    def test_manual_switch_ignored(self):
+        from app.config import Strategy
+        t = self._table()
+        rows = t._rows
+        rows["mods"].group.set_value(Strategy.REPLACE_SAME, animate=False)
+        t._on_strategy("mods")
+        self.assertEqual(t.get_strategies()["mods"],
+                         Strategy.FULL_MATCH.value)
+
+    def test_group_is_locked_and_label_marked(self):
+        t = self._table()
+        self.assertTrue(t._rows["mods"].group.is_locked())
+        self.assertFalse(t._rows["config"].group.is_locked())
+        src = (_ROOT / "app" / "ui" / "widgets" / "strategy_table.py").read_text(
+            encoding="utf-8")
+        self.assertIn("（固定）", src)
+
+    def test_unify_skips_mods(self):
+        from app.config import Strategy
+        t = self._table()
+        t._on_unify()
+        self.assertEqual(t.get_strategies()["mods"],
+                         Strategy.FULL_MATCH.value)
+
+    def test_import_profile_cannot_unlock_mods(self):
+        from app.config import Strategy
+        t = self._table()
+        profile = {"strategies": {"mods": "跳过重名"},
+                   "blacklist": [], "whitelist": ["mods"],
+                   "export_options": {}}
+        pf = self.tmp / "p.json"
+        pf.write_text(json.dumps(profile), encoding="utf-8")
+        import tkinter.filedialog as fd
+        saved = getattr(fd, "askopenfilename", None)
+        fd.askopenfilename = lambda **k: str(pf)
+        try:
+            t._on_import()
+        finally:
+            if saved is None:
+                try:
+                    del fd.askopenfilename
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            else:
+                fd.askopenfilename = saved
+        self.assertEqual(t.get_strategies()["mods"],
+                         Strategy.FULL_MATCH.value)
+
+    def test_player_view_marks_mods_protected(self):
+        src = (_ROOT / "app" / "ui" / "player_view.py").read_text(
+            encoding="utf-8")
+        self.assertIn('protected_folders=["mods"]', src)
+
+
+class TestCloseGuardLayers(_Base):
+    """开发者端导出期间不允许关闭，优先级高于玩家端的告警。"""
+
+    def _window(self):
+        import main as main_mod
+        from app.ui.main_window import MainWindow
+        AppBase, _dnd = main_mod._pick_app_base()
+        return type("W", (MainWindow, AppBase), {})()
+
+    def test_developer_guard_wins(self):
+        mw = self._window()
+        calls = []
+        mw.install_close_guard("player",
+                               lambda: calls.append("player"))
+        mw.install_close_guard("developer",
+                               lambda: calls.append("developer"))
+        mw._dispatch_close()
+        self.assertEqual(calls, ["developer"], "导出期间的守卫必须优先")
+        mw.release_close_guard("developer")
+        mw._dispatch_close()
+        self.assertEqual(calls, ["developer", "player"])
+        mw.release_close_guard("player")
+        self.assertEqual(mw._close_guards, {})
+
+    def test_dev_view_blocks_close_with_alert(self):
+        from app.ui import developer_view as dv
+        view = dv.DeveloperView(None)
+        seen = []
+        with mock.patch.object(dv, "alert",
+                               side_effect=lambda *a, **k: seen.append(a)):
+            view._on_close_blocked()
+        self.assertEqual(len(seen), 1, "没有弹出'无法关闭'提示")
+
+    def test_build_install_and_release(self):
+        src = (_ROOT / "app" / "ui" / "developer_view.py").read_text(
+            encoding="utf-8")
+        i_install = src.index("self._install_close_guard()")
+        i_build = src.index("self._set_locked(True)")
+        self.assertLess(i_build, i_install,
+                        "开始制作后必须立刻装上关闭守卫")
+        self.assertIn("self._uninstall_close_guard()", src)
+
+    def test_player_uses_guard_manager(self):
+        src = (_ROOT / "app" / "ui" / "player_view.py").read_text(
+            encoding="utf-8")
+        self.assertIn('installer("player", self._on_close_request)', src)
+        self.assertIn('releaser("player")', src)
+
+
+class TestResumeReusesCustomStrategies(_Base):
+    """续传时沿用玩家上次为这个更新包自定义的策略。"""
+
+    def _view(self):
+        import main as main_mod
+        from app.ui.main_window import MainWindow
+        AppBase, _dnd = main_mod._pick_app_base()
+        app = type("W", (MainWindow, AppBase), {})()
+        return app, app.player_view
+
+    def _pack_zip(self) -> Path:
+        z = self.tmp / "pack.eapack"
+        with zipfile.ZipFile(z, "w") as zf:
+            zf.writestr("modrinth.index.json",
+                        json.dumps({"files": [], "name": "P"}))
+            zf.writestr("ea_settings.json", "{}")
+            zf.writestr("ea_manifest.json", "{}")
+            zf.writestr("overrides/", b"")
+        return z
+
+    def test_write_resume_records_strategies(self):
+        app, pv = self._view()
+        pack = self._pack_zip()
+        inst = self.tmp / "inst"
+        (inst / "mods").mkdir(parents=True)
+        pv.pack_info = types.SimpleNamespace(name="P", version="1",
+                                             path=inst)
+        pv.update_zip = pack
+        pv._cache_root = self.tmp / "cache"
+        pv._cache_root.mkdir(exist_ok=True)
+        pv._download_tasks = [types.SimpleNamespace(rel_path="mods/a.jar")]
+        pv._baseline_strategies = {"mods": "完全匹配",
+                                   "config": "替换重名"}
+        pv.strategy_table.set_folders(["mods", "config"])
+        pv.strategy_table.set_strategies({"config": "跳过重名"})
+        pv.strategy_table.set_blacklist([])
+        pv._write_resume()
+        data = json.loads((pv._cache_root / "resume.json")
+                          .read_text("utf-8"))
+        self.assertEqual(data["strategies"]["config"], "跳过重名")
+        self.assertTrue(data["strategies_customized"],
+                        "偏离基线却没有标记为已自定义")
+
+    def test_customized_flag_false_for_defaults(self):
+        app, pv = self._view()
+        pv._baseline_strategies = {"mods": "完全匹配",
+                                   "config": "替换重名"}
+        pv.strategy_table.set_folders(["mods", "config"])
+        pv.strategy_table.set_strategies({"config": "替换重名"})
+        pv.strategy_table.set_blacklist([])
+        self.assertFalse(pv._is_strategy_customized())
+
+    def test_resume_from_reads_saved_strategies(self):
+        app, pv = self._view()
+        pack = self._pack_zip()
+        inst = self.tmp / "inst2"
+        (inst / "mods").mkdir(parents=True)
+        data = {
+            "zip_path": str(pack), "pack_root": str(inst),
+            "completed": [], "failed": [], "total": 0,
+            "strategies": {"config": "跳过重名"},
+            "checked": {"config": False},
+            "strategies_customized": True,
+        }
+        self.assertTrue(pv.resume_from(data))
+        self.assertEqual(pv._resume_strategies, {"config": "跳过重名"})
+        self.assertEqual(pv._resume_checked, {"config": False})
+
+    def test_restore_applies_to_table(self):
+        app, pv = self._view()
+        pv._resume_strategies = {"config": "跳过重名"}
+        pv._resume_checked = {"config": False}
+        pv.strategy_table.set_folders(["mods", "config"])
+        self.assertTrue(pv._restore_resume_strategies())
+        self.assertEqual(pv.strategy_table.get_strategies()["config"],
+                         "跳过重名")
+        self.assertFalse(pv.strategy_table.get_checked()["config"])
+        # 恢复一次即作废，避免影响后续普通更新
+        self.assertFalse(pv._restore_resume_strategies())
+
+    def test_scan_done_restores_before_collecting_tasks(self):
+        src = (_ROOT / "app" / "ui" / "player_view.py").read_text(
+            encoding="utf-8")
+        i_restore = src.index("self._restore_resume_strategies()")
+        i_collect = src.index("self._download_tasks = "
+                              "self._collect_download_tasks_from_diff",
+                              i_restore)
+        self.assertLess(i_restore, i_collect,
+                        "必须先恢复策略再算下载任务")
+
+    def test_resume_written_at_download_start(self):
+        src = (_ROOT / "app" / "ui" / "player_view.py").read_text(
+            encoding="utf-8")
+        i_marker = src.index("# 一开始就落一份续传记录")
+        i_panel = src.index("self._ensure_download_panel(in_progress=True)",
+                            i_marker)
+        self.assertLess(i_marker, i_panel)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
