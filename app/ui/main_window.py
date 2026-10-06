@@ -7,6 +7,7 @@ main_window.py — 主窗口
 """
 
 from pathlib import Path
+import threading
 
 import customtkinter as ctk
 
@@ -185,6 +186,12 @@ class MainWindow(ctk.CTk):
             from ..core import cache as cache_mod
             n = cache_mod.clean_orphan_parts()
             self._boot_cleaned = n
+            # 上次异常退出留下的解压/合并工作目录（一次更新会残留一整份副本）
+            try:
+                w = cache_mod.clean_orphan_workdirs()
+                self._boot_cleaned_workdirs = w
+            except Exception:  # noqa: BLE001, S110
+                self._boot_cleaned_workdirs = 0
             return True, ""
         except Exception:  # noqa: BLE001
             return False, ""
@@ -223,6 +230,17 @@ class MainWindow(ctk.CTk):
             pass
 
         try:
+            w = getattr(self, "_boot_cleaned_workdirs", 0)
+            if w > 0:
+                try:
+                    self.player_view.log.log(
+                        "info", f"已清理 {w} 个上次遗留的临时解压目录")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        try:
             kind = getattr(self, "_boot_disk_type", "")
             if kind and kind != "unknown":
                 try:
@@ -239,30 +257,53 @@ class MainWindow(ctk.CTk):
             pass
 
         self.after(200, self._check_database)
-        self.after(400, self._check_resume)
+        self.after(400, self._check_apply_recovery)
+        self.after(500, self._check_resume)
         self.after(600, self._log_ignored_count)
 
     # ------------------------------------------------------------------
-    def _check_database(self):
-        try:
-            ensure_database(self)
-        except Exception:  # noqa: BLE001, S110
-            pass
+    # 上次更新被强杀 → 只提示，不做任何文件改动
+    # ------------------------------------------------------------------
+    _RECOVERY_STAGE_LABEL = {
+        "apply": "正在替换目录",
+        "copy": "正在写入文件",
+        "delete": "正在删除旧文件",
+        "verify": "正在校验",
+    }
 
-    def _log_ignored_count(self):
+    def _check_apply_recovery(self):
+        """
+        发现"更新中途被强杀"的检查点：只提示 + 清检查点，**不自动改文件**。
+
+        恢复方向统一为"向前"：重新拖入同一个更新包再更新一次。
+        `build_plan` 是按整合包当前状态重新算 diff 的，缺什么补什么，
+        天然幂等；而"向后回滚"需要假设"更新后用户什么都没改过"，
+        这一点无法验证，容易把版本搞乱，所以不提供。
+        """
         try:
-            db_root = db.get_db_path()
-            if db_root is None:
+            from ..core import checkpoint as cp_mod
+            cps = cp_mod.scan_checkpoints()
+            if not cps:
                 return
-            n = resume_mod.count_ignored(db_root)
-            if n > 0:
-                try:
-                    self.player_view.log.log(
-                        "info",
-                        f"有 {n} 个已忽略的更新中断记录，"
-                        f"如需继续可重新拖入对应更新包")
-                except Exception:  # noqa: BLE001, S110
-                    pass
+            cp = cps[0]
+            name = Path(cp.pack_root).name or cp.pack_root
+            stage = self._RECOVERY_STAGE_LABEL.get(cp.stage, cp.stage)
+            try:
+                self.player_view.log.log(
+                    "warn", f"上次更新未正常结束（中断在：{stage}），"
+                            f"建议重新拖入同一个更新包再更新一次")
+            except Exception:  # noqa: BLE001, S110
+                pass
+            alert(
+                self, "上次更新没有正常结束",
+                f"检测到上次对整合包「{name}」的更新没有跑完"
+                f"（中断在：{stage}）。\n\n"
+                f"恢复办法：重新拖入同一个更新包，再点一次「开始更新」。\n"
+                f"Easier 会按整合包**当前**状态重新比对，缺什么补什么，"
+                f"一直跑到与更新包一致为止。\n\n"
+                f"本次不会自动改动任何文件。",
+                level="warn")
+            cp_mod.clear_checkpoint(Path(cp.pack_root))
         except Exception:  # noqa: BLE001, S110
             pass
 

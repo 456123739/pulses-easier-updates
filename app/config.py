@@ -64,6 +64,24 @@ DEFAULT_STRATEGY = {
     ContentType.OTHER:         Strategy.REPLACE_SAME,
 }
 
+# 走"文件级比对"的内容目录：默认必须能删除"新版已移除"的条目，
+# 否则旧 mod 会永远留在玩家目录里。
+FILE_LEVEL_DIRS = frozenset({"mods", "resourcepacks", "shaderpacks", "tacz"})
+
+# 目录名 → 默认策略（运行时唯一事实来源：玩家端默认策略表从这里取）
+DEFAULT_STRATEGY_BY_DIR: dict[str, Strategy] = {
+    dirname: DEFAULT_STRATEGY[ct]
+    for ct, dirname in CONTENT_DIR_MAP.items() if dirname
+}
+for _d in FILE_LEVEL_DIRS:
+    DEFAULT_STRATEGY_BY_DIR[_d] = Strategy.FULL_MATCH
+del _d
+
+
+def default_strategy_for_dir(top: str) -> Strategy:
+    """顶层目录的默认策略；未知目录一律"替换重名"（合并覆盖，不删文件）。"""
+    return DEFAULT_STRATEGY_BY_DIR.get(top, DEFAULT_STRATEGY[ContentType.OTHER])
+
 
 # ----------------------------------------------------------------------
 # 更新包元数据字段名（写入 ZIP 内的 meta.json）

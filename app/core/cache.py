@@ -12,6 +12,7 @@ cache.py — 缓存管理
 """
 
 import os
+import shutil
 from pathlib import Path
 
 from . import database as db
@@ -150,8 +151,10 @@ def clean_cache() -> tuple[bool, str]:
 # ----------------------------------------------------------------------
 def clean_orphan_parts() -> int:
     """
-    扫描 update_packs 下所有 .part 文件并尝试删除。
+    扫描 update_packs 下所有残留分片并尝试删除。
     返回删除成功数。程序启动时调用，处理上次下载中断的残留。
+
+    同时覆盖 `*.part.meta`（旧实现只 glob `*.part`，meta 文件永远清不掉）。
     """
     cache = get_cache_root()
     if cache is None:
@@ -162,9 +165,40 @@ def clean_orphan_parts() -> int:
 
     count = 0
     try:
-        for p in update_packs.rglob("*.part"):
-            if _try_remove_file(p):
-                count += 1
+        for pattern in ("*.part", "*.part.meta"):
+            for p in update_packs.rglob(pattern):
+                if _try_remove_file(p):
+                    count += 1
     except OSError:
         pass
     return count
+
+
+def work_root() -> Path | None:
+    """更新流程的工作目录根：<db>/cache/temp（受 clean_cache 覆盖）。"""
+    db_root = db.get_db_path()
+    if db_root is None:
+        return None
+    return db_root / "cache" / "temp"
+
+
+def clean_orphan_workdirs(prefix: str = "pulses_play_") -> int:
+    """
+    启动时清理上次遗留的解压/合并工作目录。
+
+    进程启动时不可能有正在运行的更新，所以 cache/temp 下的
+    pulses_play_* 全是孤儿，直接删掉（避免每次更新残留一整份副本）。
+    """
+    root = work_root() or (get_cache_root() or Path()) / "temp"
+    if not root.is_dir():
+        return 0
+    removed = 0
+    try:
+        for child in root.iterdir():
+            if not child.is_dir() or not child.name.startswith(prefix):
+                continue
+            shutil.rmtree(child, ignore_errors=True)
+            removed += 1
+    except OSError:
+        pass
+    return removed

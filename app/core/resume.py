@@ -22,10 +22,27 @@ resume.py — 下载中断恢复记录
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
 RESUME_FILENAME = "resume.json"
+
+# 更新包失效的记录保留多久后清理（期间一直可以"重新定位更新包"）
+INVALID_RETENTION_DAYS = 30
+
+
+def _atomic_write_json(path: Path, data: dict) -> bool:
+    """tmp + os.replace：断电不会留下半截 JSON。"""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _hash_file_quick(path: Path) -> str:
@@ -95,10 +112,7 @@ def write_resume(cache_root: Path, zip_path: Path,
             "version": version,
             "ignored_at": float(ignored_at or 0.0),
         }
-        resume_file.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8")
-        return True
+        return _atomic_write_json(resume_file, data)
     except Exception:  # noqa: BLE001
         return False
 
@@ -127,6 +141,11 @@ def read_resume(cache_root: Path) -> dict | None:
         return data
     except Exception:  # noqa: BLE001
         return None
+
+
+def quick_fingerprint(path: Path) -> str:
+    """公开的快速指纹（缓存目录命名等场景使用）。"""
+    return _hash_file_quick(Path(path))
 
 
 def clear_resume(cache_root: Path) -> bool:
@@ -165,10 +184,7 @@ def mark_ignored(cache_root: Path) -> bool:
             return False
         data["ignored_at"] = time.time()
         data["updated_at"] = data["ignored_at"]
-        resume_file.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8")
-        return True
+        return _atomic_write_json(resume_file, data)
     except Exception:  # noqa: BLE001
         return False
 
@@ -256,7 +272,10 @@ def scan_all_resumes(db_root: Path,
     扫描 <db>/cache/update_packs/*/resume.json。
 
     include_ignored=False（默认）→ 过滤掉已忽略的记录。
-    无效记录（更新包不存在/指纹不符）会被清理。
+
+    **更新包暂时失效（被移动/改名/在未插入的移动盘上）的记录不会立刻删除**：
+    删掉它等于把 completed 清单一起丢掉，「重新定位更新包」这条路径也会变成
+    死代码。只在超过 INVALID_RETENTION_DAYS 天后才清理。
 
     返回按 updated_at 倒序的列表。
     """
@@ -265,6 +284,7 @@ def scan_all_resumes(db_root: Path,
     if not root.is_dir():
         return []
     result: list[dict] = []
+    now = time.time()
     try:
         for child in root.iterdir():
             if not child.is_dir():
@@ -273,8 +293,11 @@ def scan_all_resumes(db_root: Path,
             if data is None:
                 continue
             if not is_resume_valid(data):
-                clear_resume(child)
-                continue
+                age = now - float(data.get("updated_at", 0) or 0)
+                if age > INVALID_RETENTION_DAYS * 86400:
+                    clear_resume(child)
+                    continue
+                # 保留：交给"重新定位更新包"流程
             if not include_ignored and is_ignored(data):
                 continue
             result.append(data)
@@ -306,19 +329,27 @@ def count_ignored(db_root: Path) -> int:
 
 
 def cleanup_stale_parts(cache_root: Path) -> int:
+    """
+    清理下载缓存里的残留分片。
+
+    只认下载器自己的两种命名：`*.part` 与 `*.part.meta`
+    （旧实现用 `*.part*`，会把名字里带 ".part" 的正常文件也删掉）。
+    """
     cache_root = Path(cache_root)
     if not cache_root.is_dir():
         return 0
     removed = 0
+    patterns = ("*.part", "*.part.meta")
     try:
-        for p in cache_root.rglob("*.part*"):
-            if not p.is_file():
-                continue
-            try:
-                p.unlink()
-                removed += 1
-            except Exception:  # noqa: BLE001
-                continue
+        for pattern in patterns:
+            for p in cache_root.rglob(pattern):
+                if not p.is_file():
+                    continue
+                try:
+                    p.unlink()
+                    removed += 1
+                except Exception:  # noqa: BLE001
+                    continue
     except OSError:
         pass
     return removed

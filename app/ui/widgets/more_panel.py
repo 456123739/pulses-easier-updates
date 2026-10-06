@@ -4,6 +4,9 @@ more_panel.py — 侧边栏"更多"折叠面板
 折叠式，标题行"更多" + 三角折叠按钮。
 放置「首选项」「清理缓存」。
 支持 set_locked 在更新期间禁用操作。
+
+（v0.5.0 去掉了"回滚上次更新"：向后恢复需要假设"更新后用户什么都没
+改过"，无法验证，容易把版本搞乱；恢复方向统一为"重新拖入更新包再更新"。）
 """
 
 from collections.abc import Callable
@@ -99,24 +102,14 @@ class MorePanel(ctk.CTkFrame):
     def set_locked(self, locked: bool):
         self._locked = locked
         try:
-            if locked:
-                self.prefs_btn.configure(
-                    state="disabled", fg_color=Color.LOG_BG,
-                    text_color=Color.TEXT_MUTED,
-                    hover_color=Color.LOG_BG)
-                self.clean_btn.configure(
-                    state="disabled", fg_color=Color.LOG_BG,
-                    text_color=Color.TEXT_MUTED,
-                    hover_color=Color.LOG_BG)
-            else:
-                self.prefs_btn.configure(
-                    state="normal", fg_color=Color.LOG_BG,
-                    text_color=Color.TEXT_PRIMARY,
-                    hover_color=Color.BORDER)
-                self.clean_btn.configure(
-                    state="normal", fg_color=Color.LOG_BG,
-                    text_color=Color.TEXT_PRIMARY,
-                    hover_color=Color.BORDER)
+            state = "disabled" if locked else "normal"
+            for btn in (self.prefs_btn, self.clean_btn):
+                btn.configure(
+                    state=state,
+                    fg_color=Color.LOG_BG,
+                    text_color=(Color.TEXT_MUTED if locked
+                                else Color.TEXT_PRIMARY),
+                    hover_color=(Color.LOG_BG if locked else Color.BORDER))
         except Exception:  # noqa: BLE001, S110
             pass
 

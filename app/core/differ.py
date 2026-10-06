@@ -64,9 +64,19 @@ class DiffResult:
 # ----------------------------------------------------------------------
 # 哈希工具
 # ----------------------------------------------------------------------
+BLAKE2B_DIGEST_SIZE = 16      # 与 hashing.py 保持一致（128 位）
+
+
+def _new_hasher(algo: str):
+    """按算法名创建哈希对象；blake2b 固定 128 位以兼容导出包清单。"""
+    if algo == "blake2b":
+        return hashlib.blake2b(digest_size=BLAKE2B_DIGEST_SIZE)
+    return hashlib.new(algo)
+
+
 def _hash_file(path: Path, algo: str = "sha1") -> str:
     try:
-        h = hashlib.new(algo)
+        h = _new_hasher(algo)
     except Exception:  # noqa: BLE001
         return ""
     try:
@@ -156,15 +166,13 @@ def folders_differ(a: Path | None, b: Path | None) -> bool:
 
 
 def _pick_hash(hashes: dict | None) -> tuple[str | None, str | None]:
-    """从 index 哈希里挑一个：优先 sha1（更快）"""
+    """从 index 哈希里挑一个：优先 sha1（更快），最后才是 blake2b"""
     if not isinstance(hashes, dict):
         return None, None
-    if hashes.get("sha1"):
-        return "sha1", hashes["sha1"]
-    if hashes.get("sha256"):
-        return "sha256", hashes["sha256"]
-    if hashes.get("sha512"):
-        return "sha512", hashes["sha512"]
+    for algo in ("sha1", "sha256", "sha512", "blake2b"):
+        v = hashes.get(algo)
+        if isinstance(v, str) and v:
+            return algo, v
     return None, None
 
 
@@ -398,11 +406,18 @@ def diff_packs_parallel(
     index_hashes: dict[str, dict] | None = None,
     threads: int = 16,
     progress: Callable[[int, int, str], None] | None = None,
+    folder_hashes: dict[str, str] | None = None,
 ) -> DiffResult:
+    """
+    folder_hashes：更新包 `ea_hashes.json` 里记录的**顶层文件夹内容哈希**
+    （由开发者端用同一算法算出）。命中时只需算本地一侧的哈希即可判定，
+    省掉一半读取。
+    """
     old_root, new_root = Path(old_root), Path(new_root)
     wl = list(whitelist) if whitelist else list(DEFAULT_WHITELIST)
     wl_top = {p.split("/", 1)[0] for p in wl if p}
     idx = index_hashes or {}
+    f_hashes = folder_hashes or {}
 
     index_by_top, index_deep_dirs = _split_index_by_top(idx)
 
@@ -473,7 +488,15 @@ def diff_packs_parallel(
             result.modified.extend(modified)
             result.deleted.extend(deleted)
         else:
-            if folders_differ(old_dir, new_dir):
+            recorded = f_hashes.get(name, "")
+            if recorded:
+                # 极少数情况：记录值算的是"新包侧"，直接和本地侧比
+                same = bool(old_dir) and folder_hash(old_dir) == recorded
+                if not same:
+                    result.modified.append(
+                        Change(Path(name), ChangeKind.MODIFIED,
+                               is_folder_level=True))
+            elif folders_differ(old_dir, new_dir):
                 result.modified.append(
                     Change(Path(name), ChangeKind.MODIFIED,
                            is_folder_level=True))
@@ -495,9 +518,11 @@ def diff_packs_parallel(
 def diff_packs(old_root: Path, new_root: Path,
                whitelist: list[str] | None = None,
                index_hashes: dict[str, dict] | None = None,
-               progress: Callable[[int, int, str], None] | None = None
+               progress: Callable[[int, int, str], None] | None = None,
+               folder_hashes: dict[str, str] | None = None
                ) -> DiffResult:
     return diff_packs_parallel(old_root, new_root,
                                whitelist=whitelist,
                                index_hashes=index_hashes,
-                               threads=1, progress=progress)
+                               threads=1, progress=progress,
+                               folder_hashes=folder_hashes)

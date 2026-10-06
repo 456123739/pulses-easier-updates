@@ -20,10 +20,13 @@ from ...core.database import DEFAULT_EXPORT_OPTIONS
 from ...theme import Color, Font, Size
 
 _OPTION_LABELS = [
-    ("include_hashes", "自带文件结构校验数据", "在更新包内附带哈希清单"),
-    ("tamper_proof", "防篡改", "生成签名校验数据，防止更新包被修改"),
-    ("precompute_overrides", "预存 overrides 文件结构", "提前存目录结构和哈希，玩家端比对更快"),
-    ("min_size", "最小体积", "不导出被禁用条目，减小更新包体积"),
+    ("include_hashes", "自带文件结构校验数据",
+     "在包内附带每个文件的哈希；玩家端比对时直接用，省一次读取"),
+    ("tamper_proof", "完整性校验", "写入包内容的校验值，玩家端导入时能发现被改动/损坏"),
+    ("precompute_overrides", "预存 overrides 文件结构",
+     "提前算好目录与文件哈希，玩家端比对更快"),
+    ("min_size", "最小体积",
+     "不导出被禁用条目（含 index 里指向这些文件夹的条目），减小包体积"),
 ]
 
 

@@ -29,7 +29,6 @@ from pathlib import Path
 from ..config import CONTENT_DIR_MAP, ChangeKind, ContentType, Strategy
 from ..utils.files import safe_join
 from . import checkpoint as cp_mod
-from . import trash as trash_mod
 
 
 @dataclass
@@ -128,11 +127,15 @@ def build_plan(diff, checked, strategies,
 
 
 # ----------------------------------------------------------------------
-# 目录级操作
+# 目录级操作（失败时事务性回滚，成功不留备份）
 # ----------------------------------------------------------------------
-def _unique_backup(dst: Path) -> Path:
-    """给 dst 找一个同目录下不存在的备份名（同卷 rename，可回滚）。"""
-    base = dst.name + ".pulses_bak"
+def _unique_sidecar(dst: Path) -> Path:
+    """
+    同目录下的临时名（同卷 rename 很快，且不会跨盘失败）。
+
+    用点号开头 + 固定后缀，尽量不干扰用户；正常流程结束后它不会留下。
+    """
+    base = "." + dst.name + ".pulses_tmp"
     cand = dst.with_name(base)
     n = 1
     while cand.exists():
@@ -141,67 +144,46 @@ def _unique_backup(dst: Path) -> Path:
     return cand
 
 
-def _replace_dir_full(src: Path, dst: Path, log: Callable[[str, str], None],
-                      pack_root: Path | None = None,
-                      rel: Path | None = None,
-                      session: Path | None = None) -> bool:
+def _replace_dir_full(src: Path, dst: Path, log: Callable[[str, str], None]
+                      ) -> bool:
     """
-    完全匹配：旧目录先进回收站 → 整目录复制。
+    完全匹配：整目录替换，**失败时事务性回滚**。
 
-    旧实现是 `rmtree(dst)` 再 `copytree`，一旦复制失败（磁盘满 / 权限 /
-    进程被杀）玩家的整个目录就永久没了。现在旧目录先被移走（回收站，
-    同卷 rename），复制失败再把旧目录搬回来。
+    旧实现是 `rmtree(dst)` 再 `copytree`：复制失败（磁盘满/权限/进程被杀）
+    玩家的整个目录就永久没了。现在：
+        旧目录 --rename--> 同目录临时名 --copytree--> 成功则删临时名
+                                            \--失败则 rename 回来
+    同卷 rename 是原子操作，所以即便在复制中途被强杀，旧目录也仍在临时名
+    下，重跑一次即可；进程正常时不会留下任何备份文件。
 
-    没有 pack_root/rel 上下文时（直接调用本函数的测试/脚本），退化为
-    「同目录改名备份」。
+    注意：这是**操作级**回滚，不是"撤销上次更新"。成功后旧内容即被丢弃
+    （策略叫「完全匹配 / 全部覆盖，含删除」，这是用户明确选择的语义）。
     """
     backup: Path | None = None
-    trashed: Path | None = None
-
     if dst.exists():
-        if pack_root is not None and rel is not None:
-            res = trash_mod.move_to_trash(pack_root, [rel], session=session)
-            if res["moved"]:
-                trashed = Path(res["dir"])
-            else:
-                reason = (res["failed"][0]["error"] if res["failed"]
-                          else "回收站不可用")
-                log("error",
-                    f"替换目录失败 {dst.name}：旧目录无法移入回收站"
-                    f"（{reason}）")
-                return False
-        else:
-            try:
-                backup = _unique_backup(dst)
-                os.replace(dst, backup)
-            except Exception as e:  # noqa: BLE001
-                log("error", f"替换目录失败 {dst.name}：无法备份旧目录（{e}）")
-                return False
+        try:
+            backup = _unique_sidecar(dst)
+            os.replace(dst, backup)
+        except Exception as e:  # noqa: BLE001
+            log("error", f"替换目录失败 {dst.name}：无法备份旧目录（{e}）")
+            return False
 
     try:
         shutil.copytree(src, dst)
     except Exception as e:  # noqa: BLE001
         log("error", f"替换目录失败 {dst.name}：{e}")
-        # 回滚：清掉半成品，把旧目录搬回来
         try:
             if dst.exists():
                 shutil.rmtree(dst, ignore_errors=True)
         except Exception:  # noqa: BLE001, S110
             pass
-        restored = False
-        if trashed is not None and rel is not None:
-            restored = trash_mod.restore_entry(trashed, rel)
-        elif backup is not None:
+        if backup is not None:
             try:
                 os.replace(backup, dst)
-                restored = True
-            except Exception:  # noqa: BLE001, S110
-                restored = False
-        if not restored:
-            log("error", f"{dst.name} 的旧内容已备份，但自动回滚失败；"
-                         f"备份位置：{trashed or backup}")
-        else:
-            log("warn", f"替换目录 {dst.name} 已回滚到替换前的内容")
+                log("warn", f"替换目录 {dst.name} 已回滚到替换前的内容")
+            except Exception as e2:  # noqa: BLE001
+                log("error", f"{dst.name} 自动回滚失败：{e2}；"
+                             f"原内容保留在 {backup}")
         return False
 
     if backup is not None:
@@ -209,61 +191,25 @@ def _replace_dir_full(src: Path, dst: Path, log: Callable[[str, str], None],
             shutil.rmtree(backup, ignore_errors=True)
         except Exception:  # noqa: BLE001, S110
             pass
-    log("info", f"替换目录 {dst.name}（旧目录已备份到回收站）")
+    log("info", f"替换目录 {dst.name}")
     return True
 
 
 def _replace_dir_overwrite(src: Path, dst: Path,
-                           log: Callable[[str, str], None],
-                           pack_root: Path | None = None,
-                           rel: Path | None = None,
-                           session: Path | None = None) -> bool:
-    """
-    替换重名：目录合并，同名覆盖。
-
-    被覆盖的旧文件先备份到回收站（同一会话），因此该策略不会永久丢数据。
-    只在 dst 里已存在同名文件时才产生备份，不会无谓地复制整个目录。
-    """
-    backups: list[Path] = []
+                           log: Callable[[str, str], None]) -> bool:
+    """替换重名：目录合并，同名覆盖（只写不删，不产生备份）"""
     try:
         dst.mkdir(parents=True, exist_ok=True)
-
-        if (pack_root is not None and rel is not None
-                and session is not None and src.is_dir()):
-            for root, _dirs, files in os.walk(src):
-                try:
-                    sub = Path(root).relative_to(src)
-                except ValueError:
-                    continue
-                for f in files:
-                    target_rel = Path(rel) / sub / f
-                    try:
-                        if (pack_root / target_rel).is_file():
-                            backups.append(target_rel)
-                    except OSError:
-                        continue
-            if backups:
-                trash_mod.move_to_trash(pack_root, backups, session=session)
-
         shutil.copytree(src, dst, dirs_exist_ok=True)
-        log("info", f"合并目录 {dst.name}（同名覆盖，"
-                    f"备份 {len(backups)} 个被覆盖文件）")
+        log("info", f"合并目录 {dst.name}（同名覆盖）")
         return True
     except Exception as e:  # noqa: BLE001
         log("error", f"合并目录失败 {dst.name}：{e}")
-        # 回滚被移走的旧文件
-        for target_rel in backups:
-            try:
-                trash_mod.restore_entry(session, target_rel)  # type: ignore[arg-type]
-            except Exception:  # noqa: BLE001, S110
-                pass
         return False
 
 
 def _replace_dir_skip(src: Path, dst: Path,
-                      log: Callable[[str, str], None],
-                      pack_root: Path | None = None,
-                      rel: Path | None = None) -> bool:
+                      log: Callable[[str, str], None]) -> bool:
     """跳过重名：目录合并，同名跳过"""
     try:
         dst.mkdir(parents=True, exist_ok=True)
@@ -293,8 +239,14 @@ def execute_plan(
     new_root: Path,
     log: Callable[[str, str], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
-    use_trash: bool = True,
 ) -> dict:
+    """
+    按计划执行更新。
+
+    删除是**永久删除**（v0.5.0 起不再有回收站）：策略「完全匹配」的语义
+    本身就是"含删除"，是否删除由用户在选择策略时决定。
+    唯一会做备份的是"目录整体替换"，且只在失败时用于就地回滚。
+    """
     old_root = Path(old_root)
     new_root = Path(new_root)
 
@@ -311,7 +263,6 @@ def execute_plan(
         "deleted": 0,
         "skipped": len(plan.skip),
         "failed": [],
-        "trash_dir": None,
     }
 
     copy_list = list(dict.fromkeys(plan.copy))
@@ -330,16 +281,6 @@ def execute_plan(
     )
     cp_mod.save_checkpoint(cp)
 
-    # 本次更新的回收站会话：所有备份（目录替换 + 删除）共用一个会话，
-    # 便于整批回滚，也避免同一秒内的多次操作互相覆盖 manifest。
-    trash_session: Path | None = None
-
-    def _ensure_session() -> Path:
-        nonlocal trash_session
-        if trash_session is None:
-            trash_session = trash_mod.new_session(old_root)
-        return trash_session
-
     # 阶段 0：目录级替换（先做，保证整块被替换）
     for rel, strat in replace_list:
         src = new_root / rel
@@ -349,16 +290,11 @@ def execute_plan(
             _prog(step, total_steps)
             continue
         if strat == Strategy.FULL_MATCH:
-            session = _ensure_session() if dst.exists() else None
-            ok = _replace_dir_full(src, dst, _log, pack_root=old_root,
-                                   rel=rel, session=session)
+            ok = _replace_dir_full(src, dst, _log)
         elif strat == Strategy.REPLACE_SAME:
-            session = _ensure_session() if dst.is_dir() else None
-            ok = _replace_dir_overwrite(src, dst, _log, pack_root=old_root,
-                                        rel=rel, session=session)
+            ok = _replace_dir_overwrite(src, dst, _log)
         else:  # SKIP_SAME
-            ok = _replace_dir_skip(src, dst, _log, pack_root=old_root,
-                                   rel=rel)
+            ok = _replace_dir_skip(src, dst, _log)
         if ok:
             report["applied"] += 1
         else:
@@ -368,7 +304,9 @@ def execute_plan(
         _prog(step, total_steps)
 
     # 阶段 1：文件级新增 + 替换
-    for rel in copy_list:
+    cp.stage = "copy"
+    cp_mod.save_checkpoint(cp)
+    for i, rel in enumerate(copy_list):
         src = new_root / rel
         dst = old_root / rel
         try:
@@ -388,43 +326,38 @@ def execute_plan(
             _log("error", f"写入失败 {rel.as_posix()}：{e}")
         step += 1
         _prog(step, total_steps)
+        if i % 25 == 24:
+            cp_mod.save_checkpoint(cp)
 
     cp.stage = "delete"
     cp.remaining = [p.as_posix() for p in delete_list]
     cp_mod.save_checkpoint(cp)
 
-    # 阶段 2：删除（回收站）
-    if delete_list:
-        if use_trash:
-            tr = trash_mod.move_to_trash(old_root, delete_list,
-                                         session=_ensure_session())
-            report["trash_dir"] = str(tr["dir"])
-            for item in tr["moved"]:
+    # 阶段 2：删除（永久删除）
+    for rel in delete_list:
+        try:
+            target = safe_join(old_root, rel)
+            if target.is_dir():
+                shutil.rmtree(target)
                 report["deleted"] += 1
-                cp.done.append(item["rel"])
-            for item in tr["failed"]:
-                report["failed"].append(
-                    {"rel": item["rel"], "error": item["error"]})
-        else:
-            for rel in delete_list:
-                try:
-                    target = safe_join(old_root, rel)
-                    if target.exists():
-                        target.unlink()
-                    report["deleted"] += 1
-                    cp.done.append(rel.as_posix())
-                except Exception as e:  # noqa: BLE001
-                    report["failed"].append(
-                        {"rel": rel.as_posix(), "error": str(e)})
-
-        step += len(delete_list)
+            elif target.exists():
+                target.unlink()
+                report["deleted"] += 1
+            else:
+                continue
+            cp.done.append(rel.as_posix())
+        except Exception as e:  # noqa: BLE001
+            report["failed"].append(
+                {"rel": rel.as_posix(), "error": str(e)})
+            _log("error", f"删除失败 {rel.as_posix()}：{e}")
+        step += 1
         _prog(step, total_steps)
 
-    cp.stage = "done"
-    cp_mod.clear_checkpoint(old_root)
-
-    if trash_session is not None:
-        report["trash_dir"] = str(trash_session)
+    # 保留检查点（stage=applied）：只用于判断"上一次更新是否正常结束"，
+    # 不提供回滚功能；下一次对同一个包执行更新时会覆盖它。
+    cp.stage = "applied"
+    cp.remaining = []
+    cp_mod.save_checkpoint(cp)
 
     _log("info",
          f"完成：应用 {report['applied']}，"
@@ -435,20 +368,73 @@ def execute_plan(
     return report
 
 
+def _dir_missing(src: Path, dst: Path, max_files: int = 20000
+                 ) -> list[str]:
+    """列出 src 里有、但 dst 缺（或大小不符）的文件（包根相对路径）。"""
+    missing: list[str] = []
+    if not src.is_dir():
+        return missing
+    n = 0
+    for root, _dirs, files in os.walk(src):
+        try:
+            sub = Path(root).relative_to(src)
+        except ValueError:
+            continue
+        for f in files:
+            n += 1
+            if n > max_files:
+                return missing
+            s = Path(root) / f
+            d = dst / sub / f
+            try:
+                if not d.is_file() or d.stat().st_size != s.stat().st_size:
+                    missing.append((sub / f).as_posix())
+            except OSError:
+                missing.append((sub / f).as_posix())
+    return missing
+
+
 def verify_after_update(plan: UpdatePlan, old_root: Path,
                         new_root: Path) -> list[dict]:
-    """更新后校验：确认 copy 项已就位；目录级 replace_dirs 检查存在"""
+    """
+    更新后校验：不只查"在不在"，还核对**大小/内容**：
+      - copy 项：文件存在且大小与源一致
+      - replace_dirs：源目录里的每个文件都在目标里且大小一致
+        （合并策略下目标可以多出玩家自己的文件）
+      - delete 项：确认已经不在
+    """
     failed: list[dict] = []
     old_root = Path(old_root)
-    for rel in plan.copy:
+    new_root = Path(new_root)
+
+    for rel in dict.fromkeys(plan.copy):
         target = old_root / rel
+        src = new_root / rel
         try:
             if not target.is_file():
                 failed.append({"rel": rel.as_posix(), "error": "缺失"})
+            elif src.is_file() and (target.stat().st_size
+                                    != src.stat().st_size):
+                failed.append({"rel": rel.as_posix(),
+                               "error": "大小与源不一致"})
         except OSError as e:
             failed.append({"rel": rel.as_posix(), "error": str(e)})
-    for rel, _ in plan.replace_dirs:
+
+    for rel, _strat in dict.fromkeys(plan.replace_dirs):
         target = old_root / rel
+        src = new_root / rel
         if not target.is_dir():
             failed.append({"rel": rel.as_posix(), "error": "目录缺失"})
+            continue
+        for miss in _dir_missing(src, target):
+            failed.append({"rel": (rel / miss).as_posix(),
+                           "error": "目录内文件缺失或大小不符"})
+
+    for rel in dict.fromkeys(plan.delete):
+        try:
+            if (old_root / rel).exists():
+                failed.append({"rel": rel.as_posix(), "error": "未被删除"})
+        except OSError as e:
+            failed.append({"rel": rel.as_posix(), "error": str(e)})
+
     return failed

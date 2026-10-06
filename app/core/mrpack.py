@@ -6,8 +6,8 @@ mrpack.py — Modrinth 整合包格式解析
   - overrides/ 目录
 
 合并规则：
-  - mods/、resourcepacks/、shaderpacks/、tacz/ 等：合并 index + overrides
-  - 其余文件夹：只取 overrides
+  - index 与 overrides 是**互补**的，两边都保留
+  - 同一路径两处都有 → overrides 优先，但保留 index 的下载链接/哈希
 """
 
 import json
@@ -18,6 +18,22 @@ from pathlib import Path
 INDEX_FILENAME = "modrinth.index.json"
 OVERRIDES_DIR = "overrides"
 CHANGELOG_FILENAME = "changelog.md"
+
+
+def is_safe_rel_path(p: str) -> bool:
+    """
+    相对路径安全检查：拒绝绝对路径、`..`、空段、盘符。
+
+    更新包来自第三方，index 里的 path 与 zip 内的名字都必须校验，
+    否则 `../../foo` 会把文件写到整合包外面去。
+    """
+    p = str(p or "").replace("\\", "/")
+    if not p or p.startswith("/"):
+        return False
+    parts = p.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return False
+    return ":" not in parts[0]
 
 # 更新包根目录里的元数据文件名：它们**不是**更新内容。
 # 玩家端在"包内没有 overrides/ 目录"的老格式回退分支里必须排除它们，
@@ -31,10 +47,6 @@ RESERVED_ROOT_NAMES = frozenset({
     "pulses_meta.json",
     "resume.json",
 })
-
-# 需要合并 index 与 overrides 的文件夹（其余只取 overrides）
-MERGE_FOLDERS = {"mods", "resourcepacks", "shaderpacks", "tacz"}
-
 
 def is_reserved_root_name(name: str) -> bool:
     """该文件名是否是更新包根目录的保留元数据文件（不区分大小写）。"""
@@ -105,7 +117,7 @@ def parse_mrpack(zip_path: Path) -> tuple[MRPack | None, str]:
             for n in names:
                 if n.startswith(prefix) and not n.endswith("/"):
                     rel = n[len(prefix):]
-                    if rel:
+                    if rel and is_safe_rel_path(rel):
                         pack.overrides_files.append(rel)
 
             return pack, ""
@@ -127,6 +139,9 @@ def _parse_index(data: dict) -> MRPack:
 
     for f in data.get("files", []) or []:
         if not isinstance(f, dict):
+            continue
+        if not is_safe_rel_path(f.get("path", "")):
+            # 非法路径（绝对路径 / ../ / 盘符）一律丢弃
             continue
         hashes = f.get("hashes", {}) or {}
         mf = MRFile(
@@ -161,9 +176,8 @@ def merge_files(pack: MRPack) -> list[dict]:
       }
 
     合并规则：
-      - mods/、resourcepacks/、shaderpacks/、tacz/：合并两处
-      - 其他文件夹：只取 overrides
-      - 同一路径两处都有 → overrides 优先，但保留 index 的下载链接
+      - index 与 overrides 全部保留（互补关系）
+      - 同一路径两处都有 → overrides 优先，但保留 index 的下载链接/哈希
     """
     # 索引 map
     index_map: dict[str, MRFile] = {f.path: f for f in pack.files}
@@ -176,6 +190,8 @@ def merge_files(pack: MRPack) -> list[dict]:
 
     # 1) overrides 优先
     for path in sorted(override_set):
+        if not is_safe_rel_path(path):
+            continue
         entry = {
             "path": path,
             "source": "override",
@@ -195,12 +211,15 @@ def merge_files(pack: MRPack) -> list[dict]:
         seen.add(path)
 
     # 2) index 中独有的
+    #
+    # 注意：早先这里只保留 mods 等目录里的 index 条目，其余
+    # 一律丢弃。结果是——index 里声明了 `config/xxx.toml` 的包，变更列表
+    # 显示"要更新"，但既没有下载任务也没有应用源，永远应用不上。
+    # index 是"这个包要求这些文件出现在这些路径"的权威声明，全部保留。
     for path, mf in index_map.items():
         if path in seen:
             continue
-        top = path.split("/", 1)[0] if "/" in path else ""
-        # 只对合并文件夹保留 index 独有项；其他文件夹的 index 项丢弃
-        if top not in MERGE_FOLDERS:
+        if not is_safe_rel_path(path):
             continue
         result.append({
             "path": path,
@@ -230,8 +249,7 @@ def index_top_folders(pack: MRPack) -> set[str]:
     从**原始 index 条目**中提取所有顶层文件夹名。
 
     与 top_level_folders(merged) 的区别：
-      - 不受 MERGE_FOLDERS 过滤影响
-      - 不管有没有下载链接
+      - 直接看**原始 index**：不管有没有下载链接
       - 只要 index 里声明了该路径，就纳入
 
     用途：白名单推导。保证 index 里写了文件的文件夹（如 tacz/）

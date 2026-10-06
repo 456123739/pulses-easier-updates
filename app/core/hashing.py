@@ -44,30 +44,19 @@ def file_hash(path: Path) -> tuple[str, str] | None:
 # 文件夹级哈希
 # ----------------------------------------------------------------------
 def folder_hash(folder: Path) -> str | None:
-    """相对路径|大小|mtime 拼接后 SHA-256，不读内容"""
+    """
+    文件夹内容哈希：相对路径 + 大小 + 每个文件的内容哈希。
+
+    与 differ.folder_hash 使用**同一算法**，玩家端可以直接拿这里记录的
+    值与本地目录比较（省掉一半读取）。
+    刻意不含 mtime —— 更新包解压后 mtime 会全变，含 mtime 必然误判。
+    """
     folder = Path(folder)
     if not folder.is_dir():
         return None
-
-    entries: list[str] = []
-    try:
-        for dirpath, _dirnames, filenames in os.walk(folder):
-            for name in filenames:
-                abs_path = Path(dirpath) / name
-                try:
-                    rel = abs_path.relative_to(folder).as_posix()
-                    stat = abs_path.stat()
-                    entries.append(f"{rel}|{stat.st_size}|{int(stat.st_mtime)}")
-                except OSError:
-                    continue
-    except OSError:
-        return None
-
-    h = hashlib.sha256()
-    for line in sorted(entries):
-        h.update(line.encode("utf-8"))
-        h.update(b"\n")
-    return h.hexdigest()
+    from .differ import folder_hash as _content_folder_hash
+    value = _content_folder_hash(folder, content=True)
+    return value or None
 
 
 # ----------------------------------------------------------------------

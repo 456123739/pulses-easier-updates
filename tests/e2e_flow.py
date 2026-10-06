@@ -9,14 +9,15 @@ e2e_flow.py — 玩家端完整流程端到端测试（真实文件 + 真实网�
 
 断言清单：
   A. 更新包声明的 mod 被真实下载、sha1 校验通过、字节数与 CDN 一致
-  B. 「新版已移除」的本地 mod 被删除但**进了回收站**（可恢复）
+  B. 「新版已移除」的本地 mod 被**永久删除**（完全匹配 = 含删除），
+     且不产生任何回收站/备份目录
   C. config/ 里玩家本地文件保留；包内同名文件被覆盖（替换重名）
   D. 玩家根目录散文件（options.txt）保留
   E. 包自身的元数据（modrinth.index.json / ea_*.json / changelog.md）
      **没有**被写进整合包根目录
   F. resume.json 被清除、phase 回到 idle、按钮回到「确认更新」
-  G. 系统临时目录没有残留 pulses_play_*
-  H. 回收站 restore_session 能把被删的 mod 还原回来
+  G. 工作目录在 <db>/cache/temp 内，合并副本在应用后被丢弃
+  H. 缓存目录里的陈旧遗留文件**不会**被并入应用源
 
 运行：  python3 tests/e2e_flow.py
 """
@@ -42,7 +43,6 @@ stubs.install()
 
 from app.core import database as db                # noqa: E402
 from app.core import eapack as eapack_mod          # noqa: E402
-from app.core import trash as trash_mod            # noqa: E402
 from app.core.mrpack import (                      # noqa: E402
     merge_files,
     parse_mrpack,
@@ -223,6 +223,9 @@ def _run(tmp: Path, real: dict) -> int:
     pump = DeferredAfter()
     pv.after = pump            # 让 after 真正被消费
 
+    logs: list[tuple[str, str]] = []
+    pv.log.log = lambda level, msg: logs.append((level, str(msg)))
+
     leases = list(Path(tempfile.gettempdir()).glob("pulses_play_*"))
     before_temp = {str(p) for p in leases}
 
@@ -235,6 +238,8 @@ def _run(tmp: Path, real: dict) -> int:
     print("\n── 2) 拖入更新包 ──")
     pv._on_update_pack_dropped([eapack])
     check(pv.update_zip == eapack, "更新包已载入")
+    check(any("完整性校验通过" in m for _l, m in logs),
+          "更新包完整性校验通过（并有日志）")
     check(pv.pack_kind.value == "update", "识别为更新包 (update)")
     check(pv._btn_state == "ready", "按钮进入「开始更新」")
 
@@ -259,6 +264,16 @@ def _run(tmp: Path, real: dict) -> int:
     tasks = {t.rel_path for t in pv._download_tasks}
     print(f"    待下载：{sorted(tasks)}")
     check(f"mods/{real['filename']}" in tasks, "更新包声明的 mod 有待下载任务")
+
+    # 往缓存目录塞一个"上一次更新遗留"的同名/无关文件：
+    # 应用时只应并入本次任务清单里的文件，遗留文件必须被忽略
+    if pv._cache_root is not None:
+        stale = pv._cache_root / "mods" / "stale-leftover.jar"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("STALE", encoding="utf-8")
+        stale2 = pv._cache_root / "config" / "shipped.toml"
+        stale2.parent.mkdir(parents=True, exist_ok=True)
+        stale2.write_text('key = "STALE-FROM-CACHE"\n', encoding="utf-8")
 
     print("\n── 4) 下载（真实网络） ──")
     t0 = time.time()
@@ -314,29 +329,29 @@ def _run(tmp: Path, real: dict) -> int:
     # 注意：pv._temp_dir 仍在（同一个更新包可以重复确认），退出时才该清理。
     # 但"一次成功更新后残留一整份 merged 副本"属于已知问题（P1-5）。
     new_temp = after_temp - before_temp
-    known_pending(not new_temp, "系统临时目录没有新增残留")
+    check(not new_temp, "系统临时目录没有新增残留", str(new_temp))
 
-    print("\n── 6) 回收站与回滚 ──")
+    print("\n── 6) 永久删除 & 无备份 ──")
     tdir = tmp / "versions" / ".pulses_trash"
-    sessions = sorted(tdir.iterdir()) if tdir.is_dir() else []
-    print(f"    回收站会话：{[s.name for s in sessions]}")
-    check(bool(sessions), "存在回收站会话")
-    deleted_in_trash = []
-    for s in sessions:
-        for p in s.rglob("*"):
-            if p.is_file() and p.name != "manifest.json":
-                deleted_in_trash.append(p.relative_to(s).as_posix())
-    print(f"    回收站内容：{sorted(set(deleted_in_trash))}")
-    check("mods/removed-in-new-version.jar" in deleted_in_trash,
-          "被删除的 mod 在回收站里（可恢复）★P1-1")
-    check("mods/old-version.jar" in deleted_in_trash,
-          "被覆盖的旧 mod 在回收站里")
+    check(not tdir.exists(), "没有产生任何回收站目录（零备份设计）")
+    leftovers = [p.name for p in inst.rglob("*")
+                 if p.name.startswith(".") and "pulses" in p.name]
+    check(not leftovers, "整合包内没有临时/备份残留", str(leftovers))
+    check(not (inst / "mods" / "stale-leftover.jar").exists(),
+          "缓存目录里的陈旧遗留文件没有被并入应用源")
+    check(not (inst / "config" / "shipped.toml").read_text(
+              "utf-8").startswith('key = "STALE'),
+          "陈旧缓存文件没有覆盖包内的正确 config")
 
-    if sessions:
-        restored = trash_mod.restore_session(sessions[-1])
-        check(restored, "restore_session 执行成功")
-        check((inst / "mods" / "removed-in-new-version.jar").is_file(),
-              "回收站恢复把文件放回了正确位置 ★P1-1")
+    print("\n── 8) 工作目录 ──")
+    work_root = dbdir / "cache" / "temp"
+    work_items = sorted(p.name for p in work_root.iterdir()) \
+        if work_root.is_dir() else []
+    print(f"    <db>/cache/temp 内容：{work_items}")
+    check(pv._merged_root is None, "应用完成后合并副本已被丢弃")
+    if pv._temp_dir is not None:
+        merged_dir = Path(pv._temp_dir.name) / "_merged"
+        check(not merged_dir.exists(), "_merged 已从工作目录删除")
 
     print("\n── 7) 最终目录 ──")
     for p in sorted(inst.rglob("*")):

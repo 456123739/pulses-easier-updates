@@ -39,10 +39,14 @@ class DeveloperView(ctk.CTkFrame):
         self.source_zip: Path | None = None
         self.tmp_dir: TemporaryDirectory | None = None
         self.extract_dir: Path | None = None
+        # 解析期与导出期各用一个临时目录，互不覆盖
+        self.parse_tmp_dir: TemporaryDirectory | None = None
+        self.export_tmp_dir: TemporaryDirectory | None = None
         self.pack: MRPack | None = None
         self.merged: list[dict] = []
         self.version = "1.0.0"
         self._locked = False
+        self._parsing = False
 
         self._build()
 
@@ -127,7 +131,8 @@ class DeveloperView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def _on_pack_dropped(self, paths: list[Path]):
-        if self._locked:
+        if self._locked or self._parsing:
+            self.log.log("warn", "正在处理上一个导出包，请稍候")
             return
 
         zip_candidates = [
@@ -137,6 +142,10 @@ class DeveloperView(ctk.CTkFrame):
         if not zip_candidates:
             self.log.log("error", "请拖入 .zip 或 .mrpack 文件")
             return
+
+        # 先把旧包状态清干净：否则解析失败后点"导出"会用
+        # 「新 ZIP 的 index + 旧包的策略/名称」产出自相矛盾的包
+        self._clear_pack_state(keep_log=True)
 
         self.source_zip = zip_candidates[0]
         try:
@@ -153,57 +162,77 @@ class DeveloperView(ctk.CTkFrame):
 
         self.log.clear()
         self.log.log("info", "解析导出包...")
+        self._parsing = True
+        self._set_locked(True)
         self.main_btn.configure(text="解析中...", state="disabled")
 
         zip_path = self.source_zip
 
         def worker():
+            # 解析 + 解压都在工作线程里做：大包解压放到 Tk 主线程会冻结界面
             pack, err = parse_mrpack(zip_path)
             if err or pack is None:
                 self.after(0, lambda e=err: self._on_parse_error(e))
                 return
-            self.after(0, lambda p=pack: self._on_parse_done(p))
+            extract_dir = None
+            file_items: set[str] = set()
+            tmp = None
+            try:
+                tmp = TemporaryDirectory(prefix="pulses_dev_parse_")
+                extract_dir = Path(tmp.name)
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(extract_dir)
+                ovr = extract_dir / "overrides"
+                if ovr.is_dir():
+                    for e in ovr.iterdir():
+                        if e.is_file():
+                            file_items.add(e.name)
+            except Exception as e:  # noqa: BLE001
+                self.after(0, lambda m=str(e):
+                           self.log.log("warn", f"解压失败：{m}"))
+                extract_dir = None
+            self.after(0, lambda p=pack, t=tmp, d=extract_dir,
+                       fi=file_items: self._on_parse_done(p, t, d, fi))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_parse_error(self, err: str):
         self.log.log("error", f"解析失败：{err}")
+        self._parsing = False
+        self._set_locked(False)
+        self.source_zip = None
+        self.pack = None
+        self.merged = []
+        self.extract_dir = None
+        self.strategy_table.set_folders([])
         self.main_btn.configure(text="开始制作更新包", state="normal")
+        try:
+            self.drop_pack.set_highlight(True)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
-    def _on_parse_done(self, pack: MRPack):
+    def _on_parse_done(self, pack: MRPack,
+                       parse_tmp: TemporaryDirectory | None = None,
+                       extract_dir: Path | None = None,
+                       file_items: set[str] | None = None):
+        self._parsing = False
+        self._set_locked(False)
         self.pack = pack
         self.merged = merge_files(pack)
         folders = top_level_folders(self.merged)
 
-        # 解压到临时目录，用于收集根文件
-        try:
-            self.tmp_dir = TemporaryDirectory(prefix="pulses_dev_parse_")
-            self.extract_dir = Path(self.tmp_dir.name)
-            if self.source_zip:
-                with zipfile.ZipFile(self.source_zip, "r") as zf:
-                    zf.extractall(self.extract_dir)
-        except Exception as e:  # noqa: BLE001
-            self.log.log("warn", f"解压失败：{e}")
-            self.extract_dir = None
-
-        # 收集根目录散文件
-        file_items: set[str] = set()
-        try:
-            ovr = self.extract_dir / "overrides" if self.extract_dir \
-                else None
-            if ovr and ovr.is_dir():
-                for e in ovr.iterdir():
-                    if e.is_file():
-                        file_items.add(e.name)
-        except Exception:  # noqa: BLE001, S110
-            pass
+        self.parse_tmp_dir = parse_tmp
+        self.extract_dir = extract_dir if extract_dir is not None else (
+            Path(self.tmp_dir.name) if self.tmp_dir else None)
+        if file_items is None:
+            file_items = set()
 
         all_items = list(folders) + sorted(file_items)
-        self.strategy_table.set_folders(all_items, file_items=file_items)
 
-        # 读黑名单
+        # 黑名单要**先**设置：strategy_table 建行时会读它
         blacklist = db.get_blacklist() if db.get_db_path() else []
         self.strategy_table.set_blacklist(blacklist)
+        self.strategy_table.set_folders(all_items, file_items=file_items)
 
         self.export_options.set_options(db.get_export_options())
         self._log_pack_summary(pack, folders, file_items)
@@ -236,45 +265,60 @@ class DeveloperView(ctk.CTkFrame):
                      f"{len(file_items)} 个根文件参与策略")
 
     # ------------------------------------------------------------------
-    def _on_clear_click(self):
-        if self._locked:
-            return
+    def _clear_pack_state(self, keep_log: bool = False):
+        """清空当前导出包状态（不动日志时可保留日志）。"""
         self.source_zip = None
         self.pack = None
         self.merged = []
         self.extract_dir = None
-        if self.tmp_dir is not None:
-            try:
-                self.tmp_dir.cleanup()
-            except Exception:  # noqa: BLE001, S110
-                pass
-            self.tmp_dir = None
+        for attr in ("parse_tmp_dir", "export_tmp_dir", "tmp_dir"):
+            tmp = getattr(self, attr, None)
+            if tmp is not None:
+                try:
+                    tmp.cleanup()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                setattr(self, attr, None)
 
-        self.drop_pack.set_text(title="拖入启动器导出的整合包 ZIP",
-                                subtitle="支持 .mrpack / .zip")
         try:
+            self.strategy_table.set_folders([])
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            self.drop_pack.set_text(
+                title="拖入启动器导出的整合包 ZIP",
+                subtitle="支持 .mrpack / .zip")
             self.drop_pack.set_highlight(True)
         except Exception:  # noqa: BLE001, S110
             pass
-        self.strategy_table.set_folders([])
-
         try:
             self.editor.set_markdown("")
         except Exception:  # noqa: BLE001, S110
             pass
-
-        try:
-            self.export_options.set_options(db.get_export_options())
-        except Exception:  # noqa: BLE001, S110
-            pass
-
         try:
             self.progress_panel.grid_remove()
             self.progress_panel.reset("就绪")
         except Exception:  # noqa: BLE001, S110
             pass
+        try:
+            self.main_btn.configure(text="开始制作更新包", state="normal")
+        except Exception:  # noqa: BLE001, S110
+            pass
+        if not keep_log:
+            try:
+                self.log.clear()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
-        self.main_btn.configure(text="开始制作更新包", state="normal")
+    def _on_clear_click(self):
+        if self._locked or self._parsing:
+            return
+        self._clear_pack_state()
+
+        try:
+            self.export_options.set_options(db.get_export_options())
+        except Exception:  # noqa: BLE001, S110
+            pass
 
         self.log.clear()
         self.log.log("info", "已清除当前导出包，回到初始状态")

@@ -21,14 +21,14 @@ from time import time
 
 import customtkinter as ctk
 
-from ..config import Strategy
+from ..config import Strategy, default_strategy_for_dir
+from ..core import cache as cache_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
 from ..core import resume as resume_mod
 from ..core.differ import DiffResult, diff_packs_parallel
 from ..core.downloader import DownloadTask, download_files
 from ..core.mrpack import (
-    MERGE_FOLDERS,
     index_top_folders,
     is_reserved_root_name,
     merge_files,
@@ -61,6 +61,7 @@ _HINT_H = 22
 _SPEED_SAMPLES = 6
 
 _PHASE_IDLE = "idle"
+_PHASE_SCAN = "scan"
 _PHASE_DOWNLOAD = "download"
 _PHASE_APPLY = "apply"
 _PHASE_MANUAL = "manual"      # 等待用户手动补入失败文件
@@ -78,6 +79,7 @@ class PlayerView(ctk.CTkFrame):
         self.pack_kind: PackKind = PackKind.UNKNOWN
         self._temp_dir: TemporaryDirectory | None = None
         self._new_root: Path | None = None
+        self._merged_root: Path | None = None
         self._overrides_root: Path | None = None
         # True = 包内没有 overrides/，内容根退化为解压根目录（老格式）；
         # 这种模式下必须排除包自身的元数据文件（否则会被当成更新内容）
@@ -98,6 +100,7 @@ class PlayerView(ctk.CTkFrame):
         self._abort_flag: bool = False
         self._skip_after_abort: bool = False
         self._download_thread: threading.Thread | None = None
+        self._last_results: list = []
         self._resume_after_scan: bool = False
 
         self._strategy_snapshot: dict = {"checked": {}, "strategies": {}}
@@ -340,9 +343,11 @@ class PlayerView(ctk.CTkFrame):
         except Exception:  # noqa: BLE001, S110
             pass
 
-    def _set_hint(self, text: str):
+    def _set_hint(self, text: str, color: str | None = None):
         try:
-            self.progress_label.configure(text=text)
+            self.progress_label.configure(
+                text=text,
+                text_color=color or Color.TEXT_SECONDARY)
             if text:
                 self.hint_wrap.grid()
             else:
@@ -426,10 +431,23 @@ class PlayerView(ctk.CTkFrame):
             self._reset_pack_state()
             self._refresh_ui_state()
             return
+
         try:
-            self.pack_info = read_modpack_info(path)
+            new_info = read_modpack_info(path)
         except Exception:  # noqa: BLE001
-            self.pack_info = None
+            new_info = None
+
+        old_path = self.pack_info.path if self.pack_info is not None else None
+        new_path = new_info.path if new_info is not None else None
+        if old_path is not None and new_path is not None \
+                and Path(old_path) != Path(new_path):
+            # 换了整合包：针对旧包算出来的 diff / 下载任务必须作废，
+            # 否则会拿旧比对结果去写新包（误删新包里的文件）
+            self.log.log("warn", "已更换整合包，需要重新进行比对")
+            self._reset_pack_state()
+            self._set_hint("已更换整合包，请拖入更新包后重新开始")
+
+        self.pack_info = new_info
 
         if self.pack_info is not None:
             self.log.clear()
@@ -505,9 +523,35 @@ class PlayerView(ctk.CTkFrame):
             self.log.log("error", f"无法识别：{err}")
             return
 
+        # 换包：旧包算出来的 diff/任务/解压目录全部作废
+        self._discard_merged_source()
+        self._cleanup_temp_dir()
+        self.diff = None
+        self.plan = None
+        self._merged = []
+        self._download_tasks = []
+        self._completed_files = []
+        self._overrides_root = None
+        self._new_root = None
+        self._overrides_fallback = False
+        self.strategy_table.set_folders([])
+        self.change_list.load(None)
+
         self.update_zip = zip_path
         self.pack_kind = kind
         self._cache_root = self._resolve_cache_root(zip_path)
+
+        # 完整性校验（导出时勾选"防篡改"才有签名）
+        try:
+            ok, reason = eapack_mod.verify_signature(zip_path)
+            if not ok:
+                self.log.log("warn", f"⚠ 完整性校验未通过：{reason}")
+                self.log.log("warn", "更新包可能被改动过；"
+                                     "每个文件仍会按 index 哈希校验")
+            elif reason == "":
+                self.log.log("info", "更新包完整性校验通过")
+        except Exception:  # noqa: BLE001, S110
+            pass
 
         try:
             self.drop_zip.set_highlight(False)
@@ -621,18 +665,61 @@ class PlayerView(ctk.CTkFrame):
 
     @staticmethod
     def _resolve_cache_root(zip_path: Path) -> Path | None:
+        """
+        下载缓存目录：<db>/cache/update_packs/<安全文件名>-<内容指纹>/
+
+        指纹（大小 + 首尾 64KB 的 SHA-256）保证**同名不同内容**的更新包
+        不会复用同一个目录 —— 否则上一个包遗留的文件会被当成新内容写进
+        整合包（陈旧文件覆盖正确文件）。
+        """
         db_root = db.get_db_path()
         if db_root is None:
             return None
         safe_name = "".join(
             c if c.isalnum() or c in "-_." else "_"
-            for c in zip_path.stem)[:64] or "pack"
+            for c in zip_path.stem)[:48] or "pack"
+        try:
+            fp = resume_mod.quick_fingerprint(zip_path)[:10]
+        except Exception:  # noqa: BLE001
+            fp = ""
+        safe_name = f"{safe_name}-{fp}" if fp else safe_name
         cache = db_root / "cache" / "update_packs" / safe_name
         try:
             cache.mkdir(parents=True, exist_ok=True)
         except Exception:  # noqa: BLE001
             return None
         return cache
+
+    def _cleanup_temp_dir(self):
+        tmp = self._temp_dir
+        self._temp_dir = None
+        self._merged_root = None
+        if tmp is None:
+            return
+        try:
+            tmp.cleanup()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _make_work_dir(self) -> TemporaryDirectory | None:
+        """
+        解压/合并用的工作目录：优先放在 <db>/cache/temp（"清理缓存"能覆盖
+        到，"清理下载残留"启动任务也会清），数据库不可用时退回系统临时目录。
+        """
+        try:
+            root = cache_mod.work_root()
+        except Exception:  # noqa: BLE001
+            root = None
+        try:
+            if root is not None:
+                root.mkdir(parents=True, exist_ok=True)
+                return TemporaryDirectory(prefix="pulses_play_", dir=str(root))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return TemporaryDirectory(prefix="pulses_play_")
+        except Exception:  # noqa: BLE001
+            return None
 
     # ------------------------------------------------------------------
     def resume_from(self, data: dict, avail: dict | None = None) -> bool:
@@ -723,6 +810,7 @@ class PlayerView(ctk.CTkFrame):
         if self.update_zip is None or self.pack_info is None:
             return
 
+        self._phase = _PHASE_SCAN
         self._set_button_state(_BTN_BUSY)
         self.progress_wrap.grid()
         self.progress.set_file_progress(None)
@@ -742,13 +830,21 @@ class PlayerView(ctk.CTkFrame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _scan_worker(self):
-        assert self.update_zip is not None
+        # 全程用局部快照：线程跑起来之后 self.* 可能被别的操作改动
+        update_zip = self.update_zip
+        pack_info = self.pack_info
+        pack_kind = self.pack_kind
+        if update_zip is None or pack_info is None:
+            raise RuntimeError("更新包或整合包信息已丢失")
+        assert update_zip is not None
 
-        self._temp_dir = TemporaryDirectory(prefix="pulses_play_")
+        self._temp_dir = self._make_work_dir()
+        if self._temp_dir is None:
+            raise RuntimeError("无法创建临时工作目录")
         extract_dir = Path(self._temp_dir.name)
 
         self.after(0, self._set_hint, "正在解压更新包…")
-        with zipfile.ZipFile(self.update_zip, "r") as zf:
+        with zipfile.ZipFile(update_zip, "r") as zf:
             zf.extractall(extract_dir)
 
         overrides_dir = extract_dir / "overrides"
@@ -761,16 +857,17 @@ class PlayerView(ctk.CTkFrame):
             self._overrides_root = extract_dir
             self._overrides_fallback = True
 
-        pack, err = parse_mrpack(self.update_zip)
+        pack, err = parse_mrpack(update_zip)
         merged: list[dict] = []
         index_tops: set[str] = set()
         if err or pack is None:
             self._new_root = self._overrides_root
             folders = self._top_folders(self._overrides_root)
             file_items = self._root_file_items(self._overrides_root)
-            mapping = {f: self._default_strategy_for_top(f, False)
+            mapping = {f: self._default_strategy_for_top(f, False, pack_kind)
                        for f in folders}
-            mapping.update({f: self._default_strategy_for_top(f, True)
+            mapping.update({f: self._default_strategy_for_top(f, True,
+                                                            pack_kind)
                             for f in file_items})
             self.after(0, lambda m=mapping, fs=folders, fi=file_items:
                        self._apply_strategies(m, fs, fi))
@@ -780,9 +877,10 @@ class PlayerView(ctk.CTkFrame):
             self._new_root = extract_dir
             folders = sorted(set(top_level_folders(merged)) | index_tops)
             file_items = self._root_file_items(self._overrides_root)
-            mapping = {f: self._default_strategy_for_top(f, False)
+            mapping = {f: self._default_strategy_for_top(f, False, pack_kind)
                        for f in folders}
-            mapping.update({f: self._default_strategy_for_top(f, True)
+            mapping.update({f: self._default_strategy_for_top(f, True,
+                                                            pack_kind)
                             for f in file_items})
             self.after(0, lambda m=mapping, fs=folders, fi=file_items:
                        self._apply_strategies(m, fs, fi))
@@ -791,7 +889,7 @@ class PlayerView(ctk.CTkFrame):
 
         user_wl: list[str] = []
         try:
-            wl = eapack_mod.read_whitelist(self.update_zip)
+            wl = eapack_mod.read_whitelist(update_zip)
             if wl:
                 user_wl = list(wl)
         except Exception:  # noqa: BLE001, S110
@@ -830,7 +928,27 @@ class PlayerView(ctk.CTkFrame):
                 if h2:
                     index_hashes[f.path] = h2
 
-        assert self.pack_info is not None
+        # 消费更新包自带的哈希清单（include_hashes / precompute_overrides）：
+        #   files  → 补上 overrides 文件的期望哈希，省掉"读解压后的文件"
+        #   folders→ 顶层目录的期望内容哈希，比较时只需算本地一侧
+        folder_hashes: dict[str, str] = {}
+        try:
+            recorded = eapack_mod.read_hashes(update_zip)
+            if isinstance(recorded, dict):
+                for rel, entry in (recorded.get("files") or {}).items():
+                    if not isinstance(entry, dict):
+                        continue
+                    algo = str(entry.get("algo", "") or "")
+                    value = str(entry.get("value", "") or "")
+                    if algo and value and rel not in index_hashes:
+                        index_hashes[rel] = {algo: value}
+                fh = recorded.get("folders")
+                if isinstance(fh, dict):
+                    folder_hashes = {str(k): str(v) for k, v in fh.items()
+                                     if isinstance(v, str) and v}
+        except Exception:  # noqa: BLE001, S110
+            pass
+
         compare_root = self._overrides_root
         self.after(0, lambda: self.progress.set(0.0, animate=False))
 
@@ -842,10 +960,11 @@ class PlayerView(ctk.CTkFrame):
             self.after(0, self._update_scan_progress, ratio, label)
 
         diff = diff_packs_parallel(
-            self.pack_info.path, compare_root,
+            pack_info.path, compare_root,
             whitelist=final_wl,
             index_hashes=index_hashes,
-            threads=16, progress=_progress)
+            threads=16, progress=_progress,
+            folder_hashes=folder_hashes)
         self.diff = diff
 
     @staticmethod
@@ -971,19 +1090,23 @@ class PlayerView(ctk.CTkFrame):
             return Strategy.FULL_MATCH.value
         return Strategy.REPLACE_SAME.value
 
-    def _default_strategy_for_top(self, top: str, is_file: bool) -> str:
+    def _default_strategy_for_top(self, top: str, is_file: bool,
+                                  kind: PackKind | None = None) -> str:
         """
-        单个顶层项的默认策略。
+        单个顶层项的默认策略（唯一事实来源：config.DEFAULT_STRATEGY_BY_DIR）。
 
         - 白名单内容文件夹（mods/resourcepacks/shaderpacks/tacz）走文件级
           比对，需要能删除"新版已移除"的条目 → 完全匹配；
-        - 其余目录是文件夹级比对 → 替换重名（合并覆盖，绝不删玩家文件）。
+        - config / saves / 其余目录是文件夹级比对 → 替换重名 / 跳过重名
+          （合并覆盖，绝不删玩家自己写的文件）。
         """
-        if self.pack_kind == PackKind.EXPORT:
+        kind = kind if kind is not None else self.pack_kind
+        if kind == PackKind.EXPORT:
             return Strategy.FULL_MATCH.value
-        if not is_file and top in MERGE_FOLDERS:
-            return Strategy.FULL_MATCH.value
-        return Strategy.REPLACE_SAME.value
+        if is_file:
+            # 根目录散文件（options.txt 等）：覆盖同名，但不删玩家文件
+            return default_strategy_for_dir("").value
+        return default_strategy_for_dir(top).value
 
     def _apply_strategies(self, mapping: dict,
                           folders: list[str],
@@ -1015,6 +1138,7 @@ class PlayerView(ctk.CTkFrame):
         self._refresh_ui_state()
 
     def _on_scan_done(self):
+        self._phase = _PHASE_IDLE
         if self.diff is None:
             return
 
@@ -1062,6 +1186,7 @@ class PlayerView(ctk.CTkFrame):
     def _on_error(self, msg: str):
         self.log.log("error", msg)
         self._set_hint("比对失败")
+        self._phase = _PHASE_IDLE
         self._set_button_state(_BTN_READY)
         self._refresh_ui_state()
 
@@ -1113,6 +1238,9 @@ class PlayerView(ctk.CTkFrame):
             self.after(0, self._handle_file_started, task.rel_path)
 
         def _on_done(task: DownloadTask):
+            # on_file_done 只在成功时触发 → 这里就能准确回填"已完成"，
+            # 中止关闭时写出的 resume 统计不会再偏低
+            self._mark_completed(task.rel_path)
             self.after(0, self._handle_file_done, task.rel_path)
 
         def _on_failed(task: DownloadTask, error: str):
@@ -1145,9 +1273,11 @@ class PlayerView(ctk.CTkFrame):
                 on_file_started=_on_started,
                 on_file_done=_on_done,
                 on_file_failed=_on_failed)
+            self._last_results = results
+            # 兜底：万一某个实现没有回调成功事件，这里按结果再补一次
             for r in results:
-                if r.ok and r.task.rel_path not in self._completed_files:
-                    self._completed_files.append(r.task.rel_path)
+                if r.ok:
+                    self._mark_completed(r.task.rel_path)
             self.after(0, lambda r=results: self._on_download_done(r))
 
         self._download_thread = threading.Thread(target=worker, daemon=True)
@@ -1173,6 +1303,11 @@ class PlayerView(ctk.CTkFrame):
         except Exception:  # noqa: BLE001
             self.download_panel = None
 
+    def _mark_completed(self, rel: str):
+        """记录"这个文件确实下好了"（线程安全：list.append 是原子的）。"""
+        if rel and rel not in self._completed_files:
+            self._completed_files.append(rel)
+
     def _handle_file_started(self, rel: str):
         self._current_rel = rel
         if rel != self._speed_rel:
@@ -1183,6 +1318,8 @@ class PlayerView(ctk.CTkFrame):
         self._render_hint()
 
     def _handle_file_failed(self, rel: str, urls: list[str], error: str):
+        self._active_files.pop(rel, None)
+        self._file_speed_samples.pop(rel, None)
         self.log.log("warn", f"下载失败，加入待补入：{rel}")
         self._ensure_download_panel(in_progress=True)
         if self.download_panel is None:
@@ -1384,8 +1521,7 @@ class PlayerView(ctk.CTkFrame):
             return False
 
         self.log.log("info", f"{rel_path} 校验通过")
-        if rel_path not in self._completed_files:
-            self._completed_files.append(rel_path)
+        self._mark_completed(rel_path)
         return True
 
     def _on_skip_all_failed(self):
@@ -1484,8 +1620,7 @@ class PlayerView(ctk.CTkFrame):
         def worker():
             try:
                 report = execute_plan(plan, old_root, merged_root,
-                                      log=_log, progress=_progress,
-                                      use_trash=True)
+                                      log=_log, progress=_progress)
                 failed = verify_after_update(plan, old_root, merged_root)
                 self.after(0, lambda r=report, f=failed:
                            self._on_apply_done(r, f))
@@ -1500,6 +1635,8 @@ class PlayerView(ctk.CTkFrame):
             return None
         try:
             merged = Path(self._temp_dir.name) / "_merged"
+            if merged.exists():
+                shutil.rmtree(merged, ignore_errors=True)
             merged.mkdir(parents=True, exist_ok=True)
             if self._overrides_root and self._overrides_root.is_dir():
                 for p in self._overrides_root.rglob("*"):
@@ -1514,27 +1651,56 @@ class PlayerView(ctk.CTkFrame):
                     dst = merged / rel
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(p, dst)
+
+            # 缓存目录：**只并入本次更新真正需要的文件**。
+            # 整个目录全量并入时，同名但内容陈旧的遗留文件会覆盖本次
+            # overrides 里的正确文件。
             if self._cache_root.is_dir():
+                allowed = {t.rel_path for t in self._download_tasks}
+                allowed.update(self._completed_files)
                 for p in self._cache_root.rglob("*"):
-                    if p.is_file() and not p.name.endswith(".part") \
-                            and ".part." not in p.name \
-                            and p.name != resume_mod.RESUME_FILENAME:
-                        rel = p.relative_to(self._cache_root)
-                        dst = merged / rel
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(p, dst)
+                    if not p.is_file():
+                        continue
+                    rel = p.relative_to(self._cache_root).as_posix()
+                    if rel not in allowed:
+                        continue
+                    dst = merged / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(p, dst)
+            self._merged_root = merged
             return merged
         except Exception as e:  # noqa: BLE001
             self.log.log("error", f"合并更新源失败：{e}")
             return None
+
+    def _discard_merged_source(self):
+        """应用结束后丢掉合并副本（只占空间，随时可以重建）。"""
+        merged = self._merged_root
+        self._merged_root = None
+        if merged is None:
+            return
+        try:
+            if merged.is_dir():
+                shutil.rmtree(merged, ignore_errors=True)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _set_progress(self, done: int, total: int):
         self.progress.set(done / total if total else 1.0, animate=True)
         self._set_hint(f"应用 {done}/{total}")
 
     def _on_apply_done(self, report: dict, verify_failed: list):
+        self._discard_merged_source()
         self.progress.set(1.0, animate=True)
-        self._set_hint("更新完成 ✓")
+
+        problems = len(report["failed"]) + len(verify_failed)
+        if problems:
+            # 有失败就别说"更新完成 ✓"
+            self._set_hint(f"更新已应用，但有 {problems} 项未成功（见日志）",
+                           color=Color.WARNING)
+        else:
+            self._set_hint("更新完成 ✓")
+
         self.log.log("info",
                      f"更新完成：新增 {report['applied']}，"
                      f"删除 {report['deleted']}，"
@@ -1548,6 +1714,14 @@ class PlayerView(ctk.CTkFrame):
                 self.log.log("error",
                              f"校验失败：{item['rel']} - {item['error']}")
 
+        if not problems:
+            # 本次更新彻底完成：清掉续传记录，避免下次启动又弹"继续上次更新"
+            if self._cache_root is not None:
+                resume_mod.clear_resume(self._cache_root)
+        elif self._cache_root is not None:
+            self.log.log("info", "未完成的项目已保留续传记录，"
+                                 "下次启动可继续")
+
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
         self._uninstall_close_guard()
@@ -1555,8 +1729,9 @@ class PlayerView(ctk.CTkFrame):
         self._refresh_ui_state()
 
     def _on_apply_error(self, msg: str):
+        self._discard_merged_source()
         self.log.log("error", f"更新失败：{msg}")
-        self._set_hint("更新失败")
+        self._set_hint("更新失败", color=Color.ERROR)
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
         self._uninstall_close_guard()
@@ -1643,6 +1818,14 @@ class PlayerView(ctk.CTkFrame):
             if t is not None and t.is_alive():
                 t.join(timeout=5.0)
                 stopped = not t.is_alive()
+            # 线程已结束（或返回了部分结果）时，把成功的结果补进
+            # _completed_files，避免 resume 里的"已完成"统计偏低
+            for r in list(self._last_results or []):
+                try:
+                    if r.ok:
+                        self._mark_completed(r.task.rel_path)
+                except Exception:  # noqa: BLE001, S110
+                    continue
             if self._cache_root:
                 # 线程还没停就清理 .part 会和它抢文件：可能导致正在写的
                 # 分片被删掉，随后判为失败。只有确认停下才清理。
@@ -1666,6 +1849,9 @@ class PlayerView(ctk.CTkFrame):
         self.after(0, self._force_destroy)
 
     def _force_destroy(self):
+        # 退出前清掉解压/合并副本，避免留下 GB 级残留
+        self._discard_merged_source()
+        self._cleanup_temp_dir()
         try:
             top = self.winfo_toplevel()
             top.protocol("WM_DELETE_WINDOW", top.destroy)
@@ -1763,12 +1949,8 @@ class PlayerView(ctk.CTkFrame):
         self._resume_after_scan = False
         self._overrides_fallback = False
         self._strategy_snapshot = {"checked": {}, "strategies": {}}
-        if self._temp_dir is not None:
-            try:
-                self._temp_dir.cleanup()
-            except Exception:  # noqa: BLE001, S110
-                pass
-            self._temp_dir = None
+        self._discard_merged_source()
+        self._cleanup_temp_dir()
 
         self._destroy_download_panel()
 

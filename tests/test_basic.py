@@ -204,14 +204,15 @@ class TestUiContract(unittest.TestCase):
 
     def test_player_view_result_semantics(self):
         """
-        调用方按 `成功 = len(results) - len(failed)` 统计、并靠
-        `if r.ok: _completed_files.append(...)` 收集已完成文件 ——
-        这要求 download_files 每个任务返回一条结果（成功也要返回）。
+        调用方按 `成功 = len(results) - len(failed)` 统计，并靠
+        `on_file_done`（**只在成功时触发**）收集已完成文件；
+        返回列表里每个任务恰好一条结果（成功也要返回）。
         """
         src = (_ROOT / "app" / "ui" / "player_view.py").read_text(
             encoding="utf-8")
-        self.assertIn("if r.ok and r.task.rel_path not in self._completed_files",
-                      src)
+        self.assertIn("self._mark_completed(task.rel_path)", src)
+        self.assertIn("def _mark_completed", src)
+        self.assertIn("if r.ok:", src)
         self.assertIn("len(results) - len(failed)", src)
         self.assertIn("failed = [r for r in results if not r.ok and not r.aborted]",
                       src)

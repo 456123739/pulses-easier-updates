@@ -165,7 +165,27 @@ class StrategyTable(ctk.CTkFrame):
         self._apply_layout()
 
     def set_blacklist(self, items: list[str]):
+        """
+        设置"上次禁用过的文件夹"。
+
+        会**同步刷新已经建好的行**：早先只赋值，于是"先 set_folders
+        再 set_blacklist"时禁用状态不生效，上次禁用的文件夹被静默重新
+        勾选，用户不检查就会把它永久导出成"启用"。
+        """
         self._blacklist = set(items or [])
+        changed = False
+        for name, r in self._rows.items():
+            want = name not in self._blacklist
+            if r.checked != want:
+                r.checked = want
+                changed = True
+                if r.toggle is not None:
+                    try:
+                        r.toggle.set_selected(want, animate=False)
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+        if changed:
+            self._apply_layout()
 
     def get_blacklist(self) -> list[str]:
         return [name for name, r in self._rows.items() if not r.checked]

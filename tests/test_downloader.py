@@ -493,9 +493,13 @@ class TestHashAndProgress(TestBase):
             on_file_started=lambda t: started.append(t.rel_path),
             on_file_done=lambda t: done.append(t.rel_path),
             on_file_failed=lambda t, e: failed.append(t.rel_path))
-        self.assertEqual(sorted(done), ["cb_bad.bin", "cb_ok.bin"],
-                         "on_file_done 不是每个文件恰好一次")
+        # v0.5.0：on_file_done 只在**成功**时触发（调用方靠它统计"已完成"），
+        # 失败与中止只走 on_file_failed
+        self.assertEqual(done, ["cb_ok.bin"],
+                         "on_file_done 应当只在成功时触发一次")
         self.assertEqual(failed, ["cb_bad.bin"])
+        # on_file_started 允许重试时重复触发（多线程池 → 耐心池）
+        self.assertEqual(set(started), {"cb_bad.bin", "cb_ok.bin"})
         self.assertEqual(len(res), 2)
         self.assertEqual(sum(1 for r in res if r.ok), 1)
 

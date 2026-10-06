@@ -78,6 +78,13 @@ G10 返回语义对齐调用方：
   - 现在：每个任务返回**恰好一条**最终结果（成功 + 失败），
     进度只在最终态推进（done 不会超过 total），
     on_file_failed 只在最终失败时触发。
+
+G15 回调语义收紧（v0.5.0）：
+  - 原实现 on_file_done 在**每个**最终态都触发（成功/失败/中止都算），
+    调用方无法用它统计"已完成"（player_view 的 _completed_files 因此
+    只在 download_files 返回后才能回填，中止时统计偏低）。
+  - 现在 on_file_done 只在**成功**时触发；失败/中止走 on_file_failed。
+    进度回调也从 done_lock 里移出，避免在持锁期间调用外部代码。
 """
 
 import hashlib
@@ -2088,6 +2095,12 @@ def download_files(
     on_file_done: Callable[[DownloadTask], None] | None = None,
     on_file_failed: Callable[[DownloadTask, str], None] | None = None,
 ) -> list[DownloadResult]:
+    """
+    回调约定（v0.5.0）：
+      on_file_started  文件开始（含重试时再次开始）
+      on_file_done     文件**成功**落盘后触发一次
+      on_file_failed   文件最终失败/中止时触发
+    """
     opts = _get_options()
     multi_slots = int(opts.get("multi_slots", 12))
     single_slots = int(opts.get("single_slots", 4))
@@ -2145,23 +2158,30 @@ def download_files(
 
         旧实现把"转入单线程重试"也当成一次完成来报，结果进度条的
         done 会超过 total，且被救回的文件在返回列表里仍留一条失败记录。
+
+        on_file_done 只在 ok 时触发（调用方用它统计"已完成"）；
+        失败与中止走 on_file_failed。
         """
+        report = False
         with done_lock:
             done_counter["n"] += 1
             done = done_counter["n"]
             if progress and (done - last_report["n"] >= PROGRESS_THROTTLE
                              or done == total):
                 last_report["n"] = done
-                try:
-                    progress(done, total, task.rel_path)
-                except Exception:  # noqa: BLE001, S110
-                    pass
+                report = True
+        # 进度回调移出锁：外部代码（UI）不应在持锁期间被调用
+        if report:
+            try:
+                progress(done, total, task.rel_path)
+            except Exception:  # noqa: BLE001, S110
+                pass
         if log and not aborted:
             if ok:
                 log("info", f"下载完成 {task.rel_path}")
             else:
                 log("error", f"下载失败 {task.rel_path}：{err}")
-        if on_file_done is not None:
+        if ok and on_file_done is not None:
             try:
                 on_file_done(task)
             except Exception:  # noqa: BLE001, S110

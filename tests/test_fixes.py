@@ -3,7 +3,7 @@ test_fixes.py — 流程审查修复的回归测试（第一批：止血）
 ------------------------------------------------
 每个用例都对应审查报告里的一个 P0：
 
-  P0-1  非白名单目录被默认"完全匹配" → rmtree 玩家本地目录且不进回收站
+  P0-1  非白名单目录被默认"完全匹配" → rmtree 玩家本地目录（且不回滚）
   P0-2  更新包无 overrides/ 时元数据被写进整合包根目录
   P0-3  下载阶段没有锁 → 处理中可换包/清空
   P0-4  「全部跳过」在下载进行中就可点 → 两个 execute_plan 并发
@@ -127,7 +127,7 @@ class TestFolderDiffIgnoresMtime(unittest.TestCase):
 
 
 class TestSafeDirReplace(unittest.TestCase):
-    """FULL_MATCH 目录替换：旧目录先进回收站，失败要能回滚。"""
+    """FULL_MATCH 目录替换：失败要能**事务性**回滚，成功不留备份。"""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="easier-repl-")
@@ -140,27 +140,24 @@ class TestSafeDirReplace(unittest.TestCase):
         msgs = []
         return msgs, (lambda level, msg: msgs.append((level, msg)))
 
-    def test_full_replace_moves_old_dir_to_trash(self):
-        from app.core import trash as trash_mod
+    def test_full_replace_keeps_no_backup_on_success(self):
         from app.core.updater import _replace_dir_full
         old = self.tmp / "instance"
         new = self.tmp / "new"
-        _write(old / "config" / "user-only.toml", "keep")
+        _write(old / "config" / "user-only.toml", "gone")
         _write(new / "config" / "shipped.toml", "a=1")
 
-        session = trash_mod.new_session(old)
         _msgs, log = self._log()
-        ok = _replace_dir_full(new / "config", old / "config", log,
-                               pack_root=old, rel=Path("config"),
-                               session=session)
+        ok = _replace_dir_full(new / "config", old / "config", log)
         self.assertTrue(ok)
         self.assertTrue((old / "config" / "shipped.toml").is_file())
         self.assertFalse((old / "config" / "user-only.toml").exists())
-        # 旧内容必须在回收站里（可回滚），而不是被 rmtree 掉
-        self.assertTrue((session / "config" / "user-only.toml").is_file())
+        # 成功路径不留任何备份/回收站
+        leftovers = [p.name for p in (old / "config").parent.iterdir()
+                     if p.name.startswith(".") and "pulses" in p.name]
+        self.assertEqual(leftovers, [])
 
     def test_full_replace_rolls_back_on_copy_failure(self):
-        from app.core import trash as trash_mod
         from app.core import updater
         old = self.tmp / "instance"
         new = self.tmp / "new"
@@ -168,132 +165,23 @@ class TestSafeDirReplace(unittest.TestCase):
         _write(old / "config" / "user-only.toml", "keep")
         _write(new / "config" / "shipped.toml", "new")
 
-        session = trash_mod.new_session(old)
         _msgs, log = self._log()
-
         shim = types.SimpleNamespace(
             copytree=mock.Mock(side_effect=OSError("disk full")),
             rmtree=updater.shutil.rmtree,
-            move=updater.shutil.move,
             copy2=updater.shutil.copy2,
         )
         with mock.patch.object(updater, "shutil", shim):
-            ok = updater._replace_dir_full(
-                new / "config", old / "config", log,
-                pack_root=old, rel=Path("config"), session=session)
+            ok = updater._replace_dir_full(new / "config", old / "config", log)
 
         self.assertFalse(ok)
         self.assertEqual((old / "config" / "shipped.toml").read_text(), "old")
         self.assertEqual((old / "config" / "user-only.toml").read_text(),
                          "keep")
-
-
-class TestTrashRestoreTargetsCorrectRoot(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(prefix="easier-trash-")
-        self.tmp = Path(self._tmp.name)
-
-    def tearDown(self):
-        self._tmp.cleanup()
-
-    def test_restore_session_returns_files_to_pack_root(self):
-        from app.core import trash as trash_mod
-        pack = self.tmp / "versions" / "instance"
-        pack.mkdir(parents=True)
-        _write(pack / "mods" / "a.jar", "AAA")
-        session = trash_mod.new_session(pack)
-        res = trash_mod.move_to_trash(pack, [Path("mods/a.jar")],
-                                      session=session)
-        self.assertEqual(len(res["moved"]), 1)
-        self.assertTrue((session / "mods" / "a.jar").is_file())
-
-        self.assertTrue(trash_mod.restore_session(session))
-        self.assertEqual((pack / "mods" / "a.jar").read_text(), "AAA")
-        # 旧实现会把文件恢复到整合包的**上一级**
-        self.assertFalse((self.tmp / "versions" / "mods" / "a.jar").exists())
-
-    def test_manifest_is_merged_not_overwritten(self):
-        from app.core import trash as trash_mod
-        pack = self.tmp / "instance"
-        pack.mkdir(parents=True)
-        _write(pack / "a.txt", "1")
-        _write(pack / "b.txt", "2")
-        session = trash_mod.new_session(pack)
-        trash_mod.move_to_trash(pack, [Path("a.txt")], session=session)
-        trash_mod.move_to_trash(pack, [Path("b.txt")], session=session)
-        import json
-        data = json.loads((session / "manifest.json").read_text("utf-8"))
-        self.assertEqual({m["rel"] for m in data["moved"]},
-                         {"a.txt", "b.txt"})
-
-    def test_sessions_do_not_collide_in_same_second(self):
-        from app.core import trash as trash_mod
-        pack = self.tmp / "instance"
-        pack.mkdir(parents=True)
-        s1 = trash_mod.new_session(pack)
-        s2 = trash_mod.new_session(pack)
-        self.assertNotEqual(s1, s2)
-
-
-class TestDefaultStrategyIsSafe(unittest.TestCase):
-    """UPDATE 包的非白名单目录默认必须是"替换重名"，不能"完全匹配"。"""
-
-    @classmethod
-    def setUpClass(cls):
-        _install_stubs()
-        cls._tmp = tempfile.TemporaryDirectory(prefix="easier-ds-")
-        cls._restore = stubs.isolate_user_dirs(cls._tmp.name)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._restore()
-        cls._tmp.cleanup()
-
-    def test_defaults(self):
-        from app.config import Strategy
-        from app.core.pack_detector import PackKind
-        from app.ui.player_view import PlayerView
-        view = PlayerView.__new__(PlayerView)
-        view.pack_kind = PackKind.UPDATE
-        self.assertEqual(view._default_strategy_for_top("config", False),
-                         Strategy.REPLACE_SAME.value)
-        self.assertEqual(view._default_strategy_for_top("kubejs", False),
-                         Strategy.REPLACE_SAME.value)
-        self.assertEqual(view._default_strategy_for_top("mods", False),
-                         Strategy.FULL_MATCH.value)
-        self.assertEqual(view._default_strategy_for_top("options.txt", True),
-                         Strategy.REPLACE_SAME.value)
-        view.pack_kind = PackKind.EXPORT
-        self.assertEqual(view._default_strategy_for_top("config", False),
-                         Strategy.FULL_MATCH.value)
-
-    def test_end_to_end_user_files_survive(self):
-        """diff → REPLACE_SAME → execute_plan：玩家本地文件必须还在。"""
-        from app.config import Strategy
-        from app.core.differ import diff_packs_parallel
-        from app.core.updater import build_plan, execute_plan
-        with tempfile.TemporaryDirectory(prefix="easier-e2e-") as td:
-            tmp = Path(td)
-            old = tmp / "instance"
-            new = tmp / "overrides"
-            _write(old / "mods" / "m.jar", "M")
-            _write(old / "config" / "shipped.toml", "a=1")
-            _write(old / "config" / "user-only.toml", "b=2")
-            _write(new / "config" / "shipped.toml", "a=2")
-
-            diff = diff_packs_parallel(old, new, whitelist=["mods"],
-                                       index_hashes={})
-            self.assertTrue(any(c.rel_path == Path("config")
-                                for c in diff.modified))
-            plan = build_plan(diff, {"config": True},
-                              {"config": Strategy.REPLACE_SAME.value},
-                              old_root=old, new_root=new)
-            report = execute_plan(plan, old, new, use_trash=True)
-            self.assertEqual(report["failed"], [])
-            self.assertEqual((old / "config" / "shipped.toml").read_text(),
-                             "a=2")
-            self.assertEqual((old / "config" / "user-only.toml").read_text(),
-                             "b=2", "玩家本地文件被删了！")
+        # 回滚后不留临时目录
+        leftovers = [p.name for p in old.iterdir()
+                     if p.name.startswith(".") and "pulses" in p.name]
+        self.assertEqual(leftovers, [])
 
 
 # ======================================================================
@@ -570,8 +458,8 @@ class TestPlayerStateMachine(unittest.TestCase):
                                side_effect=lambda: installed.append(1)), \
                 mock.patch.object(pv, "execute_plan",
                                   return_value={"applied": 0, "deleted": 0,
-                                                "skipped": 0, "failed": [],
-                                                "trash_dir": None}):
+                                                "skipped": 0,
+                                                "failed": []}):
             self.pv._start_apply()
         self.assertEqual(installed, [1], "应用阶段没有安装关闭守卫")
         self.assertEqual(self.pv._phase, pv._PHASE_APPLY)

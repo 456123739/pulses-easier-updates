@@ -12,6 +12,7 @@ database.py — 数据库路径与配置管理
 """
 
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -19,6 +20,18 @@ DB_FORMAT_VERSION = 1
 
 _APP_DIR = Path.home() / ".pulses_easier"
 _APP_CFG = _APP_DIR / "config.json"
+
+
+def _atomic_write_text(path: Path, text: str) -> bool:
+    """tmp + os.replace：避免断电/崩溃留下半截 JSON（读侧会静默回默认值）。"""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 DEFAULT_WHITELIST = ["mods", "resourcepacks", "shaderpacks"]
 DEFAULT_SCAN_LIST = DEFAULT_WHITELIST
@@ -263,13 +276,8 @@ def load_app_config() -> dict:
 
 
 def save_app_config(cfg: dict):
-    try:
-        _APP_DIR.mkdir(parents=True, exist_ok=True)
-        _APP_CFG.write_text(
-            json.dumps(cfg, ensure_ascii=False, indent=2),
-            encoding="utf-8")
-    except Exception:  # noqa: BLE001, S110
-        pass
+    _atomic_write_text(
+        _APP_CFG, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 
 def get_db_path() -> Path | None:
@@ -346,12 +354,9 @@ def save_db_config(cfg: dict):
     db = get_db_path()
     if not db:
         return
-    try:
-        (db / "config.json").write_text(
-            json.dumps(cfg, ensure_ascii=False, indent=2),
-            encoding="utf-8")
-    except Exception:  # noqa: BLE001, S110
-        pass
+    _atomic_write_text(
+        db / "config.json",
+        json.dumps(cfg, ensure_ascii=False, indent=2))
 
 
 # ----------------------------------------------------------------------
