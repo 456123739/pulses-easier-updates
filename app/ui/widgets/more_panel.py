@@ -74,11 +74,40 @@ class MorePanel(ctk.CTkFrame):
             command=self._on_clean_click)
         self.clean_btn.grid(row=1, column=0, sticky="ew", pady=(0, 4))
 
+        self.db_btn = ctk.CTkButton(
+            self.body, text="数据库位置",
+            height=32, font=Font.SMALL,
+            corner_radius=Size.RADIUS_BUTTON,
+            fg_color=Color.LOG_BG, hover_color=Color.BORDER,
+            text_color=Color.TEXT_PRIMARY,
+            command=self._on_db_click)
+        self.db_btn.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+
         self.size_label = ctk.CTkLabel(
             self.body, text="",
             font=Font.TINY, text_color=Color.TEXT_MUTED,
             fg_color=Color.TRANSPARENT, anchor="w")
-        self.size_label.grid(row=2, column=0, sticky="ew")
+        self.size_label.grid(row=3, column=0, sticky="ew")
+
+    def _on_db_click(self):
+        """数据库位置：切换 / 迁移（原目录永不自动删除）。"""
+        if self._locked:
+            return
+        try:
+            from .db_panel import open_db_settings
+            open_db_settings(self.winfo_toplevel(),
+                             on_done=self._on_db_changed)
+        except Exception as e:  # noqa: BLE001
+            alert(self.winfo_toplevel(), "打不开设置", str(e), level="error")
+
+    def _on_db_changed(self):
+        """数据库换了之后：刷新缓存大小等依赖它的显示。"""
+        try:
+            self._refresh_size()
+            if self.on_change is not None:
+                self.on_change()
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _toggle(self):
         self._collapsed = not self._collapsed
@@ -103,7 +132,7 @@ class MorePanel(ctk.CTkFrame):
         self._locked = locked
         try:
             state = "disabled" if locked else "normal"
-            for btn in (self.prefs_btn, self.clean_btn):
+            for btn in (self.prefs_btn, self.clean_btn, self.db_btn):
                 btn.configure(
                     state=state,
                     fg_color=Color.LOG_BG,
