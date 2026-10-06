@@ -102,8 +102,10 @@ class SplashScreen(ctk.CTkToplevel):
         # ---- logo 容器（place，relx/relwidth 控制左右留白） ----
         self._logo_wrap = ctk.CTkFrame(card, fg_color=_CHROMA_KEY,
                                        corner_radius=0)
-        self._logo_wrap.place(x=self._pad_x, y=24,
-                              relx=self._inner_relx,
+        # 注意：x 与 relx 会**叠加**（Tk 的 place 语义）—— 两个都给会让
+        # 偏移翻倍（logo 和进度条整体右移、右边顶到窗口边）。
+        # 只用 relx/relwidth，绝对像素由 relx 换算。
+        self._logo_wrap.place(y=24, relx=self._inner_relx,
                               relwidth=self._inner_relw)
         self._logo_wrap.grid_columnconfigure(0, weight=1)
 
@@ -154,8 +156,7 @@ class SplashScreen(ctk.CTkToplevel):
 
         # 进度条（lift 到最上层）
         try:
-            self.progress.place(x=self._pad_x, y=progress_y,
-                                relx=self._inner_relx,
+            self.progress.place(y=progress_y, relx=self._inner_relx,
                                 relwidth=self._inner_relw)
             self.progress.lift()
         except Exception as e:  # noqa: BLE001
