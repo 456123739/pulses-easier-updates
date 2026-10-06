@@ -724,9 +724,10 @@ class TestResumeReusesCustomStrategies(_Base):
         src = (_ROOT / "app" / "ui" / "player_view.py").read_text(
             encoding="utf-8")
         i_marker = src.index("# 一开始就落一份续传记录")
-        i_panel = src.index("self._ensure_download_panel(in_progress=True)",
-                            i_marker)
-        self.assertLess(i_marker, i_panel)
+        i_thread = src.index("self._download_thread = threading.Thread",
+                             i_marker)
+        self.assertLess(i_marker, i_thread,
+                        "续传记录必须在下载线程启动前落盘")
 
 
 if __name__ == "__main__":

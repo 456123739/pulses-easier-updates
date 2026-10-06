@@ -37,7 +37,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import ChangeKind
+from ..config import ChangeKind, is_local_only_dir, is_local_only_name
 from ..utils.files import iter_files
 
 DEFAULT_WHITELIST = ["mods"]
@@ -382,7 +382,7 @@ def _top_dirs(root: Path) -> dict[str, Path]:
         return result
     try:
         for entry in root.iterdir():
-            if entry.is_dir():
+            if entry.is_dir() and not is_local_only_dir(entry.name):
                 result[entry.name] = entry
     except OSError:
         pass
@@ -395,7 +395,8 @@ def _root_files(root: Path) -> list[Path]:
     result: list[Path] = []
     try:
         for entry in root.iterdir():
-            if entry.is_file():
+            # 本地专属文件（更新未完成凭证等）永不参与比对
+            if entry.is_file() and not is_local_only_name(entry.name):
                 result.append(Path(entry.name))
     except OSError:
         pass

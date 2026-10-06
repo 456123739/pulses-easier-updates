@@ -42,6 +42,7 @@ app/
   theme.py                  颜色 / 字体 / 尺寸
   core/
     apply_rules.py          「这条变更会不会被应用」的唯一判定（三处共用）
+    pending.py              更新受阻 / 补齐缺口：匹配逻辑 + 「更新未完成」凭证
     differ.py               新旧版本比对（文件级 + 文件夹级）
     downloader.py           RideX 锐驰引擎（多线程槽位池 + 并行耐心池 + 分片直写）
     updater.py              按策略执行更新（失败时事务性回滚）
@@ -60,7 +61,7 @@ app/
     recent.py               最近打开的整合包
     state.py                应用级状态（锁定 / 当前整合包）
   ui/                       主窗口、侧边栏、玩家端、开发者端
-  ui/widgets/               策略表、变更列表、下载面板、槽位面板等
+  ui/widgets/               策略表、变更列表、补入子窗口/提示条、槽位面板等
   utils/                    文件与动画等通用工具
 assets/                     图标等资源
 tests/                      测试与夹具（无 GUI 环境下的桩、本地 HTTP 夹具）
@@ -82,7 +83,9 @@ release/                    发布产物
    工作目录移出系统临时目录并在退出时清理；成功后清 resume；
    失败文案不再说"完成"；扫描期快照化；index 声明的任意路径都能应用；
    非法路径丢弃。
-3. **整洁（P2）**：`apply_rules` 收敛三处重复判定；根目录散文件按内容比对；
+3. **受阻/补齐（v0.5.0 内追加）**：删掉「全部跳过」，改成"补入子窗口 +
+   放弃需强警告 + 整合包内写「更新未完成」凭证 + 下次定位自动追问补齐"。
+4. **整洁（P2）**：`apply_rules` 收敛三处重复判定；根目录散文件按内容比对；
    死配置项要么接上要么删除；单连接续传也校验 `Content-Range`；
    嵌套 `overrides/`；删除 5 个死模块；开发者端一串修复；
    导出原子写 + 可校验的完整性签名。
@@ -148,12 +151,14 @@ python3 tests/test_downloader.py   # 功能：调度 / 换源 / 超时 / 分片�
 python3 tests/test_fixes.py        # 第一批：止血修复回归
 python3 tests/test_devpack.py      # 第二批：闭环回归
 python3 tests/test_polish.py       # 第三批：健壮性与整洁回归
+python3 tests/test_pending.py      # 受阻 / 补齐：逻辑、凭证、子窗口状态机
 python3 tests/e2e_flow.py          # 端到端（会真实下载一个 Modrinth 模组）
+python3 tests/e2e_incomplete.py    # 端到端：受阻 → 放弃 → 凭证 → 补齐
 python3 tests/bench_ab.py          # 与原版的成对 A/B 实测（本地模拟源，约 3.5 分钟）
 python3 tests/realworld_test.py    # 真实网络实战：Modrinth 10 + CurseForge 10（约 70MB，跑完自动删除）
 ```
 
-全部套件共 **218 项**检查通过（32 + 51 + 26 + 23 + 48 + 38）。
+全部套件共 **289 项**检查通过（单元 210 + 端到端 79）。
 
 * 基础测试用桩依赖把 `main.py` 的启动链路整条跑通（组类 → 构造主窗口 →
   双端预热 → boot 任务），但**不覆盖真实 Tk 渲染**——那部分仍建议在

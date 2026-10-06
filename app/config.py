@@ -82,6 +82,27 @@ def default_strategy_for_dir(top: str) -> Strategy:
 # ----------------------------------------------------------------------
 ROOT_MARKER_DIR = "mods"
 
+# ----------------------------------------------------------------------
+# 只属于本地、永不属于更新内容的文件/目录
+#   - 更新未完成凭证（软件写的）
+#   - 旧版回收站（如果还在）
+# 比对时一律忽略，避免软件自己写的文件被当成"更新内容"或被删掉。
+# ----------------------------------------------------------------------
+LOCAL_ONLY_DIRS = frozenset({".pulses_easier", ".pulses_trash"})
+LOCAL_ONLY_FILES = frozenset({
+    "!!!更新未完成-请阅读!!!.txt",
+    "pending_update.json",
+})
+
+
+def is_local_only_name(name: str) -> bool:
+    return str(name) in LOCAL_ONLY_FILES
+
+
+def is_local_only_dir(name: str) -> bool:
+    return str(name) in LOCAL_ONLY_DIRS
+
+
 # 变更类型
 class ChangeKind(str, Enum):
     ADDED    = "added"

@@ -29,7 +29,7 @@ apply_rules.py — 「这条变更是应用还是跳过」的唯一判定
     DELETED    + 完全匹配        → 删除整目录
     DELETED    + 其他策略        → 跳过
 
-未勾选的顶层项 → 全部跳过。
+未勾选的顶层项 → 整项跳过（不参与更新）。
 """
 
 from pathlib import Path

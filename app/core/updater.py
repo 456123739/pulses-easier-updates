@@ -222,6 +222,25 @@ def _replace_dir_skip(src: Path, dst: Path,
 
 
 # ----------------------------------------------------------------------
+# 失败重试（按用户要求：写入失败自动重试 1 次，仍失败才算失败）
+# ----------------------------------------------------------------------
+def _retry_once(fn: Callable[[], bool], log: Callable[[str, str], None],
+                what: str, attempts: int = 2) -> bool:
+    last_exc: Exception | None = None
+    for i in range(max(1, attempts)):
+        try:
+            if fn():
+                return True
+        except Exception as e:  # noqa: BLE001
+            last_exc = e
+        if i + 1 < attempts:
+            log("warn", f"{what} 失败，正在重试一次…")
+    if last_exc is not None:
+        log("error", f"{what} 重试后仍失败：{last_exc}")
+    return False
+
+
+# ----------------------------------------------------------------------
 # 执行
 # ----------------------------------------------------------------------
 def execute_plan(
@@ -281,11 +300,14 @@ def execute_plan(
             _prog(step, total_steps)
             continue
         if strat == Strategy.FULL_MATCH:
-            ok = _replace_dir_full(src, dst, _log)
+            ok = _retry_once(lambda: _replace_dir_full(src, dst, _log),
+                             _log, f"替换目录 {rel.as_posix()}")
         elif strat == Strategy.REPLACE_SAME:
-            ok = _replace_dir_overwrite(src, dst, _log)
+            ok = _retry_once(lambda: _replace_dir_overwrite(src, dst, _log),
+                             _log, f"合并目录 {rel.as_posix()}")
         else:  # SKIP_SAME
-            ok = _replace_dir_skip(src, dst, _log)
+            ok = _retry_once(lambda: _replace_dir_skip(src, dst, _log),
+                             _log, f"合并目录 {rel.as_posix()}")
         if ok:
             report["applied"] += 1
         else:
@@ -305,12 +327,20 @@ def execute_plan(
                 step += 1
                 _prog(step, total_steps)
                 continue
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            report["applied"] += 1
-            cp.done.append(rel.as_posix())
-            if rel.as_posix() in cp.remaining:
-                cp.remaining.remove(rel.as_posix())
+
+            def _copy(s=src, d=dst) -> bool:
+                d.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(s, d)
+                return True
+
+            if _retry_once(_copy, _log, f"写入 {rel.as_posix()}"):
+                report["applied"] += 1
+                cp.done.append(rel.as_posix())
+                if rel.as_posix() in cp.remaining:
+                    cp.remaining.remove(rel.as_posix())
+            else:
+                report["failed"].append(
+                    {"rel": rel.as_posix(), "error": "写入失败（已重试 1 次）"})
         except Exception as e:  # noqa: BLE001
             report["failed"].append(
                 {"rel": rel.as_posix(), "error": str(e)})
@@ -326,21 +356,22 @@ def execute_plan(
 
     # 阶段 2：删除（永久删除）
     for rel in delete_list:
-        try:
-            target = safe_join(old_root, rel)
-            if target.is_dir():
-                shutil.rmtree(target)
-                report["deleted"] += 1
-            elif target.exists():
-                target.unlink()
-                report["deleted"] += 1
-            else:
-                continue
+        def _delete(r=rel) -> bool:
+            t = safe_join(old_root, r)
+            if t.is_dir():
+                shutil.rmtree(t)
+                return True
+            if t.exists():
+                t.unlink()
+                return True
+            return True          # 本来就不在 = 已达成目的
+
+        if _retry_once(_delete, _log, f"删除 {rel.as_posix()}"):
+            report["deleted"] += 1
             cp.done.append(rel.as_posix())
-        except Exception as e:  # noqa: BLE001
+        else:
             report["failed"].append(
-                {"rel": rel.as_posix(), "error": str(e)})
-            _log("error", f"删除失败 {rel.as_posix()}：{e}")
+                {"rel": rel.as_posix(), "error": "删除失败（已重试 1 次）"})
         step += 1
         _prog(step, total_steps)
 

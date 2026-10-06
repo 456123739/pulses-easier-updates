@@ -133,6 +133,53 @@ ENGINE_DESCRIPTION = "多源并发下载引擎"
 ENGINE_BUILD = "G15"
 
 
+# 下载源显示名（面板里只展示名称，点击才用浏览器打开）
+_SOURCE_NAMES = (
+    ("modrinth.com", "Modrinth 官方"),
+    ("forgecdn.net", "CurseForge 官方"),
+    ("curseforge.com", "CurseForge 官方"),
+    ("mcimirror.top", "MCIM 镜像"),
+    ("bmclapi2.bangbang93.com", "BMCLAPI 镜像"),
+    ("gh-proxy.com", "GitHub 代理"),
+    ("gitproxy.", "GitHub 代理"),
+    ("githubusercontent.com", "GitHub"),
+    ("github.com", "GitHub"),
+)
+
+
+def source_display_name(url: str) -> str:
+    """
+    把下载链接映射成人类可读的"源名称"，例如：
+        cdn.modrinth.com/...        → Modrinth 官方
+        mediafilez.forgecdn.net/... → CurseForge 官方
+        mod.mcimirror.top/...       → MCIM 镜像
+    认不出来的就用主机名（比整条 URL 短得多，也够判断来源）。
+    """
+    try:
+        host = urllib.parse.urlparse(str(url)).netloc.lower()
+    except Exception:  # noqa: BLE001
+        return "未知来源"
+    host = host.split("@")[-1].split(":")[0]
+    if not host:
+        return "未知来源"
+    for key, name in _SOURCE_NAMES:
+        if host == key or host.endswith("." + key) or key in host:
+            return name
+    return host
+
+
+def describe_sources(urls) -> list[tuple[str, str]]:
+    """[(源名称, URL), ...]：按出现顺序去重。"""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for u in urls or []:
+        if not isinstance(u, str) or not u or u in seen:
+            continue
+        seen.add(u)
+        out.append((source_display_name(u), u))
+    return out
+
+
 def engine_banner() -> str:
     """一行引擎标识，用于日志与"关于"页。"""
     return (f"{ENGINE_FULL_NAME} {ENGINE_DESCRIPTION}"

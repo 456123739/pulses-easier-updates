@@ -30,6 +30,7 @@ from ..core import resume as resume_mod
 from ..core.apply_rules import is_checked as _rule_is_checked
 from ..core.differ import DiffResult, diff_packs_parallel
 from ..core.downloader import DownloadTask, download_files
+from ..core import pending as pending_logic
 from ..core.mrpack import (
     index_top_folders,
     is_reserved_root_name,
@@ -45,9 +46,10 @@ from ..core.updater import UpdatePlan, build_plan, execute_plan, verify_after_up
 from ..theme import Color, Font, Size
 from .widgets.change_list import ChangeList
 from .widgets.dialog import confirm
-from .widgets.download_panel import DownloadPanel
 from .widgets.drop_zone import DropZone
 from .widgets.log_panel import LogPanel
+from .widgets.pending_banner import PendingBanner
+from .widgets.pending_window import PendingWindow
 from .widgets.progress_bar import SmoothProgressBar
 from .widgets.slot_panel import SlotPanel
 from .widgets.strategy_table import StrategyTable
@@ -101,10 +103,23 @@ class PlayerView(ctk.CTkFrame):
         self._phase: str = _PHASE_IDLE
         self._phase_started_at: float = 0.0
         self._abort_flag: bool = False
-        self._skip_after_abort: bool = False
         self._download_thread: threading.Thread | None = None
         self._last_results: list = []
         self._resume_after_scan: bool = False
+        # ---- 「更新受阻 / 补齐缺口」状态 ----
+        self.pending_banner: PendingBanner | None = None
+        self.pending_window: PendingWindow | None = None
+        # wait  = 本次下载有文件失败，等玩家补入
+        # complete = 上次"放弃"留下的缺口，本次定位整合包后补齐
+        self._pending_mode: str = "wait"
+        self._pending_errors: dict[str, str] = {}
+        self._pending_ready: bool = False     # 已补齐，但还有别的文件在下
+        self._give_up: bool = False
+        self._give_up_missing: list[dict] = []
+        self._pending_auto_opened: bool = False
+        self._record_marker: dict | None = None
+        self._record_cache_root: Path | None = None
+        self._record_rels: list[str] = []
         # 续传时恢复玩家上次自定义的策略
         self._resume_strategies: dict = {}
         self._resume_checked: dict = {}
@@ -211,7 +226,6 @@ class PlayerView(ctk.CTkFrame):
         self.change_list.grid(row=0, column=0, sticky="nsew")
         self.change_list.grid_remove()
 
-        self.download_panel: DownloadPanel | None = None
 
         self.placeholder = ctk.CTkFrame(
             self.right, fg_color=Color.CARD_BG,
@@ -302,12 +316,12 @@ class PlayerView(ctk.CTkFrame):
         else:
             self.main_btn.grid_remove()
 
-        has_download_panel = self.download_panel is not None
-        if self.diff is not None and not has_download_panel:
+        has_pending = self.pending_banner is not None
+        if self.diff is not None and not has_pending:
             self.change_list.grid()
             self.placeholder.grid_remove()
 
-        if not has_download_panel and self.diff is None:
+        if not has_pending and self.diff is None:
             self.change_list.grid_remove()
             self.placeholder.grid()
 
@@ -469,6 +483,8 @@ class PlayerView(ctk.CTkFrame):
                 f"（{self.pack_info.mod_count} 个模组）")
             self.log.log("info", "请拖入更新包（.zip / .eapack）")
             self._set_hint("拖入更新包后即可开始")
+            # 上次"放弃"留下的缺口：等界面稳定后询问是否现在补齐
+            self.after(250, self._check_pending_record)
         self._refresh_ui_state()
 
     def _on_lock_changed(self, locked: bool):
@@ -1268,7 +1284,6 @@ class PlayerView(ctk.CTkFrame):
 
         self._phase = _PHASE_DOWNLOAD
         self._abort_flag = False
-        self._skip_after_abort = False
         # 下载阶段就锁定：否则"处理中"还能拖入新包/清空整合包，
         # 而下载线程仍持有旧目录（会用错的包执行更新）
         self.app_state.lock()
@@ -1317,12 +1332,11 @@ class PlayerView(ctk.CTkFrame):
         # 并把你这次用的策略一并存下来
         self._write_resume()
 
-        self._ensure_download_panel(in_progress=True)
-        if self.download_panel is not None and \
-                not self.download_panel.has_failures():
-            self.download_panel.grid_remove()
-            self.change_list.grid()
-            self.placeholder.grid_remove()
+        self._pending_errors.clear()
+        self._pending_ready = False
+        self._give_up = False
+        self._give_up_missing = []
+        self._pending_auto_opened = False
 
         def _on_started(task: DownloadTask):
             self.after(0, self._handle_file_started, task.rel_path)
@@ -1373,25 +1387,473 @@ class PlayerView(ctk.CTkFrame):
         self._download_thread = threading.Thread(target=worker, daemon=True)
         self._download_thread.start()
 
-    def _ensure_download_panel(self, in_progress: bool):
-        if self.download_panel is not None:
+    # ------------------------------------------------------------------
+    # 「更新受阻」界面：右栏提示条 + 补入子窗口
+    # ------------------------------------------------------------------
+    def _pending_cache_root(self) -> Path | None:
+        """补入文件该放哪个缓存区。
+        wait 模式 = 本次下载的缓存目录；complete 模式 = 凭证里记录的目录。"""
+        if self._pending_mode == "complete":
+            return self._record_cache_root
+        return self._cache_root
+
+    def _task_for(self, rel: str) -> DownloadTask | None:
+        for t in self._download_tasks:
+            if t.rel_path == rel:
+                return t
+        if self._pending_mode == "complete":
+            for it in (self._record_marker or {}).get("missing", []):
+                if str(it.get("rel", "")) == rel:
+                    return DownloadTask(
+                        rel_path=rel,
+                        urls=list(it.get("urls") or []),
+                        sha1=str(it.get("sha1", "") or ""),
+                        sha256=str(it.get("sha256", "") or ""),
+                        sha512=str(it.get("sha512", "") or ""),
+                        file_size=int(it.get("size", 0) or 0))
+        return None
+
+    def _pending_items(self) -> list[dict]:
+        """当前仍需要玩家补入的文件（界面与凭证共用同一份数据）。"""
+        if self._pending_mode == "complete":
+            return [dict(it) for it in
+                    (self._record_marker or {}).get("missing", [])]
+        items: list[dict] = []
+        for rel in list(self._pending_errors):
+            task = self._task_for(rel)
+            if task is None:
+                continue
+            item = pending_logic.entry_from_task(task)
+            item["error"] = self._pending_errors.get(rel, "")
+            items.append(item)
+        return items
+
+    def _compute_missing(self) -> list[dict]:
+        """
+        「放弃」时要写进凭证的缺失清单：缓存里没有、整合包里也没有
+        （或对不上哈希）的文件。这是当场算的，不依赖后续状态。
+        """
+        cache = self._cache_root
+        pack_root = self.pack_info.path if self.pack_info else None
+        out: list[dict] = []
+        for task in self._download_tasks:
+            item = pending_logic.entry_from_task(task)
+            item["error"] = self._pending_errors.get(task.rel_path, "")
             try:
-                self.download_panel.set_in_progress(in_progress)
+                if cache is not None and pending_logic.file_matches(
+                        cache / task.rel_path, item):
+                    continue
+                if pack_root is not None and pending_logic.file_matches(
+                        pack_root / task.rel_path, item):
+                    continue
+            except Exception:  # noqa: BLE001, S110
+                pass
+            out.append(item)
+        return out
+
+    def _ensure_banner(self) -> PendingBanner | None:
+        if self.pending_banner is not None:
+            return self.pending_banner
+        try:
+            self.pending_banner = PendingBanner(
+                self.right,
+                on_open=lambda: self._open_pending_window(),
+                on_give_up=self._on_give_up,
+                on_dismiss=self._on_dismiss_record,
+                mode=self._pending_mode)
+            self.pending_banner.grid(row=0, column=0, sticky="ew")
+            self.change_list.grid_remove()
+            self.placeholder.grid_remove()
+        except Exception:  # noqa: BLE001
+            self.pending_banner = None
+        return self.pending_banner
+
+    def _open_pending_window(self, auto: bool = False):
+        items = self._pending_items()
+        if not items:
+            return
+        if auto and self._pending_auto_opened:
+            return
+        try:
+            win = self.pending_window
+            exists = False
+            if win is not None:
+                try:
+                    exists = bool(win.winfo_exists())
+                except Exception:  # noqa: BLE001
+                    exists = False
+            if win is None or not exists:
+                win = PendingWindow(
+                    self.winfo_toplevel(),
+                    mode=self._pending_mode,
+                    items=items,
+                    on_file_dropped=self._on_file_dropped,
+                    on_retry=self._retry_one,
+                    on_all_resolved=self._on_all_failures_resolved,
+                    on_give_up=self._on_give_up,
+                    on_dismiss=self._on_dismiss_record,
+                    on_hide=self._on_pending_hide,
+                    on_notice=self.log.log)
+                self.pending_window = win
+            else:
+                self._sync_pending_window(items)
+            win.show_window()
+            self._pending_auto_opened = True
+        except Exception as e:  # noqa: BLE001
+            self.log.log("error", f"无法打开补入窗口：{e}")
+            self.pending_window = None
+
+    def _sync_pending_window(self, items: list[dict]):
+        """只做增量同步：新增的补页、已解决的关页，保持玩家当前所在页。"""
+        win = self.pending_window
+        if win is None:
+            return
+        try:
+            want = {str(it.get("rel", "")) for it in items}
+            for rel in list(win.pending_rels()):
+                if rel not in want:
+                    win.resolve(rel, notify=False)
+            for item in items:
+                if str(item.get("rel", "")) not in win.pending_rels():
+                    win.add_item(item)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _refresh_pending_ui(self):
+        items = self._pending_items()
+        n = len(items)
+        banner = self._ensure_banner()
+        if banner is not None:
+            try:
+                banner.set_count(n, mode=self._pending_mode)
+                if n:
+                    banner.grid()
+                else:
+                    banner.grid_remove()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        if n:
+            self._sync_pending_window(items)
+            self.change_list.grid_remove()
+            self.placeholder.grid_remove()
+        else:
+            self._teardown_pending_ui()
+
+    def _teardown_pending_ui(self):
+        win, self.pending_window = self.pending_window, None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        banner, self.pending_banner = self.pending_banner, None
+        if banner is not None:
+            try:
+                banner.destroy()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        self._pending_auto_opened = False
+        try:
+            if self.diff is not None:
+                self.change_list.grid()
+                self.placeholder.grid_remove()
+            else:
+                self.change_list.grid_remove()
+                self.placeholder.grid()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _on_pending_hide(self):
+        """子窗口被收起（不是放弃）：提示条继续亮着，随时可以再打开。"""
+        self.log.log("info", "补入窗口已收起；随时可以点「打开补入窗口」继续")
+
+    def _on_all_failures_resolved(self):
+        """所有缺口都补齐了（子窗口回调）。"""
+        if self._phase == _PHASE_APPLY:
+            return
+        if self._pending_mode == "complete":
+            self._finish_complete_mode()
+            return
+        # 下载线程可能还在跑（别的文件）：等它结束再应用，
+        # 否则合并源会从"写到一半"的缓存目录里取文件
+        if self._phase == _PHASE_DOWNLOAD \
+                and not self._join_download_thread(0.0):
+            self._pending_ready = True
+            self._pending_errors.clear()
+            self._set_hint("已补齐，等待其余下载完成…")
+            self._teardown_pending_ui()
+            return
+        self.log.log("info", "失败文件已全部补入并通过校验，继续应用更新")
+        self._phase = _PHASE_IDLE
+        self._teardown_pending_ui()
+        self._set_hint("补入完成，开始应用更新…")
+        self._start_apply()
+
+    def _enter_blocked_state(self, pending: list[dict]):
+        """下载结束仍有缺口 → 进入受阻态（不应用、不放弃，等玩家补入）。"""
+        self._phase = _PHASE_MANUAL
+        self._write_resume()
+        n = len(pending)
+        self.log.log("warn", f"{n} 个文件所有下载源都失败了，需要手动补入")
+        self._set_hint(f"更新受阻：还差 {n} 个文件", color=Color.WARNING)
+        self._ensure_banner()
+        self._pending_auto_opened = False
+        self._open_pending_window(auto=True)
+        self._refresh_pending_ui()
+        self._refresh_ui_state()
+
+    def _on_give_up(self):
+        if self._phase == _PHASE_APPLY:
+            return
+        pending = self._pending_items()
+        if not pending:
+            return
+        names = "\n".join("· " + str(it.get("rel", ""))
+                          for it in pending[:10])
+        if len(pending) > 10:
+            names += f"\n…… 还有 {len(pending) - 10} 个"
+        confirm(
+            self.winfo_toplevel(),
+            "放弃补齐？",
+            f"还有 {len(pending)} 个文件没有补入：\n\n{names}\n\n"
+            f"放弃后软件会**立刻完成本次更新**，但整合包里会缺少这些文件。\n"
+            f"软件会在整合包内写入「!!!更新未完成-请阅读!!!.txt」与给程序看的"
+            f"记录文件；下次定位这个整合包时会提醒你补齐。\n\n"
+            f"其余仍在下载的文件会继续下完。确定放弃吗？",
+            confirm_text="放弃并完成更新",
+            cancel_text="继续补齐",
+            level="error",
+            danger=True,
+            on_result=self._do_give_up)
+
+    def _do_give_up(self, ok: bool):
+        if not ok:
+            return
+        self._give_up = True
+        self._give_up_missing = self._compute_missing()
+        n = len(self._give_up_missing)
+        self.log.log("warn", f"已选择放弃补齐（{n} 个文件将记为缺失），"
+                             f"其余下载会继续完成")
+        self._teardown_pending_ui()
+        if self._phase == _PHASE_DOWNLOAD \
+                and not self._join_download_thread(0.0):
+            # 还有文件在下：等下载收尾，由 _on_download_done 接手应用
+            self._set_hint("正在等待其余下载完成…", color=Color.WARNING)
+            return
+        self._phase = _PHASE_IDLE
+        self._set_hint("已放弃补齐，开始应用更新…", color=Color.WARNING)
+        self._start_apply()
+
+    def _on_dismiss_record(self):
+        """补齐模式里点「不再提醒」：删掉整合包里的凭证。"""
+        pack_root = self.pack_info.path if self.pack_info else None
+        if pack_root is not None:
+            pending_logic.clear_marker(pack_root)
+            self.log.log("info", "已删除整合包里的「更新未完成」提示文件")
+        self._pending_mode = "wait"
+        self._record_marker = None
+        self._record_cache_root = None
+        self._record_rels = []
+        self._pending_errors.clear()
+        self._teardown_pending_ui()
+        self._set_hint("已跳过补齐（记录已删除）")
+        self._refresh_ui_state()
+
+    # ------------------------------------------------------------------
+    # 重新下载单个文件 / 补齐模式
+    # ------------------------------------------------------------------
+    def _retry_one(self, rel: str, report):
+        task = self._task_for(rel)
+        cache = self._pending_cache_root()
+        if task is None or cache is None:
+            try:
+                report("failed", "缺少这个文件的下载信息")
             except Exception:  # noqa: BLE001, S110
                 pass
             return
         try:
-            self.download_panel = DownloadPanel(
-                self.right,
-                failed_items=[],
-                on_file_dropped=self._on_file_dropped,
-                on_skip_all=self._on_skip_all_failed,
-                in_progress=in_progress,
-                on_notice=self.log.log,
-                on_all_resolved=self._on_all_failures_resolved)
-            self.download_panel.grid(row=0, column=0, sticky="nsew")
+            cache.mkdir(parents=True, exist_ok=True)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        def worker():
+            ok, msg = False, ""
+            try:
+                res = download_files([task], target_dir=cache, threads=1,
+                                     should_abort=lambda: self._abort_flag)
+                if res and res[0].ok:
+                    ok = True
+                else:
+                    msg = (res[0].error if res else "") or "仍然连不上"
+            except Exception as e:  # noqa: BLE001
+                ok, msg = False, str(e)
+            self.after(0, lambda o=ok, m=msg:
+                       self._on_retry_done(rel, o, m, report))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_retry_done(self, rel: str, ok: bool, msg: str, report):
+        if ok:
+            self._mark_completed(rel)
+            self._pending_errors.pop(rel, None)
+            self.log.log("info", f"重新下载成功：{rel}")
+        else:
+            self.log.log("warn", f"重新下载失败：{rel}（{msg}）")
+        try:
+            report("ok" if ok else "failed", msg)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        self._refresh_pending_ui()
+
+    def _check_pending_record(self):
+        """
+        定位整合包后核对"上次更新未完成"的凭证。
+        只在干净状态（没有装更新包、没有比对结果）时询问，避免打断正在进行的流程。
+        """
+        if self._phase != _PHASE_IDLE or self.pack_info is None:
+            return
+        if self.update_zip is not None or self.diff is not None:
+            return
+        try:
+            res = pending_logic.check_marker(self.pack_info.path)
         except Exception:  # noqa: BLE001
-            self.download_panel = None
+            return
+        if not res.get("has"):
+            return
+        if res.get("resolved"):
+            pending_logic.clear_marker(self.pack_info.path)
+            self.log.log("info", "上次更新缺少的文件已经补齐，"
+                                 "已清理整合包里的提示文件")
+            return
+
+        marker = res["marker"] or {}
+        outstanding = res["outstanding"] or []
+        n = len(outstanding)
+        names = "\n".join("· " + str(it.get("rel", ""))
+                          for it in outstanding[:10])
+        if n > 10:
+            names += f"\n…… 还有 {n - 10} 个"
+        state = {"no_remind": False}
+
+        def _on_checkbox(val: bool):
+            state["no_remind"] = bool(val)
+
+        def _on_result(ok: bool):
+            if ok:
+                self._enter_complete_mode(marker, outstanding)
+            elif state["no_remind"]:
+                self._on_dismiss_record()
+
+        self.log.log("warn", f"这个整合包上次更新还差 {n} 个文件没有补入")
+        confirm(
+            self.winfo_toplevel(),
+            "上次更新未完成",
+            f"整合包「{marker.get('pack_name') or self.pack_info.name}」"
+            f"上次更新还差 {n} 个文件：\n\n{names}\n\n"
+            f"现在补齐吗？（补齐后本次更新才算完整）",
+            confirm_text="现在补齐",
+            cancel_text="稍后",
+            level="warn",
+            on_result=_on_result,
+            extra_checkbox=("不再提醒", _on_checkbox))
+
+    def _enter_complete_mode(self, marker: dict, outstanding: list[dict]):
+        self._pending_mode = "complete"
+        self._record_marker = dict(marker)
+        self._record_marker["missing"] = [dict(it) for it in outstanding]
+        self._record_rels = [str(it.get("rel", "")) for it in outstanding]
+        cache = str(marker.get("cache_root", "") or "")
+        root = Path(cache) if cache else None
+        if root is None:
+            root = self._resolve_cache_root(Path(marker.get("update_zip", ""))
+                                            if marker.get("update_zip")
+                                            else Path("pending"))
+        if root is not None:
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except Exception:  # noqa: BLE001, S110
+                pass
+        self._record_cache_root = root
+        self._pending_errors = {str(it.get("rel", "")): "上次更新未完成"
+                                for it in outstanding}
+        self.log.log("warn", f"上次更新还差 {len(outstanding)} 个文件，"
+                             f"补齐后本次更新才完整")
+        self._ensure_banner()
+        self._pending_auto_opened = False
+        self._open_pending_window(auto=True)
+        self._refresh_pending_ui()
+        self._set_hint(f"补齐上次更新：还差 {len(outstanding)} 个文件",
+                       color=Color.WARNING)
+        self._refresh_ui_state()
+
+    def _finish_complete_mode(self):
+        """补齐完成：用只含这些文件的补丁计划走同一套 execute_plan。"""
+        if self.pack_info is None:
+            return
+        rels = [Path(r) for r in self._record_rels if r]
+        cache = self._record_cache_root
+        pack_root = self.pack_info.path
+        if not rels or cache is None:
+            return
+        self._phase = _PHASE_APPLY
+        self.app_state.lock()
+        self._install_close_guard()
+        self._set_button_state(_BTN_BUSY)
+        self._set_hint("正在补齐上次更新的文件…")
+        self.log.log("info", f"开始补齐 {len(rels)} 个文件…")
+
+        def _log(level: str, msg: str):
+            self.after(0, self.log.log, level, msg)
+
+        def worker():
+            try:
+                plan = UpdatePlan(copy=list(rels))
+                report = execute_plan(plan, pack_root, cache, log=_log)
+                failed = verify_after_update(plan, pack_root, cache)
+                self.after(0, lambda r=report, f=failed:
+                           self._on_complete_done(r, f))
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)
+                self.after(0, lambda m=msg: self._on_complete_error(m))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_complete_done(self, report: dict, verify_failed: list):
+        problems = len(report.get("failed", [])) + len(verify_failed)
+        pack_root = self.pack_info.path if self.pack_info else None
+        if problems:
+            self.log.log("error", f"补齐完成，但有 {problems} 项失败")
+            for item in (report.get("failed", []) + verify_failed)[:10]:
+                self.log.log("error",
+                             f"失败：{item.get('rel')} - {item.get('error')}")
+            self._set_hint(f"补齐未完全成功（{problems} 项失败）",
+                           color=Color.WARNING)
+        else:
+            self.log.log("info", "上次更新已补齐，缺失文件已全部就位")
+            self._set_hint("上次更新已补齐 ✓")
+            if pack_root is not None:
+                pending_logic.clear_marker(pack_root)
+                self.log.log("info", "已清理整合包里的「更新未完成」提示文件")
+        self._pending_mode = "wait"
+        self._record_marker = None
+        self._record_cache_root = None
+        self._record_rels = []
+        self._pending_errors.clear()
+        self._phase = _PHASE_IDLE
+        self.app_state.unlock()
+        self._uninstall_close_guard()
+        self._teardown_pending_ui()
+        self._set_button_state(_BTN_CONFIRM)
+        self._refresh_ui_state()
+
+    def _on_complete_error(self, msg: str):
+        self.log.log("error", f"补齐失败：{msg}")
+        self._set_hint("补齐失败", color=Color.ERROR)
+        self._phase = _PHASE_IDLE
+        self.app_state.unlock()
+        self._uninstall_close_guard()
+        self._set_button_state(_BTN_CONFIRM)
+        self._refresh_ui_state()
 
     def _mark_completed(self, rel: str):
         """记录"这个文件确实下好了"（线程安全：list.append 是原子的）。"""
@@ -1410,40 +1872,13 @@ class PlayerView(ctk.CTkFrame):
     def _handle_file_failed(self, rel: str, urls: list[str], error: str):
         self._active_files.pop(rel, None)
         self._file_speed_samples.pop(rel, None)
-        self.log.log("warn", f"下载失败，加入待补入：{rel}")
-        # 槽位面板按**磁盘策略限制后**的有效并发显示，而不是配置值
-        try:
-            from ..core.downloader import (
-                _get_options,
-                disk_policy_summary,
-                engine_banner,
-                resolve_disk_policy,
-            )
-            policy = resolve_disk_policy(cache_root, _get_options())
-            eff = int(policy.get("multi_slots", 0) or 0)
-            if eff > 0:
-                self.slot_panel.set_slots(eff)
-            self.log.log("info", engine_banner())
-            self.log.log("info", disk_policy_summary(cache_root,
-                                                     _get_options(),
-                                                     with_engine=False))
-        except Exception:  # noqa: BLE001, S110
-            pass
-
-        self._ensure_download_panel(in_progress=True)
-        if self.download_panel is None:
-            return
-        try:
-            self.download_panel.add_item({
-                "rel": rel,
-                "urls": list(urls),
-                "error": error,
-            })
-            self.change_list.grid_remove()
-            self.placeholder.grid_remove()
-            self.download_panel.grid()
-        except Exception:  # noqa: BLE001, S110
-            pass
+        self._pending_errors[rel] = str(error or "")
+        self.log.log("warn", f"下载失败，需要手动补入：{rel}")
+        if self._give_up or self._pending_ready:
+            return          # 已经决定放弃/已补齐，只记录，不再打扰
+        self._ensure_banner()
+        self._open_pending_window(auto=True)
+        self._refresh_pending_ui()
 
     def _handle_file_done(self, rel: str):
         self._active_files.pop(rel, None)
@@ -1534,7 +1969,7 @@ class PlayerView(ctk.CTkFrame):
     def _on_download_done(self, results):
         self.progress.set_file_progress(None)
 
-        # 已经进入应用阶段（例如"全部跳过"的等待线程先一步接手）：
+        # 已经进入应用阶段（例如"放弃"的等待线程先一步接手）：
         # 这里不能再改 phase / 按钮 / 提示
         if self._phase == _PHASE_APPLY:
             return
@@ -1544,14 +1979,14 @@ class PlayerView(ctk.CTkFrame):
 
         if aborted:
             self.log.log("warn", "下载已中止")
-            if self._skip_after_abort:
-                # 用户点了「全部跳过」：由等待线程接手应用，这里只收尾
+            if self._give_up:
                 self._set_hint("正在停止剩余下载…")
                 return
             self._phase = _PHASE_IDLE
             self._set_hint("已中止下载")
             self._uninstall_close_guard()
             self.app_state.unlock()
+            self._teardown_pending_ui()
             self._set_button_state(_BTN_CONFIRM)
             self._refresh_ui_state()
             return
@@ -1559,67 +1994,30 @@ class PlayerView(ctk.CTkFrame):
         self.log.log("info",
                      f"下载完成：成功 {len(results) - len(failed)}，"
                      f"失败 {len(failed)}")
-        # 下载正常收尾：清掉"跳过后续应用"的待办标记，
-        # 后续 _apply_after_abort 会因 phase 已是 APPLY 而自动让路
-        self._skip_after_abort = False
 
-        if not failed:
-            if self._cache_root:
-                resume_mod.clear_resume(self._cache_root)
-            self._destroy_download_panel()
+        pending = self._pending_items()
+        if self._give_up or self._pending_ready or not pending:
+            # 缺口在下载期间被补齐 / 用户已放弃 / 本来就没有缺口 → 继续应用
+            self._pending_ready = False
             self._phase = _PHASE_IDLE
-            self._set_hint("下载完成，开始应用更新…")
+            self._teardown_pending_ui()
+            if self._give_up:
+                self._set_hint("已放弃补齐，开始应用更新…", color=Color.WARNING)
+            else:
+                self._set_hint("下载完成，开始应用更新…")
             self._start_apply()
             return
 
-        # 有文件下不下来：进入「等待手动补入」终态。
-        # 用户补入全部文件 → on_all_resolved 回调继续应用；
-        # 用户点「全部跳过」→ 直接应用。
-        self._phase = _PHASE_MANUAL
-        self._write_resume()
-        if self.download_panel is not None:
-            try:
-                self.download_panel.set_in_progress(False)
-            except Exception:  # noqa: BLE001, S110
-                pass
-        self.change_list.grid_remove()
-        self.placeholder.grid_remove()
-        if self.download_panel is not None:
-            self.download_panel.grid()
-        self._set_hint(f"下载结束，{len(failed)} 个文件待手动补入"
-                       f"（补入完成会自动继续，或点「全部跳过」）")
-        self._refresh_ui_state()
-
-    def _on_all_failures_resolved(self):
-        """DownloadPanel 回调：待补入列表已清空（全部校验通过）。"""
-        if self._phase != _PHASE_MANUAL:
-            return
-        self.log.log("info", "失败文件已全部补入并通过校验，继续应用更新")
-        self._phase = _PHASE_IDLE
-        self._destroy_download_panel()
-        self._set_hint("补入完成，开始应用更新…")
-        self._start_apply()
-
-    def _destroy_download_panel(self):
-        if self.download_panel is not None:
-            try:
-                self.download_panel.destroy()
-            except Exception:  # noqa: BLE001, S110
-                pass
-            self.download_panel = None
-        try:
-            self.change_list.grid()
-            self.placeholder.grid_remove()
-        except Exception:  # noqa: BLE001, S110
-            pass
+        # 仍有下不来的文件 → 进入受阻态，等玩家补入
+        self._enter_blocked_state(pending)
 
     def _on_file_dropped(self, rel_path: str, file_path: Path) -> bool:
-        task = next((t for t in self._download_tasks
-                     if t.rel_path == rel_path), None)
-        if task is None or self._cache_root is None:
+        task = self._task_for(rel_path)
+        cache = self._pending_cache_root()
+        if task is None or cache is None:
             return False
 
-        target = self._cache_root / rel_path
+        target = cache / rel_path
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file_path, target)
@@ -1639,47 +2037,8 @@ class PlayerView(ctk.CTkFrame):
 
         self.log.log("info", f"{rel_path} 校验通过")
         self._mark_completed(rel_path)
+        self._pending_errors.pop(rel_path, None)
         return True
-
-    def _on_skip_all_failed(self):
-        if self._phase == _PHASE_APPLY:
-            return
-        self.log.log("warn", "跳过所有下载失败的文件")
-        if self._phase == _PHASE_DOWNLOAD:
-            # 下载可能仍在进行：先中止并等它真正停下来，再应用。
-            # 否则会在下载线程还在写缓存目录时开始 execute_plan，
-            # 甚至与 _on_download_done 里的那次应用并发写同一个整合包。
-            self._skip_after_abort = True
-            self._abort_flag = True
-            self._set_hint("正在停止剩余下载…")
-            self._destroy_download_panel()
-            thread = self._download_thread
-
-            def _waiter():
-                if thread is not None and thread.is_alive():
-                    thread.join(timeout=60.0)
-                try:
-                    self.after(0, self._apply_after_abort)
-                except Exception:  # noqa: BLE001, S110
-                    pass
-
-            threading.Thread(target=_waiter, daemon=True).start()
-            return
-
-        # 已经是"等待补入"态（下载线程早已结束）
-        self._phase = _PHASE_IDLE
-        self._destroy_download_panel()
-        self._start_apply()
-
-    def _apply_after_abort(self):
-        """「全部跳过」：下载线程停下后继续应用。"""
-        self._skip_after_abort = False
-        if self._phase == _PHASE_APPLY:
-            return
-        self._phase = _PHASE_IDLE
-        self._destroy_download_panel()
-        self._set_hint("已跳过剩余文件，开始应用更新…")
-        self._start_apply()
 
     def _join_download_thread(self, timeout: float = 5.0) -> bool:
         """等下载线程结束。返回是否确认已结束。"""
@@ -1697,7 +2056,7 @@ class PlayerView(ctk.CTkFrame):
         if self._phase == _PHASE_APPLY:
             return
         if self._phase == _PHASE_DOWNLOAD:
-            # 下载还没收尾，等 _on_download_done / _apply_after_abort
+            # 下载还没收尾，等 _on_download_done 接手
             return
         if (self.diff is None or self.pack_info is None
                 or self._overrides_root is None):
@@ -1831,7 +2190,13 @@ class PlayerView(ctk.CTkFrame):
                 self.log.log("error",
                              f"校验失败：{item['rel']} - {item['error']}")
 
-        if not problems:
+        if self._give_up:
+            # 玩家显式放弃补齐：写入"更新未完成"凭证（人看的 txt + 程序看的 json）
+            self._write_pending_record()
+            if self._cache_root is not None:
+                resume_mod.clear_resume(self._cache_root)
+            self._give_up = False
+        elif not problems:
             # 本次更新彻底完成：清掉续传记录，避免下次启动又弹"继续上次更新"
             if self._cache_root is not None:
                 resume_mod.clear_resume(self._cache_root)
@@ -1976,6 +2341,12 @@ class PlayerView(ctk.CTkFrame):
 
     def _force_destroy(self):
         # 退出前清掉解压/合并副本，避免留下 GB 级残留
+        win, self.pending_window = self.pending_window, None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:  # noqa: BLE001, S110
+                pass
         self._discard_merged_source()
         self._cleanup_temp_dir()
         try:
@@ -1984,6 +2355,43 @@ class PlayerView(ctk.CTkFrame):
             top.destroy()
         except Exception:  # noqa: BLE001, S110
             pass
+
+    # ------------------------------------------------------------------
+    def _write_pending_record(self):
+        """把"还缺哪些文件"写进整合包：!!!更新未完成-请阅读!!!.txt + json。"""
+        pack_root = self.pack_info.path if self.pack_info else None
+        if pack_root is None:
+            return
+        missing = list(self._give_up_missing or [])
+        if not missing:
+            missing = self._compute_missing()
+        if not missing:
+            self.log.log("info", "没有实际缺失的文件，不写「更新未完成」提示")
+            return
+        zip_path = str(self.update_zip) if self.update_zip else ""
+        try:
+            fingerprint = (resume_mod.quick_fingerprint(self.update_zip)
+                           if self.update_zip else "")
+        except Exception:  # noqa: BLE001
+            fingerprint = ""
+        marker = pending_logic.build_marker(
+            pack_root,
+            pack_name=self.pack_info.name if self.pack_info else "",
+            pack_version=self.pack_info.version if self.pack_info else "",
+            update_zip=zip_path,
+            update_fingerprint=fingerprint,
+            cache_root=str(self._cache_root or ""),
+            missing=missing)
+        if pending_logic.write_marker(pack_root, marker):
+            self.log.log("warn",
+                         f"已在整合包里写入「{pending_logic.NOTICE_FILENAME}」"
+                         f"（{len(missing)} 个文件缺失），"
+                         f"下次定位本整合包时会提醒补齐")
+            self.log.log("info", f"提示文件位置："
+                                 f"{pending_logic.notice_path(pack_root)}")
+        else:
+            self.log.log("error", "写入「更新未完成」提示文件失败，"
+                                 "请自行记录缺失文件")
 
     # ------------------------------------------------------------------
     def _write_resume(self):
@@ -2074,7 +2482,6 @@ class PlayerView(ctk.CTkFrame):
             pass
         self._phase = _PHASE_IDLE
         self._abort_flag = False
-        self._skip_after_abort = False
         self._resume_after_scan = False
         self._resume_strategies = {}
         self._resume_checked = {}
@@ -2084,7 +2491,15 @@ class PlayerView(ctk.CTkFrame):
         self._discard_merged_source()
         self._cleanup_temp_dir()
 
-        self._destroy_download_panel()
+        self._teardown_pending_ui()
+        self._pending_mode = "wait"
+        self._pending_errors.clear()
+        self._pending_ready = False
+        self._give_up = False
+        self._give_up_missing = []
+        self._record_marker = None
+        self._record_cache_root = None
+        self._record_rels = []
 
         self.strategy_table.set_folders([])
         self.change_list.load(None)

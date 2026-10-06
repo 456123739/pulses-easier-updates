@@ -364,13 +364,14 @@ class TestPlayerStateMachine(unittest.TestCase):
             self.pv._start_apply()
         ex.assert_not_called()
 
-    def test_skip_all_aborts_and_waits_before_applying(self):
+    def test_give_up_applies_immediately_when_download_finished(self):
+        """「放弃」：下载已结束 → 立刻应用（并会把缺失写进凭证）。"""
         import app.ui.player_view as pv
-        self.pv._phase = pv._PHASE_DOWNLOAD
+        self.pv._phase = pv._PHASE_MANUAL
         self.pv._cache_root = Path(self._tmp.name) / "cache2"
         self.pv._cache_root.mkdir(parents=True, exist_ok=True)
         self.pv._download_tasks = [types.SimpleNamespace(rel_path="a")]
-
+        self.pv._pending_errors = {"a": "boom"}
         thread = mock.Mock()
         thread.is_alive.return_value = False
         self.pv._download_thread = thread
@@ -378,13 +379,39 @@ class TestPlayerStateMachine(unittest.TestCase):
         started = []
         with mock.patch.object(self.pv, "_start_apply",
                                side_effect=lambda: started.append(1)):
-            self.pv._on_skip_all_failed()
-            self.assertTrue(self.pv._skip_after_abort)
-            self.assertTrue(self.pv._abort_flag)
-            # after() 在桩里是 no-op，手动触发等待回调
-            self.pv._apply_after_abort()
+            self.pv._do_give_up(True)
         self.assertEqual(started, [1])
-        self.assertFalse(self.pv._skip_after_abort)
+        self.assertTrue(self.pv._give_up)
+        self.assertEqual(self.pv._phase, pv._PHASE_IDLE)
+
+    def test_give_up_waits_for_remaining_downloads(self):
+        """「放弃」不中止其余下载：还有文件在下时先等下载收尾。"""
+        import app.ui.player_view as pv
+        self.pv._phase = pv._PHASE_DOWNLOAD
+        self.pv._cache_root = Path(self._tmp.name) / "cache2b"
+        self.pv._cache_root.mkdir(parents=True, exist_ok=True)
+        self.pv._download_tasks = [types.SimpleNamespace(rel_path="a")]
+        self.pv._pending_errors = {"a": "boom"}
+
+        class _Alive:
+            def is_alive(self):
+                return True
+
+            def join(self, timeout=None):
+                return None
+
+        self.pv._download_thread = _Alive()
+        started = []
+        with mock.patch.object(self.pv, "_start_apply",
+                               side_effect=lambda: started.append(1)):
+            self.pv._do_give_up(True)
+            self.assertEqual(started, [], "还有下载在跑时不该立刻应用")
+            self.assertTrue(self.pv._give_up)
+            self.assertFalse(self.pv._abort_flag, "放弃不该中止其余下载")
+            # 下载收尾后由 _on_download_done 接手应用
+            self.pv._phase = pv._PHASE_DOWNLOAD
+            self.pv._on_download_done([_Res("a", ok=False)])
+        self.assertEqual(started, [1])
 
     def test_download_done_does_not_double_apply(self):
         import app.ui.player_view as pv
@@ -397,13 +424,19 @@ class TestPlayerStateMachine(unittest.TestCase):
     def test_failure_branch_enters_manual_state(self):
         import app.ui.player_view as pv
         self.pv._phase = pv._PHASE_DOWNLOAD
-        self.pv._download_tasks = [types.SimpleNamespace(rel_path="a"),
-                                   types.SimpleNamespace(rel_path="b")]
+        self.pv._download_tasks = [types.SimpleNamespace(
+            rel_path="a", urls=["u"], sha1="", sha256="", sha512="",
+            file_size=0), types.SimpleNamespace(
+            rel_path="b", urls=["u"], sha1="", sha256="", sha512="",
+            file_size=0)]
         self.pv._cache_root = Path(self._tmp.name) / "cache3"
         self.pv._cache_root.mkdir(parents=True, exist_ok=True)
-        self.pv._ensure_download_panel(in_progress=True)
+        # 失败事件先把这一项记为"待补入"
+        self.pv._handle_file_failed("b", ["u"], "boom")
         self.pv._on_download_done([_Res("a"), _Res("b", ok=False)])
         self.assertEqual(self.pv._phase, pv._PHASE_MANUAL)
+        self.assertTrue(self.pv.pending_banner is not None,
+                        "受阻时应亮出提示条")
 
     def test_all_resolved_continues_to_apply(self):
         import app.ui.player_view as pv
@@ -415,30 +448,28 @@ class TestPlayerStateMachine(unittest.TestCase):
         self.assertEqual(started, [1])
         self.assertEqual(self.pv._phase, pv._PHASE_IDLE)
 
-    def test_panel_fires_on_all_resolved(self):
-        from app.ui.widgets.download_panel import DownloadPanel
+    def test_pending_window_fires_on_all_resolved(self):
+        from app.ui.widgets.pending_window import PendingWindow
         fired = []
-        panel = DownloadPanel(
-            None,
-            failed_items=[{"rel": "mods/a.jar", "urls": ["u"], "error": ""}],
+        win = PendingWindow(
+            None, mode="wait",
+            items=[{"rel": "mods/a.jar", "urls": ["u"], "error": ""}],
             on_file_dropped=lambda rel, path: True,
-            on_skip_all=lambda: None,
             on_all_resolved=lambda: fired.append(1))
-        panel._on_files_dropped([Path("/tmp/a.jar")])
-        self.assertFalse(panel.has_failures())
+        win._handle_drop("mods/a.jar", [Path("/tmp/a.jar")])
+        self.assertFalse(win.has_pending())
         self.assertEqual(fired, [1])
 
-    def test_panel_does_not_fire_while_items_remain(self):
-        from app.ui.widgets.download_panel import DownloadPanel
+    def test_pending_window_does_not_fire_while_items_remain(self):
+        from app.ui.widgets.pending_window import PendingWindow
         fired = []
-        panel = DownloadPanel(
-            None,
-            failed_items=[{"rel": "mods/a.jar", "urls": ["u"], "error": ""},
-                          {"rel": "mods/b.jar", "urls": ["u"], "error": ""}],
+        win = PendingWindow(
+            None, mode="wait",
+            items=[{"rel": "mods/a.jar", "urls": ["u"], "error": ""},
+                   {"rel": "mods/b.jar", "urls": ["u"], "error": ""}],
             on_file_dropped=lambda rel, path: rel == "mods/a.jar",
-            on_skip_all=lambda: None,
             on_all_resolved=lambda: fired.append(1))
-        panel._on_files_dropped([Path("/tmp/a.jar")])
+        win._handle_drop("mods/a.jar", [Path("/tmp/a.jar")])
         self.assertEqual(fired, [])
 
     # -- P0-6 -----------------------------------------------------------
