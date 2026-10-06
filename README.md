@@ -188,21 +188,27 @@ python3 tests/test_basic.py        # 基础：编译 / 导入 / 启动链路 / �
 python3 tests/test_downloader.py   # 功能：调度 / 换源 / 超时 / 分片分级 / 进度 / 中止 / 磁盘策略
 python3 tests/test_fixes.py        # 第一批：止血修复回归
 python3 tests/test_devpack.py      # 第二批：闭环回归
-python3 tests/test_polish.py       # 第三批：健壮性与整洁回归
+python3 tests/test_polish.py       # 第三批：健壮性与整洁回归 + 启动引用完整性
 python3 tests/test_pending.py      # 受阻 / 补齐：逻辑、凭证、子窗口状态机
+python3 tests/test_transfer.py     # 应用阶段：搬运 / 原子写 / 跨卷 / 进程级强杀
+python3 tests/test_recover.py      # 健壮性：残渣自检 / 检查点 / 空间预检 / 内容级校验
 python3 tests/e2e_flow.py          # 端到端（会真实下载一个 Modrinth 模组）
 python3 tests/e2e_incomplete.py    # 端到端：受阻 → 放弃 → 凭证 → 补齐
+python3 tests/gui_smoke.py         # 真实 GUI 冒烟（需要 tkinter + DISPLAY，否则自动跳过）
+python3 tests/bench_apply.py       # 应用阶段性能对比（旧做法 vs 新做法）
 python3 tests/bench_ab.py          # 与原版的成对 A/B 实测（本地模拟源，约 3.5 分钟）
-python3 tests/realworld_test.py    # 真实网络实战：Modrinth 10 + CurseForge 10（约 70MB，跑完自动删除）
+python3 tests/realworld_test.py    # 真实网络实战：Modrinth 10 + CurseForge 10
 ```
 
-全部套件共 **289 项**检查通过（单元 210 + 端到端 79）。
+当前合计 **367 项**检查：单元 **264** + 端到端 **82**（`e2e_flow` 41 /
+`e2e_incomplete` 41）+ 真实 GUI **21**。
 
-* 基础测试用桩依赖把 `main.py` 的启动链路整条跑通（组类 → 构造主窗口 →
-  双端预热 → boot 任务），但**不覆盖真实 Tk 渲染**——那部分仍建议在
-  Windows 10 实机上点一遍。
-* `tests/_baseline/downloader_original.py` 是改动前的原文件逐字副本，
-  供 A/B 复现；`tests/_tls/` 是本地 HTTPS 测试用的自签证书。
+* `tests/stubs.py` 把 tkinter / customtkinter 等替换成桩，让测试在没有
+  显示器（甚至没有 tkinter）的机器上也能跑；它只保证**逻辑**正确。
+* `tests/gui_smoke.py` 是唯一跑**真实库 + 真实窗口**的测试：没有
+  `DISPLAY` 或缺少 tkinter 时会打印"跳过"并退出 0。
+  环境搭建方式（本机用"解包 .deb + Xvfb"，不污染系统）见
+  [`docs/测试记录-v0.6.0.md`](docs/测试记录-v0.6.0.md) 第四节。
 
 ## 已知限制 / 后续建议
 
