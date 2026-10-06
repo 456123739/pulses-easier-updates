@@ -31,6 +31,13 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
 _TLS = _HERE / "_tls"
+if not (_TLS / "cert.pem").is_file():
+    # 证书不进版本库：缺失时现场生成（没有 openssl/cryptography 就跳过 HTTPS）
+    try:
+        from make_tls import ensure_certs
+        ensure_certs()
+    except Exception:  # noqa: BLE001
+        pass
 if (_TLS / "cert.pem").is_file():
     os.environ.setdefault("SSL_CERT_FILE", str(_TLS / "cert.pem"))
 
