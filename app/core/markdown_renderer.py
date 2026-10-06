@@ -570,7 +570,7 @@ def open_preview_window(html: str) -> tuple[bool, str]:
             creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
         proc = subprocess.Popen(
-            [sys.executable, "-m", "app.core.preview_worker", str(html_path)],
+            preview_worker_cmd(html_path),
             creationflags=creation_flags,
             close_fds=True,
             stdout=subprocess.DEVNULL,
@@ -585,6 +585,20 @@ def open_preview_window(html: str) -> tuple[bool, str]:
             return True, ""
         except Exception as e2:  # noqa: BLE001
             return False, f"启动预览失败：{e}；浏览器兜底失败：{e2}"
+
+
+def preview_worker_cmd(html_path) -> list[str]:
+    """
+    预览子进程的命令行。
+
+    源码运行：`python -m app.core.preview_worker <html>`
+    打包成 exe：sys.executable 就是本程序，`-m` 不再可用 —— 走
+    `Pulses Easier.exe --preview-worker <html>`，由 main.py 在构建 GUI
+    之前分发（否则会再弹一个主窗口）。
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--preview-worker", str(html_path)]
+    return [sys.executable, "-m", "app.core.preview_worker", str(html_path)]
 
 
 def _watch_preview(proc, html_path: Path):

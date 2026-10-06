@@ -12,7 +12,16 @@ Pulses Easier 程序入口
 """
 
 import sys
+import time
 import traceback
+from pathlib import Path
+
+# 打包成 exe 之后，子进程入口要自己分发：
+# 冻结环境的 sys.executable 就是本 exe，`-m app.core.preview_worker` 不再可用，
+# 所以主程序要能在构建 GUI 之前先把"预览子进程"这类请求接掉。
+if len(sys.argv) >= 3 and sys.argv[1] == "--preview-worker":
+    from app.core.preview_worker import main as _preview_main
+    sys.exit(_preview_main(sys.argv[2:]))
 
 import customtkinter as ctk
 
@@ -50,7 +59,52 @@ def _pick_app_base():
     return FallbackAppBase, False
 
 
+def _setup_frozen_logging() -> None:
+    """
+    打包后（--windowed，没有控制台）把 stdout/stderr 落到日志文件。
+
+    否则进程崩在窗口创建之前，玩家只能报"双击没反应"，我们什么线索都没有。
+    位置：优先 <exe 所在目录>/logs/（便携包），不可写则退回
+         ~/.pulses_easier/logs/。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    stream = None
+    candidates = []
+    try:
+        candidates.append(Path(sys.executable).resolve().parent / "logs")
+    except Exception:  # noqa: BLE001, S110
+        pass
+    candidates.append(Path.home() / ".pulses_easier" / "logs")
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            stream = open(d / "pulses-easier.log", "a",   # noqa: SIM115
+                          encoding="utf-8", buffering=1)
+            break
+        except OSError:
+            continue
+    if stream is None:
+        return
+    sys.stdout = stream
+    sys.stderr = stream
+    try:
+        from app.core import __version__ as _ver
+    except Exception:  # noqa: BLE001
+        _ver = "?"
+    stream.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                 f"启动 Pulses Easier v{_ver} =====\n")
+    print(f"[info] 日志文件：{stream.name}")
+
+
 def main():
+    _setup_frozen_logging()
+    try:
+        # 记一行资源目录：出问题时看日志就知道 logo 是从哪读的
+        from app.paths import assets_dir
+        print(f"[info] 资源目录：{assets_dir()}")
+    except Exception:  # noqa: BLE001, S110
+        pass
     try:
         from app.ui.main_window import MainWindow
     except Exception:  # noqa: BLE001

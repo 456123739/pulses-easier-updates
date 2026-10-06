@@ -1,0 +1,76 @@
+name: 打包 Windows beta
+
+# 为什么用 CI 打包：PyInstaller 不能跨平台编译，Windows 的 exe 只能在
+# Windows 上生成。这里借 GitHub 的 windows-latest 机器替我们出包，
+# 产物直接挂到 Release，本地不需要装任何东西。
+on:
+  workflow_dispatch:            # 手动触发：Actions 页面点一下，或 gh 命令
+    inputs:
+      version:
+        description: 版本号（用于 zip 文件名，如 0.6.1）
+        required: false
+        default: "0.6.1"
+  push:
+    tags: ["v*"]                # 推 tag 时自动出包并上传到对应 Release
+
+permissions:
+  contents: write               # 需要写 Release
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"      # 与开发/测试一致的版本
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: 打包前自测（失败只告警，不阻断出包）
+        continue-on-error: true
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: PyInstaller 打包
+        run: python -m PyInstaller --clean --noconfirm pulses-easier.spec
+
+      - name: 组装发布目录 + 压缩
+        shell: pwsh
+        run: |
+          $ver = "${{ inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($ver)) {
+            $ver = "${{ github.ref_name }}".TrimStart("v")
+          }
+          if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "0.6.1" }
+          $out = "pulses-easier-$ver-beta-win64"
+          New-Item -ItemType Directory -Force -Path "dist/$out" | Out-Null
+          Copy-Item -Recurse -Force "dist/Pulses Easier/*" "dist/$out/"
+          # assets 复制到 exe 同级：程序优先读这一份，玩家能直接换 logo
+          Copy-Item -Recurse -Force "assets" "dist/$out/assets"
+          New-Item -ItemType Directory -Force -Path "dist/$out/logs" | Out-Null
+          "" | Set-Content "dist/$out/logs/.keep"
+          Copy-Item -Force README.md, CHANGELOG.md "dist/$out/"
+          Compress-Archive -Path "dist/$out/*" -DestinationPath "dist/$out.zip" -Force
+          Write-Host "产物：dist/$out.zip"
+          Get-Item "dist/$out.zip" | Select-Object Name, Length
+
+      - name: 上传产物（每次运行都能下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulses-easier-windows-beta
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: 挂到 Release（推 tag 时）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
