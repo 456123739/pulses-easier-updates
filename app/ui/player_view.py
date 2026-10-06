@@ -42,7 +42,16 @@ from ..core.mrpack import (
 from ..core.pack_detector import PackKind, detect_pack_kind
 from ..core.pack_info import ModpackInfo, read_modpack_info
 from ..core.state import AppState
-from ..core.updater import UpdatePlan, build_plan, execute_plan, verify_after_update
+from ..core import transfer
+from ..core.updater import (
+    PlanSource,
+    SourceLayer,
+    UpdatePlan,
+    build_plan,
+    execute_plan,
+    fill_expectations as updater_fill,
+    verify_after_update,
+)
 from ..theme import Color, Font, Size
 from .widgets.change_list import ChangeList
 from .widgets.dialog import confirm
@@ -84,8 +93,10 @@ class PlayerView(ctk.CTkFrame):
         self.pack_kind: PackKind = PackKind.UNKNOWN
         self._temp_dir: TemporaryDirectory | None = None
         self._new_root: Path | None = None
-        self._merged_root: Path | None = None
         self._overrides_root: Path | None = None
+        # 更新包索引里的期望哈希（rel → {algo: value}）：跨卷搬运时
+        # 顺带做内容级校验，不额外读一遍盘
+        self._index_hashes: dict[str, dict[str, str]] = {}
         # True = 包内没有 overrides/，内容根退化为解压根目录（老格式）；
         # 这种模式下必须排除包自身的元数据文件（否则会被当成更新内容）
         self._overrides_fallback: bool = False
@@ -231,12 +242,13 @@ class PlayerView(ctk.CTkFrame):
             self.right, fg_color=Color.CARD_BG,
             corner_radius=Size.RADIUS_CARD)
         self.placeholder.grid(row=0, column=0, sticky="nsew")
-        ctk.CTkLabel(
+        self._placeholder_text = "请先在侧边栏定位整合包，再拖入更新包"
+        self.placeholder_label = ctk.CTkLabel(
             self.placeholder,
-            text="请先在侧边栏定位整合包，再拖入更新包",
+            text=self._placeholder_text,
             font=Font.BODY, text_color=Color.TEXT_MUTED,
-            fg_color=Color.TRANSPARENT)\
-            .place(relx=0.5, rely=0.5, anchor="center")
+            fg_color=Color.TRANSPARENT)
+        self.placeholder_label.place(relx=0.5, rely=0.5, anchor="center")
 
         self.progress_wrap = ctk.CTkFrame(
             self.right, fg_color=Color.TRANSPARENT,
@@ -305,7 +317,7 @@ class PlayerView(ctk.CTkFrame):
         else:
             self._drop_wrap.grid_remove()
 
-        if pack_ready:
+        if pack_ready and self.diff is not None:
             self.strategy_table.grid()
         else:
             self.strategy_table.grid_remove()
@@ -584,7 +596,6 @@ class PlayerView(ctk.CTkFrame):
             return
 
         # 换包：旧包算出来的 diff/任务/解压目录全部作废
-        self._discard_merged_source()
         self._cleanup_temp_dir()
         self.diff = None
         self.plan = None
@@ -753,7 +764,6 @@ class PlayerView(ctk.CTkFrame):
     def _cleanup_temp_dir(self):
         tmp = self._temp_dir
         self._temp_dir = None
-        self._merged_root = None
         if tmp is None:
             return
         try:
@@ -1025,6 +1035,7 @@ class PlayerView(ctk.CTkFrame):
         except Exception:  # noqa: BLE001, S110
             pass
 
+        self._index_hashes = index_hashes
         compare_root = self._overrides_root
         self.after(0, lambda: self.progress.set(0.0, animate=False))
 
@@ -1805,11 +1816,16 @@ class PlayerView(ctk.CTkFrame):
         def _log(level: str, msg: str):
             self.after(0, self.log.log, level, msg)
 
+        source = PlanSource([SourceLayer(cache, consume=False)])
+        options = self._transfer_options()
+
         def worker():
             try:
                 plan = UpdatePlan(copy=list(rels))
-                report = execute_plan(plan, pack_root, cache, log=_log)
-                failed = verify_after_update(plan, pack_root, cache)
+                updater_fill(plan, source, self._hash_for)
+                report = execute_plan(plan, pack_root, source=source,
+                                      log=_log, **options)
+                failed = verify_after_update(plan, pack_root)
                 self.after(0, lambda r=report, f=failed:
                            self._on_complete_done(r, f))
             except Exception as e:  # noqa: BLE001
@@ -2051,6 +2067,78 @@ class PlayerView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # 阶段 3：应用
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # 搬运参数（首选项 ui.apply_*）：分块大小 / 批次大小 / 批次暂停
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _transfer_options() -> dict:
+        """
+        控制"搬运时不要吃满硬盘"的参数。
+
+        默认值针对 Windows 机械盘/固态盘混合场景：4MiB 一块、每 96MiB
+        让出 12ms。对同卷"移动"完全没有影响（本来就不产生 IO），
+        只有真的跨盘复制时才会生效，代价约 0.01%。
+        """
+        try:
+            opts = db.get_ui_options()
+        except Exception:  # noqa: BLE001
+            opts = {}
+
+        def _num(key: str, default: float) -> float:
+            try:
+                return float(opts.get(key, default))
+            except Exception:  # noqa: BLE001
+                return default
+
+        return {
+            "chunk_bytes": max(
+                256 * 1024, int(_num("apply_chunk_kb", 4096)) * 1024),
+            "pace_ms": max(0.0, min(50.0, _num("apply_chunk_pause_ms", 0))),
+            "batch_bytes": max(
+                4 * 1024 * 1024, int(_num("apply_batch_mb", 96)) * 1024 * 1024),
+            "batch_pause_ms": max(
+                0.0, min(200.0, _num("apply_batch_pause_ms", 12))),
+        }
+
+    def _hash_for(self, rel_key: str) -> str:
+        """索引里这个文件的期望摘要（"sha1:...."），没有就返回空。"""
+        entry = self._index_hashes.get(rel_key) or {}
+        for algo in ("sha1", "sha256", "sha512"):
+            value = entry.get(algo)
+            if value:
+                return f"{algo}:{value}"
+        return ""
+
+    def _make_plan_source(self) -> PlanSource | None:
+        """
+        本次更新的内容来源：**下载缓存优先，其次解压出来的 overrides**。
+
+        和旧实现的区别：不再先把整包复制成 `_merged` 副本（1GB 内容要
+        多写 1GB、还占着 UI 线程），而是按需取——计划里要哪个文件就
+        搬哪个。缓存层保留源文件（方便重试/续传），overrides 是临时
+        解压产物，搬运后直接消耗掉。
+        """
+        layers: list[SourceLayer] = []
+        if self._cache_root is not None:
+            allowed = {t.rel_path for t in self._download_tasks}
+            allowed.update(self._completed_files)
+            layers.append(SourceLayer(self._cache_root, allowed=allowed,
+                                      consume=False))
+        if self._overrides_root is not None:
+            fallback = bool(self._overrides_fallback)
+
+            def _ignore(rel: Path, _fb: bool = fallback) -> bool:
+                # 老格式回退（内容根 = 解压根目录）时，包自身的元数据
+                # 文件绝不能进入应用源
+                return bool(_fb and len(rel.parts) == 1
+                            and is_reserved_root_name(rel.name))
+
+            layers.append(SourceLayer(self._overrides_root, ignore=_ignore,
+                                      consume=True))
+        if not layers:
+            return None
+        return PlanSource(layers)
+
     def _start_apply(self):
         # 并发保护：同一时刻只允许一个 execute_plan 在写整合包
         if self._phase == _PHASE_APPLY:
@@ -2062,18 +2150,16 @@ class PlayerView(ctk.CTkFrame):
                 or self._overrides_root is None):
             return
 
-        merged_root = self._build_merged_source()
-        if merged_root is None:
-            self.log.log("error", "无法构建更新源目录")
+        source = self._make_plan_source()
+        if source is None:
+            self.log.log("error", "无法构建更新源")
             return
 
+        # Tk 控件只能在主线程读：先把策略/勾选取出来再进后台线程
         strategies = self.strategy_table.get_strategies()
         checked = self.strategy_table.get_checked()
-        plan = build_plan(
-            self.diff, checked, strategies,
-            old_root=self.pack_info.path,
-            new_root=merged_root)
-        self.plan = plan
+        old_root = self.pack_info.path
+        options = self._transfer_options()
 
         self._phase = _PHASE_APPLY
         self.app_state.lock()
@@ -2085,8 +2171,6 @@ class PlayerView(ctk.CTkFrame):
         self.progress.set(0.0, animate=False)
         self._set_hint("正在应用更新…")
 
-        old_root = self.pack_info.path
-
         def _log(level: str, msg: str) -> None:
             self.after(0, self.log.log, level, msg)
 
@@ -2094,10 +2178,18 @@ class PlayerView(ctk.CTkFrame):
             self.after(0, self._set_progress, done, total)
 
         def worker():
+            # 生成计划、搬运、校验全部在后台线程：主线程一步都不能卡。
+            # （旧实现会在 UI 线程上先把整包复制成 _merged 副本，
+            #   1GB 的包能把窗口冻住十几秒。）
             try:
-                report = execute_plan(plan, old_root, merged_root,
-                                      log=_log, progress=_progress)
-                failed = verify_after_update(plan, old_root, merged_root)
+                plan = build_plan(self.diff, checked, strategies,
+                                  old_root=old_root, source=source,
+                                  hash_for=self._hash_for)
+                self.plan = plan
+                report = execute_plan(plan, old_root, source=source,
+                                      log=_log, progress=_progress,
+                                      **options)
+                failed = verify_after_update(plan, old_root)
                 self.after(0, lambda r=report, f=failed:
                            self._on_apply_done(r, f))
             except Exception as e:  # noqa: BLE001
@@ -2106,67 +2198,11 @@ class PlayerView(ctk.CTkFrame):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _build_merged_source(self) -> Path | None:
-        if self._temp_dir is None or self._cache_root is None:
-            return None
-        try:
-            merged = Path(self._temp_dir.name) / "_merged"
-            if merged.exists():
-                shutil.rmtree(merged, ignore_errors=True)
-            merged.mkdir(parents=True, exist_ok=True)
-            if self._overrides_root and self._overrides_root.is_dir():
-                for p in self._overrides_root.rglob("*"):
-                    if not p.is_file():
-                        continue
-                    rel = p.relative_to(self._overrides_root)
-                    # 老格式回退（内容根 = 解压根目录）时，包自身的元数据
-                    # 文件绝不能进入应用源
-                    if self._overrides_fallback and len(rel.parts) == 1 \
-                            and is_reserved_root_name(rel.name):
-                        continue
-                    dst = merged / rel
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(p, dst)
-
-            # 缓存目录：**只并入本次更新真正需要的文件**。
-            # 整个目录全量并入时，同名但内容陈旧的遗留文件会覆盖本次
-            # overrides 里的正确文件。
-            if self._cache_root.is_dir():
-                allowed = {t.rel_path for t in self._download_tasks}
-                allowed.update(self._completed_files)
-                for p in self._cache_root.rglob("*"):
-                    if not p.is_file():
-                        continue
-                    rel = p.relative_to(self._cache_root).as_posix()
-                    if rel not in allowed:
-                        continue
-                    dst = merged / rel
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(p, dst)
-            self._merged_root = merged
-            return merged
-        except Exception as e:  # noqa: BLE001
-            self.log.log("error", f"合并更新源失败：{e}")
-            return None
-
-    def _discard_merged_source(self):
-        """应用结束后丢掉合并副本（只占空间，随时可以重建）。"""
-        merged = self._merged_root
-        self._merged_root = None
-        if merged is None:
-            return
-        try:
-            if merged.is_dir():
-                shutil.rmtree(merged, ignore_errors=True)
-        except Exception:  # noqa: BLE001, S110
-            pass
-
     def _set_progress(self, done: int, total: int):
         self.progress.set(done / total if total else 1.0, animate=True)
         self._set_hint(f"应用 {done}/{total}")
 
     def _on_apply_done(self, report: dict, verify_failed: list):
-        self._discard_merged_source()
         self.progress.set(1.0, animate=True)
 
         problems = len(report["failed"]) + len(verify_failed)
@@ -2177,10 +2213,14 @@ class PlayerView(ctk.CTkFrame):
         else:
             self._set_hint("更新完成 ✓")
 
+        moved = int(report.get("moved", 0) or 0)
+        copied = int(report.get("bytes", 0) or 0)
         self.log.log("info",
                      f"更新完成：新增 {report['applied']}，"
                      f"删除 {report['deleted']}，"
-                     f"失败 {len(report['failed'])}")
+                     f"失败 {len(report['failed'])}"
+                     f"（瞬时搬运 {moved} 个文件，"
+                     f"实际复制 {transfer.human_bytes(copied)}）")
 
         if report["failed"] or verify_failed:
             for item in report["failed"][:20]:
@@ -2207,11 +2247,52 @@ class PlayerView(ctk.CTkFrame):
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
         self._uninstall_close_guard()
-        self._set_button_state(_BTN_CONFIRM)
+        if not problems and not self._give_up:
+            # 更新彻底成功 → 复位界面：旧变更列表已经过期，按钮还能再点
+            # 一次"确认更新"的话会拿旧计划重跑一遍（白搬一次）。
+            self._reset_after_apply()
+        else:
+            self._set_button_state(_BTN_CONFIRM)
         self._refresh_ui_state()
 
+    def _reset_after_apply(self):
+        """
+        应用完成后的状态复位。
+
+        旧实现什么都不做：变更列表还显示"~120 个文件待更新"，
+        按钮仍是「确认更新」，再点一次就会用同一份旧计划再搬一遍。
+        """
+        self.plan = None
+        self.diff = None
+        self._merged = []
+        self._download_tasks = []
+        self._completed_files = []
+        try:
+            self.change_list.load(None)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            self.strategy_table.set_folders([])
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            self._teardown_pending_ui()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        self._set_button_state(_BTN_READY)
+        self._set_placeholder("本次更新已全部应用 ✓\n"
+                              "（要再次核对可以点「开始更新」重新比对）")
+        self._set_hint("更新完成 ✓ 本次更新已全部应用"
+                       "（要再次核对可以点「开始更新」重新比对）")
+
+    def _set_placeholder(self, text: str):
+        self._placeholder_text = text
+        try:
+            self.placeholder_label.configure(text=text)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def _on_apply_error(self, msg: str):
-        self._discard_merged_source()
         self.log.log("error", f"更新失败：{msg}")
         self._set_hint("更新失败", color=Color.ERROR)
         self._phase = _PHASE_IDLE
@@ -2340,14 +2421,13 @@ class PlayerView(ctk.CTkFrame):
         self.after(0, self._force_destroy)
 
     def _force_destroy(self):
-        # 退出前清掉解压/合并副本，避免留下 GB 级残留
+        # 退出前清掉解压副本，避免留下 GB 级残留
         win, self.pending_window = self.pending_window, None
         if win is not None:
             try:
                 win.destroy()
             except Exception:  # noqa: BLE001, S110
                 pass
-        self._discard_merged_source()
         self._cleanup_temp_dir()
         try:
             top = self.winfo_toplevel()
@@ -2458,6 +2538,7 @@ class PlayerView(ctk.CTkFrame):
         self.pack_kind = PackKind.UNKNOWN
         self.diff = None
         self._merged = []
+        self._index_hashes = {}
         self.plan = None
         self._new_root = None
         self._overrides_root = None
@@ -2488,7 +2569,6 @@ class PlayerView(ctk.CTkFrame):
         self._baseline_strategies = {}
         self._overrides_fallback = False
         self._strategy_snapshot = {"checked": {}, "strategies": {}}
-        self._discard_merged_source()
         self._cleanup_temp_dir()
 
         self._teardown_pending_ui()

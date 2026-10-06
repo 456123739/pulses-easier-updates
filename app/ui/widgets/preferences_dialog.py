@@ -32,6 +32,7 @@ _INT_KEYS = {
     "single_url_timeout", "single_stall_timeout",
     "single_min_speed_bps",
     "hash_threads", "log_max_lines", "progress_throttle_ms",
+    "apply_chunk_kb", "apply_batch_mb", "boot_min_ms", "boot_max_ms",
     # 下载引擎增量项（1/0 开关 + 整数）
     "part_retry", "http_status_check", "part_meta_enabled",
     "cleanup_residual_parts",
@@ -45,7 +46,8 @@ _INT_KEYS = {
     "multi_part_min_bytes", "target_part_size", "max_part_count",
     "large_file_multi_first_bytes",
 }
-_FLOAT_KEYS = {"speed_window", "read_poll_interval", "disk_probe_timeout"}
+_FLOAT_KEYS = {"speed_window", "read_poll_interval", "disk_probe_timeout",
+               "apply_chunk_pause_ms", "apply_batch_pause_ms"}
 
 
 class _FieldRow:

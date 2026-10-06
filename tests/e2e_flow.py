@@ -320,8 +320,17 @@ def _run(tmp: Path, real: dict) -> int:
     if cache_root is not None:
         check(not (cache_root / "resume.json").exists(),
               "成功应用后 resume.json 已清除")
+        check((cache_root / "mods" / real["filename"]).is_file(),
+              "下载缓存保留（重试/续传不必重下）★T3")
     check(pv._phase == "idle", "phase 回到 idle")
-    check(pv._btn_state == "confirm", "按钮回到「确认更新」")
+    check(pv._btn_state == "ready",
+          "按钮复位为「开始更新」（不再停在「确认更新」）★T4")
+    check(pv.diff is None and pv.plan is None,
+          "应用完成后变更列表/计划已复位 ★T4")
+    check(not pv._download_tasks, "待下载清单已清空 ★T4")
+    if pv._overrides_root is not None:
+        check(not (pv._overrides_root / "mods" / "pack-local.jar").exists(),
+              "overrides 源被「移动」进来（源已消耗，不再多写一份）★T3")
     check(not app.app_state.is_locked, "app_state 已解锁")
 
     after_temp = {str(p) for p in
@@ -348,10 +357,10 @@ def _run(tmp: Path, real: dict) -> int:
     work_items = sorted(p.name for p in work_root.iterdir()) \
         if work_root.is_dir() else []
     print(f"    <db>/cache/temp 内容：{work_items}")
-    check(pv._merged_root is None, "应用完成后合并副本已被丢弃")
-    if pv._temp_dir is not None:
-        merged_dir = Path(pv._temp_dir.name) / "_merged"
-        check(not merged_dir.exists(), "_merged 已从工作目录删除")
+    merged_dirs = [p for p in work_root.rglob("_merged")] \
+        if work_root.is_dir() else []
+    check(not merged_dirs,
+          "不再产生整包 _merged 副本（按需取源，UI 线程不被冻住）★T1")
 
     print("\n── 7) 最终目录 ──")
     for p in sorted(inst.rglob("*")):

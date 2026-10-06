@@ -141,14 +141,18 @@ class TestSafeDirReplace(unittest.TestCase):
         return msgs, (lambda level, msg: msgs.append((level, msg)))
 
     def test_full_replace_keeps_no_backup_on_success(self):
-        from app.core.updater import _replace_dir_full
+        from app.config import Strategy
+        from app.core.updater import PlanSource, SourceLayer, _replace_dir
         old = self.tmp / "instance"
         new = self.tmp / "new"
         _write(old / "config" / "user-only.toml", "gone")
         _write(new / "config" / "shipped.toml", "a=1")
 
         _msgs, log = self._log()
-        ok = _replace_dir_full(new / "config", old / "config", log)
+        src = PlanSource([SourceLayer(new, consume=False)])
+        ok, _res = _replace_dir(Path("config"), Strategy.FULL_MATCH,
+                                old, src, log, chunk_bytes=1 << 20,
+                                pace_ms=0)
         self.assertTrue(ok)
         self.assertTrue((old / "config" / "shipped.toml").is_file())
         self.assertFalse((old / "config" / "user-only.toml").exists())
@@ -158,7 +162,10 @@ class TestSafeDirReplace(unittest.TestCase):
         self.assertEqual(leftovers, [])
 
     def test_full_replace_rolls_back_on_copy_failure(self):
+        from app.config import Strategy
         from app.core import updater
+        from app.core.updater import PlanSource, SourceLayer, _replace_dir
+        from app.core.transfer import TransferResult
         old = self.tmp / "instance"
         new = self.tmp / "new"
         _write(old / "config" / "shipped.toml", "old")
@@ -166,13 +173,12 @@ class TestSafeDirReplace(unittest.TestCase):
         _write(new / "config" / "shipped.toml", "new")
 
         _msgs, log = self._log()
-        shim = types.SimpleNamespace(
-            copytree=mock.Mock(side_effect=OSError("disk full")),
-            rmtree=updater.shutil.rmtree,
-            copy2=updater.shutil.copy2,
-        )
-        with mock.patch.object(updater, "shutil", shim):
-            ok = updater._replace_dir_full(new / "config", old / "config", log)
+        src = PlanSource([SourceLayer(new, consume=False)])
+        boom = mock.Mock(return_value=TransferResult(False, "磁盘空间不足"))
+        with mock.patch.object(updater.transfer, "move_in", boom):
+            ok, _res = _replace_dir(Path("config"), Strategy.FULL_MATCH,
+                                    old, src, log, chunk_bytes=1 << 20,
+                                    pace_ms=0)
 
         self.assertFalse(ok)
         self.assertEqual((old / "config" / "shipped.toml").read_text(), "old")
@@ -187,6 +193,19 @@ class TestSafeDirReplace(unittest.TestCase):
 # ======================================================================
 # P0-2  跨端契约：overrides/ 与保留名
 # ======================================================================
+def _bare_view(tmp):
+    """只带必要属性的 PlayerView（不建窗口）。"""
+    from app.ui.player_view import PlayerView
+    view = PlayerView.__new__(PlayerView)
+    view._cache_root = None
+    view._download_tasks = []
+    view._completed_files = []
+    view._overrides_root = None
+    view._overrides_fallback = False
+    view.log = types.SimpleNamespace(log=lambda *a, **k: None)
+    return view
+
+
 class TestPackContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -249,15 +268,12 @@ class TestPackContract(unittest.TestCase):
             items = PlayerView._root_file_items(root)
             self.assertEqual(items, {"options.txt"})
 
-    def test_merged_source_skips_reserved_in_fallback(self):
+    def test_plan_source_skips_reserved_in_fallback(self):
+        """老格式回退（内容根 = 解压根目录）时，包自身元数据不是更新内容。"""
         from app.ui.player_view import PlayerView
         with tempfile.TemporaryDirectory(prefix="easier-ms-") as td:
             tmp = Path(td)
-            view = PlayerView.__new__(PlayerView)
-            view._temp_dir = types.SimpleNamespace(name=str(tmp / "work"))
-            (tmp / "work").mkdir(parents=True, exist_ok=True)
-            view._cache_root = tmp / "cache"
-            view._cache_root.mkdir()
+            view = _bare_view(tmp)
             root = tmp / "extract"
             _write(root / "modrinth.index.json", "{}")
             _write(root / "ea_manifest.json", "{}")
@@ -265,30 +281,26 @@ class TestPackContract(unittest.TestCase):
             _write(root / "mods" / "a.jar", "J")
             view._overrides_root = root
             view._overrides_fallback = True
-            view.log = types.SimpleNamespace(log=lambda *a, **k: None)
-            merged = view._build_merged_source()
-            self.assertIsNotNone(merged)
-            got = sorted(p.relative_to(merged).as_posix()
-                         for p in merged.rglob("*") if p.is_file())
+            src = view._make_plan_source()
+            self.assertIsNotNone(src)
+            files, _dirs = src.walk_dir(Path("."))
+            got = sorted(f.as_posix() for f in files)
             self.assertEqual(got, ["mods/a.jar", "options.txt"])
+            self.assertIsNone(src.find(Path("modrinth.index.json")))
 
-    def test_merged_source_keeps_legit_overrides_root_changelog(self):
+    def test_plan_source_keeps_legit_overrides_root_changelog(self):
         """真正的 overrides/ 里的 changelog.md 是内容，不能被当成元数据。"""
         from app.ui.player_view import PlayerView
         with tempfile.TemporaryDirectory(prefix="easier-ms2-") as td:
             tmp = Path(td)
-            view = PlayerView.__new__(PlayerView)
-            view._temp_dir = types.SimpleNamespace(name=str(tmp / "work"))
-            (tmp / "work").mkdir(parents=True, exist_ok=True)
-            view._cache_root = tmp / "cache"
-            view._cache_root.mkdir()
+            view = _bare_view(tmp)
             root = tmp / "extract" / "overrides"
             _write(root / "changelog.md", "real content")
             view._overrides_root = root
             view._overrides_fallback = False
-            view.log = types.SimpleNamespace(log=lambda *a, **k: None)
-            merged = view._build_merged_source()
-            self.assertTrue((merged / "changelog.md").is_file())
+            src = view._make_plan_source()
+            self.assertIsNotNone(src)
+            self.assertIsNotNone(src.find(Path("changelog.md")))
 
 
 # ======================================================================
