@@ -2253,6 +2253,8 @@ class PlayerView(ctk.CTkFrame):
 
     def _on_apply_done(self, report: dict, verify_failed: list):
         self.progress.set(1.0, animate=True)
+        # 先记下"这次是不是放弃补齐"：放弃的更新**不算完成**，包不能清
+        gave_up = bool(self._give_up)
 
         problems = len(report["failed"]) + len(verify_failed)
         if problems:
@@ -2296,7 +2298,7 @@ class PlayerView(ctk.CTkFrame):
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
         self._uninstall_close_guard()
-        if not problems and not self._give_up:
+        if not problems and not gave_up and not self._give_up:
             self._release_download_cache()
             # 更新彻底成功 → 复位界面：旧变更列表已经过期，按钮还能再点
             # 一次"确认更新"的话会拿旧计划重跑一遍（白搬一次）。
@@ -2350,11 +2352,22 @@ class PlayerView(ctk.CTkFrame):
         self._freed_cache_bytes = 0
         tail = (f"，已释放下载缓存 {transfer.human_bytes(freed)}"
                 if freed else "")
-        self._set_button_state(_BTN_READY)
-        self._set_placeholder("本次更新已全部应用 ✓\n"
-                              "（要再次核对可以点「开始更新」重新比对）")
+
+        # 更新完成 → 回到"请拖入更新包"：旧包已无意义，留着「开始更新」
+        # 只会让玩家又点一次（重复比对/重复搬运）
+        cleared = False
+        try:
+            self._on_clear_pack_click()
+            cleared = True
+        except Exception:  # noqa: BLE001, S110
+            pass
+        self._phase = _PHASE_IDLE
+        self._set_placeholder(
+            "本次更新已全部应用 ✓\n请拖入下一个更新包（.zip / .eapack）")
         self._set_hint(f"更新完成 ✓ 本次更新已全部应用{tail}"
-                       f"（要再次核对可以点「开始更新」重新比对）")
+                       + ("　·　请拖入下一个更新包" if cleared else ""))
+        if not cleared:
+            self._set_button_state(_BTN_DISABLED)
 
     def _set_placeholder(self, text: str):
         self._placeholder_text = text

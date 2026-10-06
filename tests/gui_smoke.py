@@ -189,10 +189,13 @@ def main() -> int:
         check((inst / "资源包" / "readme.txt").is_file(), "中文目录名正常")
         leftovers = [p.name for p in inst.rglob("*") if "pulses_" in p.name]
         check(not leftovers, "整合包内没有残留临时文件", str(leftovers))
-        check(pv._btn_state == "ready", "按钮复位为「开始更新」", pv._btn_state)
+        check(pv.update_zip is None,
+              "更新完成后清掉了旧更新包（回到「请拖入更新包」状态）")
+        check(pv._btn_state != "ready",
+              "不再留着「开始更新」让玩家重复点", pv._btn_state)
         check(pv.diff is None, "变更列表已复位")
-        check("已全部应用" in getattr(pv, "_placeholder_text", ""),
-              "占位文案显示已完成")
+        check("下一个更新包" in getattr(pv, "_placeholder_text", ""),
+              "提示玩家拖入下一个更新包")
         return True
 
     def step_pending():

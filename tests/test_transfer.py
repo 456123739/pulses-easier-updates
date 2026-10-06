@@ -612,8 +612,35 @@ class TestApplyWiring(unittest.TestCase):
         self.assertIsNone(self.pv.plan)
         self.assertEqual(self.pv._download_tasks, [])
         self.assertEqual(self.pv._phase, "idle")
-        self.assertEqual(self.pv._btn_state, "ready")
+        # 更新完成后回到"请拖入新更新包"：更新包被清掉、按钮不再可点
+        self.assertIsNone(self.pv.update_zip,
+                          "完成后应当清掉旧更新包")
+        self.assertNotEqual(self.pv._btn_state, "ready",
+                            "不该留着「开始更新」让玩家重复点")
         self.assertIn("已全部应用", self.pv._placeholder_text)
+        self.assertIn("下一个更新包", self.pv._placeholder_text)
+
+    def test_after_success_pack_is_cleared_and_button_gone(self):
+        """更新完成后：更新包被清掉、主按钮不再可点（不是留着「开始更新」）。"""
+        _write(self.pv._overrides_root / "mods" / "a.jar", "CONTENT")
+        self.pv.diff = _Diff(added=["mods/a.jar"])
+        self.pv.update_zip = Path(self.tmp / "fake.eapack")
+        self.pv.strategy_table.set_folders(["mods"])
+        self.pv.strategy_table.set_strategies(
+            {"mods": Strategy.REPLACE_SAME.value})
+        self.pv.strategy_table.set_checked_all(True)
+
+        with _SyncAfter(self.pv):
+            self.pv._start_apply()
+            for t in threading.enumerate():
+                if t.name.startswith("Thread-"):
+                    t.join(timeout=5)
+
+        self.assertIsNone(self.pv.update_zip,
+                          "更新完成后应当清掉旧更新包")
+        self.assertNotEqual(self.pv._btn_state, "ready",
+                            "不该回到「开始更新」让玩家重复点")
+        self.assertIn("下一个更新包", self.pv._placeholder_text)
 
     def test_no_second_apply_from_stale_plan(self):
         """复位之后直接再点一次「开始更新」不会拿旧计划重跑。"""
