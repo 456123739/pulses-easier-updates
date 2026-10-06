@@ -57,9 +57,11 @@ class _Change:
 
 class _Diff:
     def __init__(self, added=(), modified=(), deleted=(),
-                 folders_deleted=()):
+                 folders_deleted=(), folders_modified=()):
         self.added = [_Change(r, ChangeKind.ADDED) for r in added]
-        self.modified = [_Change(r, ChangeKind.MODIFIED) for r in modified]
+        self.modified = ([_Change(r, ChangeKind.MODIFIED) for r in modified]
+                         + [_Change(r, ChangeKind.MODIFIED, True)
+                            for r in folders_modified])
         self.deleted = ([_Change(r, ChangeKind.DELETED) for r in deleted]
                         + [_Change(r, ChangeKind.DELETED, True)
                            for r in folders_deleted])
@@ -380,6 +382,82 @@ class TestDirDelete(unittest.TestCase):
                           old_root=self.inst, source=src)
         self.assertEqual(plan.delete, [])
         self.assertEqual([p.as_posix() for p in plan.skip], ["oldpack"])
+
+
+# ======================================================================
+# 批次3：内容级校验 / 缓存回收 / 进度加权
+# ======================================================================
+class TestBatch3(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="easier-b3-")
+        self.tmp = Path(self._tmp.name)
+        self.inst = self.tmp / "instance"
+        self.src = self.tmp / "src"
+        self.inst.mkdir(parents=True)
+        data = b"REAL-CONTENT" * 100
+        _write(self.src / "mods" / "a.jar", data.decode("latin-1"))
+        (self.src / "mods" / "a.jar").write_bytes(data)
+        import hashlib
+        self.sha = hashlib.sha1(data).hexdigest()
+        self.size = len(data)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _plan(self, content: bytes):
+        dst = self.inst / "mods" / "a.jar"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(content)
+        plan = UpdatePlan(copy=[Path("mods/a.jar")])
+        plan.expect_size["mods/a.jar"] = self.size
+        plan.expect_hash["mods/a.jar"] = f"sha1:{self.sha}"
+        return plan
+
+    def test_deep_verify_catches_same_size_corruption(self):
+        """大小一样、内容不对：只有内容级校验能发现。"""
+        plan = self._plan(b"X" * self.size)
+        self.assertEqual(verify_after_update(plan, self.inst), [],
+                         "只比大小时发现不了")
+        failed = verify_after_update(plan, self.inst, deep=True)
+        self.assertEqual([f["rel"] for f in failed], ["mods/a.jar"])
+        self.assertIn("内容校验失败", failed[0]["error"])
+
+    def test_deep_verify_passes_on_good_file_and_reports_stats(self):
+        plan = self._plan(b"REAL-CONTENT" * 100)
+        stats: dict = {}
+        self.assertEqual(
+            verify_after_update(plan, self.inst, deep=True, stats=stats), [])
+        self.assertEqual(stats["deep_files"], 1)
+        self.assertEqual(stats["deep_bytes"], self.size)
+
+    def test_release_pack_cache(self):
+        from app.core import cache as cache_mod
+        root = self.tmp / "cache" / "pack-fp"
+        _write(root / "mods" / "a.jar", "x" * 1000)
+        _write(root / "resume.json", "{}")
+        ok, freed = cache_mod.release_pack_cache(root)
+        self.assertTrue(ok)
+        self.assertGreaterEqual(freed, 1000)
+        self.assertFalse(root.exists())
+        # 不存在时也不报错
+        self.assertEqual(cache_mod.release_pack_cache(root), (True, 0))
+
+    def test_progress_is_weighted_by_file_count(self):
+        for i in range(5):
+            _write(self.src / "config" / f"c{i}.toml", "x")
+        src = PlanSource([SourceLayer(self.src, consume=True)])
+        plan = build_plan(_Diff(folders_modified=["config"]),
+                          {"config": True}, {},
+                          old_root=self.inst, source=src)
+        seen: list[tuple[int, int]] = []
+        execute_plan(plan, self.inst, source=src, space_check=False,
+                     log=lambda *a: None,
+                     progress=lambda d, t: seen.append((d, t)))
+        self.assertTrue(seen)
+        done, total = seen[-1]
+        self.assertEqual(done, total)
+        self.assertGreaterEqual(total, 5,
+                                "整目录替换要按文件数计入进度")
 
 
 if __name__ == "__main__":

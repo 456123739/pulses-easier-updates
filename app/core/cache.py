@@ -149,6 +149,31 @@ def clean_cache() -> tuple[bool, str]:
 # ----------------------------------------------------------------------
 # 启动时清理孤儿 .part
 # ----------------------------------------------------------------------
+def release_pack_cache(cache_root) -> tuple[bool, int]:
+    """
+    释放"某个更新包"的下载缓存（更新彻底完成之后调用）。
+
+    缓存里就是本次下载下来的全部文件——留着只对"重试/续传"有用；
+    更新已经完成时它只是纯占空间。返回 (是否成功, 释放的字节数)。
+    """
+    from pathlib import Path as _Path
+    root = _Path(cache_root)
+    if not root.is_dir():
+        return True, 0
+    size = 0
+    try:
+        for p in root.rglob("*"):
+            if p.is_file():
+                try:
+                    size += p.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    ok, _skip, _locked = _try_remove_dir(root)
+    return ok, size
+
+
 def clean_orphan_parts() -> int:
     """
     扫描 update_packs 下所有残留分片并尝试删除。

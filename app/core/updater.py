@@ -25,6 +25,7 @@ plan 生成规则：
   - 下载缓存保留（方便重试/续传），解压出来的 overrides 搬运后消耗
 """
 
+import hashlib
 import os
 import shutil
 import time
@@ -547,7 +548,14 @@ def execute_plan(
     delete_list = list(dict.fromkeys(plan.delete))
     replace_list = list(dict.fromkeys(plan.replace_dirs))
 
-    total_steps = len(copy_list) + len(delete_list) + len(replace_list)
+    # 进度按"文件数"加权：整目录替换不再只算 1 步
+    # （旧实现里换一个 2 万文件的目录和写一个小文件都是 1 步，进度条会跳）
+    weights: dict[str, int] = {}
+    for rel, _s in replace_list:
+        weights[rel.as_posix()] = max(
+            1, len(plan.dir_files.get(rel.as_posix(), [])))
+    total_steps = (len(copy_list) + len(delete_list)
+                   + sum(weights.values()))
     step = 0
 
     # 开始时先确认放得下：写一半才发现没空间，比一开始就拒绝糟糕得多
@@ -590,7 +598,7 @@ def execute_plan(
         else:
             report["failed"].append(
                 {"rel": rel.as_posix(), "error": "目录操作失败"})
-        step += 1
+        step += weights.get(rel.as_posix(), 1)
         _prog(step, total_steps)
 
     # 阶段 1：文件级新增 + 替换（原子搬运 + 按字节分批让出）
@@ -723,8 +731,23 @@ def _dir_missing(src: Path, dst: Path, max_files: int = 20000
     return missing
 
 
+def _hash_file(path: Path, algo: str) -> str:
+    h = hashlib.new(algo)
+    with open(transfer.sys_path(path), "rb") as f:
+        while True:
+            buf = f.read(1024 * 1024)
+            if not buf:
+                break
+            h.update(buf)
+    return h.hexdigest()
+
+
 def verify_after_update(plan: UpdatePlan, old_root: Path,
-                        new_root: Path | None = None) -> list[dict]:
+                        new_root: Path | None = None, *,
+                        deep: bool = False,
+                        deep_max_file: int = 32 * 1024 * 1024,
+                        deep_budget: int = 256 * 1024 * 1024,
+                        stats: dict | None = None) -> list[dict]:
     """
     更新后校验：不只查"在不在"，还核对**大小/内容**：
       - copy 项：文件存在且大小符合期望
@@ -739,6 +762,34 @@ def verify_after_update(plan: UpdatePlan, old_root: Path,
     failed: list[dict] = []
     old_root = Path(old_root)
     src_root = Path(new_root) if new_root is not None else None
+    budget = max(0, int(deep_budget))
+    deep_done = 0
+    deep_bytes = 0
+
+    def _deep_ok(rel: Path) -> tuple[bool, str]:
+        """内容级校验（只对"索引里有摘要、且不太大"的文件做，预算内）。"""
+        nonlocal budget, deep_done, deep_bytes
+        spec = plan.expect_hash.get(rel.as_posix(), "")
+        algo, _, want = spec.partition(":")
+        if not algo or not want or budget <= 0:
+            return True, ""
+        target = old_root / rel
+        try:
+            size = target.stat().st_size
+        except OSError as e:
+            return False, str(e)
+        if size > deep_max_file or size > budget:
+            return True, ""
+        try:
+            got = _hash_file(target, algo)
+        except Exception as e:  # noqa: BLE001
+            return False, f"读取失败：{e}"
+        budget -= size
+        deep_done += 1
+        deep_bytes += size
+        if got.lower() != want.lower():
+            return False, f"内容校验失败（{algo} 不一致）"
+        return True, ""
 
     def _expect(rel_key: str) -> int:
         size = plan.expect_size.get(rel_key)
@@ -761,6 +812,11 @@ def verify_after_update(plan: UpdatePlan, old_root: Path,
             size = _expect(key)
             if size >= 0 and target.stat().st_size != size:
                 failed.append({"rel": key, "error": "大小与源不一致"})
+                continue
+            if deep:
+                ok, why = _deep_ok(rel)
+                if not ok:
+                    failed.append({"rel": key, "error": why})
         except OSError as e:
             failed.append({"rel": key, "error": str(e)})
 
@@ -799,4 +855,7 @@ def verify_after_update(plan: UpdatePlan, old_root: Path,
         except OSError as e:
             failed.append({"rel": rel.as_posix(), "error": str(e)})
 
+    if stats is not None:
+        stats["deep_files"] = deep_done
+        stats["deep_bytes"] = deep_bytes
     return failed

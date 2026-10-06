@@ -33,7 +33,7 @@ _INT_KEYS = {
     "single_min_speed_bps",
     "hash_threads", "log_max_lines", "progress_throttle_ms",
     "apply_chunk_kb", "apply_batch_mb", "boot_min_ms", "boot_max_ms",
-    "apply_space_check",
+    "apply_space_check", "apply_deep_verify", "apply_clean_cache",
     # 下载引擎增量项（1/0 开关 + 整数）
     "part_retry", "http_status_check", "part_meta_enabled",
     "cleanup_residual_parts",

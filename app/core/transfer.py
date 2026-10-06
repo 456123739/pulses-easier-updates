@@ -117,12 +117,60 @@ def mkdirs(p) -> None:
     os.makedirs(sys_path(p), exist_ok=True)
 
 
+# Windows 上会锁住整合包文件的常见程序（进程名小写，支持前缀匹配）
+_BLOCKER_NAMES = (
+    "javaw", "java", "minecraft", "hmcl", "pcl", "prismlauncher", "multimc",
+    "curseforge", "modrinth", "fabric-installer", "forge", "minecraftlauncher",
+    "xboxapp", "gamingservices",
+)
+_blockers_cache: tuple[float, tuple[str, ...]] = (0.0, ())
+
+
+def running_blockers(max_age_s: float = 10.0) -> list[str]:
+    """
+    Windows 上正在运行、可能锁住整合包文件的程序。
+
+    只在出错时调用一次（结果缓存 10 秒），任何异常都吞掉——不能因为
+    探测失败而改变错误提示的正确性。
+    """
+    global _blockers_cache
+    if not _IS_WINDOWS:
+        return []
+    now = time.time()
+    if now - _blockers_cache[0] < max_age_s:
+        return list(_blockers_cache[1])
+    found: list[str] = []
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout or ""
+        for line in out.splitlines():
+            name = line.split(",")[0].strip().strip('"').lower()
+            if not name:
+                continue
+            for bad in _BLOCKER_NAMES:
+                if name.startswith(bad):
+                    found.append(name)
+                    break
+    except Exception:  # noqa: BLE001
+        found = []
+    _blockers_cache = (now, tuple(found))
+    return found
+
+
 def friendly_os_error(e: BaseException, what: str = "") -> str:
     """把 OSError 翻译成玩家能看懂的话（Windows 上尤其重要）。"""
     prefix = f"{what}：" if what else ""
     if isinstance(e, PermissionError):
+        hint = ""
+        blockers = running_blockers()
+        if blockers:
+            hint = "；检测到 " + "、".join(sorted(set(blockers))) + " 正在运行"
         return (f"{prefix}文件被占用或没有权限"
-                f"（请先关闭游戏 / 启动器 / 杀毒软件后重试）")
+                f"（请先关闭游戏 / 启动器 / 杀毒软件后重试{hint}）")
     if isinstance(e, FileNotFoundError):
         return f"{prefix}文件或目录不存在（可能被移动/删除了）"
     if isinstance(e, OSError) and e.errno == errno.ENOSPC:

@@ -320,8 +320,8 @@ def _run(tmp: Path, real: dict) -> int:
     if cache_root is not None:
         check(not (cache_root / "resume.json").exists(),
               "成功应用后 resume.json 已清除")
-        check((cache_root / "mods" / real["filename"]).is_file(),
-              "下载缓存保留（重试/续传不必重下）★T3")
+        check(not (cache_root / "mods" / real["filename"]).exists(),
+              "更新成功后释放了本次下载缓存（腾空间）★批次3")
     check(pv._phase == "idle", "phase 回到 idle")
     check(pv._btn_state == "ready",
           "按钮复位为「开始更新」（不再停在「确认更新」）★T4")

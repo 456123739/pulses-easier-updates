@@ -244,6 +244,7 @@ class PlayerView(ctk.CTkFrame):
             self.right, fg_color=Color.CARD_BG,
             corner_radius=Size.RADIUS_CARD)
         self.placeholder.grid(row=0, column=0, sticky="nsew")
+        self._freed_cache_bytes = 0
         self._placeholder_text = "请先在侧边栏定位整合包，再拖入更新包"
         self.placeholder_label = ctk.CTkLabel(
             self.placeholder,
@@ -1845,8 +1846,12 @@ class PlayerView(ctk.CTkFrame):
                 plan = UpdatePlan(copy=list(rels))
                 updater_fill(plan, source, self._hash_for)
                 report = execute_plan(plan, pack_root, source=source,
-                                      log=_log, **options)
-                failed = verify_after_update(plan, pack_root)
+                                      log=_log,
+                                      **self._execute_options(options))
+                vstats: dict = {}
+                failed = verify_after_update(
+                    plan, pack_root, deep=bool(options.get("deep_verify")),
+                    stats=vstats)
                 cp_mod.mark_applied(pack_root)
                 self.after(0, lambda r=report, f=failed:
                            self._on_complete_done(r, f))
@@ -2121,7 +2126,15 @@ class PlayerView(ctk.CTkFrame):
             "batch_pause_ms": max(
                 0.0, min(200.0, _num("apply_batch_pause_ms", 12))),
             "space_check": bool(int(_num("apply_space_check", 1))),
+            "deep_verify": bool(int(_num("apply_deep_verify", 1))),
+            "clean_cache": bool(int(_num("apply_clean_cache", 1))),
         }
+
+    @staticmethod
+    def _execute_options(options: dict) -> dict:
+        """挑出 execute_plan 认的参数（deep_verify/clean_cache 是给这里用的）。"""
+        return {k: v for k, v in options.items()
+                if k not in ("deep_verify", "clean_cache")}
 
     def _hash_for(self, rel_key: str) -> str:
         """索引里这个文件的期望摘要（"sha1:...."），没有就返回空。"""
@@ -2209,10 +2222,18 @@ class PlayerView(ctk.CTkFrame):
                                   old_root=old_root, source=source,
                                   hash_for=self._hash_for)
                 self.plan = plan
+                exec_opts = self._execute_options(options)
                 report = execute_plan(plan, old_root, source=source,
                                       log=_log, progress=_progress,
-                                      **options)
-                failed = verify_after_update(plan, old_root)
+                                      **exec_opts)
+                vstats: dict = {}
+                failed = verify_after_update(
+                    plan, old_root, deep=bool(options.get("deep_verify")),
+                    stats=vstats)
+                if vstats.get("deep_files"):
+                    _log("info", f"内容级校验：{vstats['deep_files']} 个文件 / "
+                                 f"{transfer.human_bytes(vstats['deep_bytes'])}"
+                                 f" 全部一致")
                 # 校验也跑完了才写 applied：如果进程死在上面这两步之间，
                 # 检查点会停在 verify，下次启动能发现"上次收尾没做完"
                 cp_mod.mark_applied(old_root)
@@ -2274,12 +2295,30 @@ class PlayerView(ctk.CTkFrame):
         self.app_state.unlock()
         self._uninstall_close_guard()
         if not problems and not self._give_up:
+            self._release_download_cache()
             # 更新彻底成功 → 复位界面：旧变更列表已经过期，按钮还能再点
             # 一次"确认更新"的话会拿旧计划重跑一遍（白搬一次）。
             self._reset_after_apply()
         else:
             self._set_button_state(_BTN_CONFIRM)
         self._refresh_ui_state()
+
+    def _release_download_cache(self):
+        """更新彻底成功 → 释放本次下载缓存（可关）。"""
+        try:
+            if not self._transfer_options().get("clean_cache"):
+                return
+            root = self._cache_root
+            if root is None:
+                return
+            ok, freed = cache_mod.release_pack_cache(root)
+            if ok and freed:
+                self.log.log(
+                    "info", f"已释放本次下载缓存 "
+                            f"{transfer.human_bytes(freed)}")
+                self._freed_cache_bytes = freed
+        except Exception as e:  # noqa: BLE001
+            self.log.log("warn", f"释放下载缓存失败：{e}")
 
     def _reset_after_apply(self):
         """
@@ -2305,11 +2344,15 @@ class PlayerView(ctk.CTkFrame):
             self._teardown_pending_ui()
         except Exception:  # noqa: BLE001, S110
             pass
+        freed = int(getattr(self, "_freed_cache_bytes", 0) or 0)
+        self._freed_cache_bytes = 0
+        tail = (f"，已释放下载缓存 {transfer.human_bytes(freed)}"
+                if freed else "")
         self._set_button_state(_BTN_READY)
         self._set_placeholder("本次更新已全部应用 ✓\n"
                               "（要再次核对可以点「开始更新」重新比对）")
-        self._set_hint("更新完成 ✓ 本次更新已全部应用"
-                       "（要再次核对可以点「开始更新」重新比对）")
+        self._set_hint(f"更新完成 ✓ 本次更新已全部应用{tail}"
+                       f"（要再次核对可以点「开始更新」重新比对）")
 
     def _set_placeholder(self, text: str):
         self._placeholder_text = text
