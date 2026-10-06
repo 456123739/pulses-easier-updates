@@ -169,6 +169,39 @@ class TestRoundTrip(_Base):
         paths = {i["path"] for i in merge_files(pack)}
         self.assertEqual(paths, {"mods/ok.jar", "kubejs/ok.js"})
 
+    def test_nested_source_pack_keeps_overrides(self):
+        """
+        源包把 index 与 overrides 放在一层子目录里时，导出**不能丢掉
+        overrides**（旧实现只认根级 overrides/，会导出成空内容残包）。
+        """
+        from app.core import eapack as ep
+        from app.core.mrpack import merge_files, parse_mrpack
+        root = self.tmp / "nested_src" / "MyPack"
+        _write(root / "modrinth.index.json",
+               json.dumps({"formatVersion": 1, "name": "N",
+                           "versionId": "1", "files": []}))
+        _write(root / "overrides" / "config" / "a.toml", "k = 1\n")
+        zip_path = self.tmp / "nested_src.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for p in (self.tmp / "nested_src").rglob("*"):
+                if p.is_file():
+                    zf.write(p, p.relative_to(self.tmp
+                                              / "nested_src").as_posix())
+        pack, err = parse_mrpack(zip_path)
+        self.assertFalse(err)
+        extract = self.tmp / "nested_extract"
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract)
+        out = self.tmp / "nested.eapack"
+        res = ep.export_eapack(
+            source_dir=extract, source_zip=zip_path, out_path=out,
+            pack=pack, merged_files=merge_files(pack), strategies={},
+            changelog_md="")
+        self.assertIsNotNone(res)
+        with zipfile.ZipFile(out) as zf:
+            names = zf.namelist()
+        self.assertIn("overrides/config/a.toml", names)
+
     def test_no_overrides_still_creates_overrides_entry(self):
         from app.core import eapack as ep
         from app.core.mrpack import OVERRIDES_DIR, merge_files, parse_mrpack

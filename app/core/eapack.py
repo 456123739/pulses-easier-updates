@@ -20,7 +20,12 @@ from pathlib import Path
 
 from .database import get_export_options, get_whitelist
 from .hashing import build_hash_manifest
-from .mrpack import INDEX_FILENAME, OVERRIDES_DIR, MRPack
+from .mrpack import (
+    INDEX_FILENAME,
+    OVERRIDES_DIR,
+    MRPack,
+    locate_content_root,
+)
 
 EAPACK_FORMAT_VERSION = 1
 
@@ -119,7 +124,11 @@ def export_eapack(
         excluded = set()
 
     try:
-        ovr = source_dir / OVERRIDES_DIR
+        # 源包可能把 index 与 overrides 放在一层子目录里（launcher 导出很常见）。
+        # 旧实现在这里只认根级 overrides/，于是嵌套源包会被导出成
+        # "只有 index + 空 overrides/" 的残包 —— overrides 全部静默丢失。
+        content_root, is_fallback = locate_content_root(source_dir)
+        ovr = (source_dir / OVERRIDES_DIR) if is_fallback else content_root
         override_files: list[Path] = []
         if ovr.is_dir():
             for p in ovr.rglob("*"):
