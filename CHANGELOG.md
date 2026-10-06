@@ -1,5 +1,49 @@
 # Pulses Easier 更新日志
 
+## v0.6.1（整包发布）— 静态检查清零 + 真实 GUI 冒烟测试
+
+> 完整包，解压即用。本版不改功能，做三件事：把编辑器报出的问题全部修掉、
+> 把全项目过一遍静态检查、把 UI 测试从"假库"升级到**真实窗口**。
+
+### 一、编辑器报出的 27 条诊断（全部处理，其中 2 条是真 bug）
+
+* **`on_boot_done` 引用了不存在的方法**（`_check_database` /
+  `_log_ignored_count` 在早前重构中被误删，只剩调用点）。
+  取属性即抛 `AttributeError`，被 Tk 回调吞掉——**它后面注册的回调全部失效**：
+  「上次更新没正常结束」和「继续上次更新」两个启动提示从来没出现过。
+  已按历史实现补回，并加了回归测试（扫描 `after(<数字>, self.xxx)`
+  是否真实存在）。
+* **`_try_single_url` 里 `log(...)` 未定义**：走到"206 但续传起点不匹配"
+  这条保护分支时会抛 `NameError`，本该给警告反而把当次下载打挂。
+  已把 `log` 从 `download_files` 一路传进去（顺带移除因此不再使用的
+  `import socket`）。
+* 其余 25 条为静态检查项（返回类型、`None` 判断、`__slots__` 排序、
+  `socket.timeout`→`TimeoutError`、无用的 `noqa`、类型注记、隐式字符串拼接、
+  `ClassVar` 等），不影响行为。
+
+### 二、全项目静态检查（ruff 0.16 + pyflakes 4.0）
+
+| 范围 | 结果 |
+|---|---|
+| `app/` + `main.py` | **0 条**（ruff "All checks passed!"、pyflakes 无输出） |
+| `tests/` | **0 条**（`tests/_baseline/downloader_original.py` 除外：它是 A/B 对照用的**逐字原始副本**，刻意不改，2 条 S110 保留） |
+| `python -m compileall app main.py tests` | 通过 |
+
+新增回归测试（`tests/test_polish.py`）：
+`after` 回调必须真实存在、`on_boot_done()` 不抛异常、`app/` 下每个模块都能 import。
+
+### 三、真实 GUI 测试（`tests/gui_smoke.py`，21 项）
+
+此前所有 UI 测试都跑在 `tests/stubs.py` 的假 tkinter 上，能验证逻辑却
+证明不了真实 customtkinter 调用。现在补上了真实环境（tkinter 8.6 + Xvfb
+虚拟显示 + 真实 customtkinter，**5.2.2 与 6.0.0 两个版本都通过**），
+在真实窗口里跑：创建主窗口 → 定位整合包 → 拖入更新包 → 比对 → 应用 →
+校验文件与界面状态 → 打开「更新受阻」子窗口 → 截图。
+
+### 四、测试
+
+单元 **264** 项 + 端到端 **82** 项 + 真实 GUI **21** 项 = **367 项全部通过**。
+
 ## v0.6.0（整包发布）— 应用阶段重做：移动而非复制 · 原子写入 · 可自愈
 
 > 完整包，解压即用。本版本只做一件事：把"所有文件下载完成之后"的

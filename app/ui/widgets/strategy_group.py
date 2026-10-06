@@ -108,7 +108,7 @@ class StrategyGroup(ctk.CTkFrame):
                 btn.configure(
                     hover_color=(Color.STRATEGY_SELECTED if selected
                                  else Color.BORDER))
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
             if animate:
@@ -116,7 +116,7 @@ class StrategyGroup(ctk.CTkFrame):
             else:
                 try:
                     btn.configure(fg_color=target_bg, text_color=target_tx)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
         if notify and self.on_change:
@@ -130,7 +130,7 @@ class StrategyGroup(ctk.CTkFrame):
                 cur_bg = cur_bg[0]
             if isinstance(cur_tx, (tuple, list)):
                 cur_tx = cur_tx[0]
-        except Exception:
+        except Exception:  # noqa: BLE001
             cur_bg, cur_tx = target_bg, target_tx
 
         steps = max(1, Anim.HOVER_MS // Anim.FRAME_MS)
@@ -146,12 +146,12 @@ class StrategyGroup(ctk.CTkFrame):
                 btn.configure(
                     fg_color=lerp_color(cur_bg, target_bg, t),
                     text_color=lerp_color(cur_tx, target_tx, t))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 return
             if i < steps:
                 try:
                     btn.after(Anim.FRAME_MS, _step, i + 1)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     return
 
         _step(0)

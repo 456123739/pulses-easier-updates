@@ -12,10 +12,8 @@ test_recover.py — 批次2「健壮性」回归测试
 运行：  python3 tests/test_recover.py
 """
 
-import json
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -25,13 +23,14 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                     # noqa: E402
+import stubs
 
-from app.core import checkpoint as cp_mod        # noqa: E402
-from app.core import recover as R                # noqa: E402
-from app.core import transfer as T               # noqa: E402
-from app.core import updater as U                # noqa: E402
-from app.core.updater import (                   # noqa: E402
+from app.config import ChangeKind, Strategy
+from app.core import checkpoint as cp_mod
+from app.core import recover as R
+from app.core import transfer as T
+from app.core import updater as U
+from app.core.updater import (
     InsufficientSpace,
     PlanSource,
     SourceLayer,
@@ -40,7 +39,6 @@ from app.core.updater import (                   # noqa: E402
     execute_plan,
     verify_after_update,
 )
-from app.config import ChangeKind, Strategy      # noqa: E402
 
 
 def _write(path: Path, text: str):
@@ -150,6 +148,7 @@ class TestPlayerViewWiring(unittest.TestCase):
 
     def test_recover_leftovers_is_wired_into_view(self):
         import types
+
         from app.ui.player_view import PlayerView
         with tempfile.TemporaryDirectory(prefix="easier-wr-") as td:
             pack = Path(td) / "instance"
@@ -323,10 +322,11 @@ class TestSpaceCheck(unittest.TestCase):
 
     def test_refuses_before_touching_anything(self):
         plan, src = self._plan()
-        with mock.patch.object(T, "have_space_for",
-                               return_value=(False, "磁盘空间不足：需要约 1GB")):
-            with self.assertRaises(InsufficientSpace) as ctx:
-                execute_plan(plan, self.inst, source=src)
+        with mock.patch.object(
+                T, "have_space_for",
+                return_value=(False, "磁盘空间不足：需要约 1GB")), \
+                self.assertRaises(InsufficientSpace) as ctx:
+            execute_plan(plan, self.inst, source=src)
         self.assertIn("磁盘空间不足", str(ctx.exception))
         self.assertFalse((self.inst / "mods" / "0.jar").exists(),
                          "拒绝之后一个字节都不该写")

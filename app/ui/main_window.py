@@ -7,7 +7,7 @@ main_window.py — 主窗口
 """
 
 from pathlib import Path
-import threading
+from typing import ClassVar
 
 import customtkinter as ctk
 
@@ -151,16 +151,16 @@ class MainWindow(ctk.CTk):
 
     def _boot_theme(self):
         try:
-            from ..theme import Color as _C  # noqa: F401
-            from ..theme import Font as _F  # noqa: F401
-            from ..theme import Size as _S  # noqa: F401
+            from ..theme import Color, Font, Size
+            _ = (Color, Font, Size)      # 只探测"能不能导入"
             return True, ""
         except Exception:  # noqa: BLE001
             return False, "主题加载失败"
 
     def _boot_check_dnd(self):
         try:
-            from tkinterdnd2 import DND_FILES  # noqa: F401
+            from tkinterdnd2 import DND_FILES
+            _ = DND_FILES                # 只探测"能不能导入"
             return True, ""
         except Exception:  # noqa: BLE001
             return False, ""
@@ -194,7 +194,7 @@ class MainWindow(ctk.CTk):
             try:
                 w = cache_mod.clean_orphan_workdirs()
                 self._boot_cleaned_workdirs = w
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001
                 self._boot_cleaned_workdirs = 0
             return True, ""
         except Exception:  # noqa: BLE001
@@ -243,7 +243,7 @@ class MainWindow(ctk.CTk):
             try:
                 handler()
                 return
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S112
                 continue
         try:
             self.destroy()
@@ -358,7 +358,7 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
     # 上次更新被强杀 → 就地自检残渣 + 提示"向前重跑"
     # ------------------------------------------------------------------
-    _RECOVERY_STAGE_LABEL = {
+    _RECOVERY_STAGE_LABEL: ClassVar[dict[str, str]] = {
         "apply": "正在替换目录",
         "copy": "正在写入文件",
         "delete": "正在删除旧文件",

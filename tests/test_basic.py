@@ -15,13 +15,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                    # noqa: E402
+import stubs
 
 GUI_MODULES = ("customtkinter",)                # 需要桩的第三方包
 
@@ -410,7 +411,7 @@ class TestConfigConsistency(unittest.TestCase):
         cls._tmp.cleanup()
 
     # 原项目既有差异（本次不做行为变更，仅记录）
-    KNOWN_PREEXISTING_DIFFS = {"multi_slots"}
+    KNOWN_PREEXISTING_DIFFS: ClassVar[set[str]] = {"multi_slots"}
 
     def test_defaults_match_database(self):
         dl_def = self.dl._DEFAULTS

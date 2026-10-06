@@ -324,7 +324,7 @@ class PreferencesDialog(ctk.CTkToplevel):
                 return db.get_compare_options()
             if key == "ui":
                 return db.get_ui_options()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         return {}
 

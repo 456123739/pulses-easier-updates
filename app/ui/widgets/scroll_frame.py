@@ -22,5 +22,5 @@ class ThinScrollFrame(ctk.CTkScrollableFrame):
         try:
             sb = self._scrollbar
             sb.configure(width=Size.SCROLLBAR_W, corner_radius=3)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass

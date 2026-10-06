@@ -15,7 +15,6 @@ test_downloader.py — 下载器功能测试（本地 simulated 源，不依赖�
 """
 
 import hashlib
-import os
 import sys
 import tempfile
 import threading
@@ -28,9 +27,9 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-from app.core import downloader as dl            # noqa: E402
-from fixture_server import (                      # noqa: E402
-    FixtureServer, STATS, payload)
+from fixture_server import STATS, FixtureServer, payload
+
+from app.core import downloader as dl
 
 
 def set_opts(**kw):
@@ -535,7 +534,7 @@ class TestHashAndProgress(TestBase):
         failed = [r for r in results if not r.ok and not r.aborted]
         ok_list = [r for r in results if r.ok]
         self.assertEqual(len(results) - len(failed), 4,
-                         f"「成功 N」算错（口径见 player_view）")
+                         "「成功 N」算错（口径见 player_view）")
         self.assertEqual(len(ok_list), 4)
         completed = [r.task.rel_path for r in ok_list]
         self.assertEqual(sorted(completed),

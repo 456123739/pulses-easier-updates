@@ -32,7 +32,8 @@ def _openssl() -> bool:
         "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
     ]
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=60)
+        r = subprocess.run(cmd, capture_output=True, timeout=60,
+                           check=False)
         return r.returncode == 0 and (_TLS / "cert.pem").is_file()
     except Exception:  # noqa: BLE001
         return False
@@ -40,11 +41,12 @@ def _openssl() -> bool:
 
 def _cryptography() -> bool:
     try:
+        import datetime
+
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
-        import datetime
     except Exception:  # noqa: BLE001
         return False
     try:
@@ -52,7 +54,7 @@ def _cryptography() -> bool:
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,
                                              "localhost")])
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         cert = (x509.CertificateBuilder()
                 .subject_name(name).issuer_name(name)
                 .public_key(key.public_key())

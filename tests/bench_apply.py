@@ -32,7 +32,7 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-from app.core.updater import (                        # noqa: E402
+from app.core.updater import (
     PlanSource,
     SourceLayer,
     UpdatePlan,
@@ -54,7 +54,7 @@ def _io_write_bytes() -> int:
             for line in f:
                 if line.startswith("write_bytes:"):
                     return int(line.split()[1])
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return 0
 

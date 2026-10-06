@@ -155,7 +155,6 @@ class PlanSource:
         files: list[Path] = []
         dirs: list[Path] = []
         seen: set[str] = set()
-        sub = rel_dir.as_posix()
         for ly in self.layers:
             base = ly.root / rel_dir
             try:

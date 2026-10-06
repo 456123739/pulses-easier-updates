@@ -37,17 +37,16 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                       # noqa: E402
+import stubs
 
 stubs.install()
 
-from app.core import database as db                # noqa: E402
-from app.core import eapack as eapack_mod          # noqa: E402
-from app.core.mrpack import (                      # noqa: E402
+from app.core import database as db
+from app.core import eapack as eapack_mod
+from app.core.mrpack import (
     merge_files,
     parse_mrpack,
 )
-from app.utils.files import sha256_of_file         # noqa: E402
 
 # 真实 Modrinth 文件（运行时会在线刷新；失败则用这里钉住的值）
 _MODRINTH_PROJECT = "terrablender"

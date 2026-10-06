@@ -54,6 +54,7 @@ def _missing_reason() -> str:
         return "没有 DISPLAY（无显示器 / 未启动 Xvfb）"
     try:
         import tkinter  # noqa: F401
+
         import customtkinter  # noqa: F401
         import tkinterdnd2  # noqa: F401
     except Exception as e:  # noqa: BLE001

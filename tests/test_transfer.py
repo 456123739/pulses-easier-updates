@@ -29,11 +29,11 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                     # noqa: E402
+import stubs
 
-from app.core import transfer as T               # noqa: E402
-from app.core import updater as U                # noqa: E402
-from app.core.updater import (                   # noqa: E402
+from app.config import ChangeKind, Strategy
+from app.core import transfer as T
+from app.core.updater import (
     PlanSource,
     SourceLayer,
     UpdatePlan,
@@ -41,7 +41,6 @@ from app.core.updater import (                   # noqa: E402
     execute_plan,
     verify_after_update,
 )
-from app.config import ChangeKind, Strategy      # noqa: E402
 
 
 def _write(path: Path, text: str):
@@ -536,8 +535,8 @@ class TestApplyWiring(unittest.TestCase):
 
     def setUp(self):
         import main as main_mod
-        from app.ui.main_window import MainWindow
         from app.core.differ import DiffResult
+        from app.ui.main_window import MainWindow
         AppBase, _dnd = main_mod._pick_app_base()
         WindowClass = type("WindowClass", (MainWindow, AppBase), {})
         self.app = WindowClass()

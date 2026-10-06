@@ -372,7 +372,7 @@ def cleanup_stale_parts(cache_root: Path) -> int:
                 try:
                     p.unlink()
                     removed += 1
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, S112
                     continue
     except OSError:
         pass

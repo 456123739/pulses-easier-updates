@@ -194,7 +194,9 @@ def export_eapack(
         _prog(step, total_steps, "写入 ea_manifest.json")
         manifest = {
             "format_version": EAPACK_FORMAT_VERSION,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
+            # 本地时间、只给人看（不参与比较/判定），不需要时区
+            "created_at": datetime.now().isoformat(  # noqa: DTZ005
+                timespec="seconds"),
             "pack_name": pack.name,
             "pack_version": version or pack.version_id,
             "game": pack.game,
@@ -406,9 +408,9 @@ def read_changelog(eapack_path: Path) -> str | None:
                 legacy = data.get("changelog_markdown")
                 if legacy:
                     return legacy
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     return None
 

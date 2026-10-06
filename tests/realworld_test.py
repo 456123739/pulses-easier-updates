@@ -71,11 +71,8 @@ def http_json_retry(url, tries=3, timeout=15):
 
 def parallel_map(fn, items, workers=8):
     from concurrent.futures import ThreadPoolExecutor
-    out = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for res in pool.map(fn, items):
-            out.append(res)
-    return out
+        return list(pool.map(fn, items))
 
 
 def pick_spread(pool, want):
@@ -230,8 +227,8 @@ def build_tasks_with_easier(items, work: Path, log=print):
     import stubs
     stubs.install()
     from app.core import differ
-    from app.ui.player_view import PlayerView
     from app.core.downloader import DownloadTask
+    from app.ui.player_view import PlayerView
 
     merged = []
     index_hashes = {}
@@ -354,7 +351,7 @@ def calibrate(url, timeout=60):
             "Range": "bytes=0-262143"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             got = len(r.read())
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     dt = max(time.perf_counter() - t0, 1e-6)
     return {"seconds": dt, "bytes": got,
@@ -626,7 +623,8 @@ def main():
     WORK.mkdir(parents=True, exist_ok=True)
 
     print("\n[2] 用 Easier 自己的逻辑做分类 + 生成下载任务")
-    tasks, merged, targets = build_tasks_with_easier(items, WORK)
+    tasks, _merged, targets = build_tasks_with_easier(items, WORK)
+
 
     print("\n[3] 本次磁盘策略")
     from app.core import downloader as new_dl
@@ -643,8 +641,8 @@ def main():
         ("C RideX 锐驰引擎（本次交付）", new_dl, base_opts, "C"),
     ]
 
-    print("\n[4] 第一回合：全部 %d 个真实 mod（%s）"
-          % (len(tasks), fmt_size(sum(i["file_size"] for i in items))))
+    print(f"\n[4] 第一回合：全部 {len(tasks)} 个真实 mod"
+          f"（{fmt_size(sum(i['file_size'] for i in items))}）")
     summary = {}
     if not args.only_rotate:
         for label, impl, opts, tag in arms:
@@ -654,7 +652,8 @@ def main():
     else:
         print("  （--only-rotate：跳过）")
 
-    total_bytes = sum(i["file_size"] for i in items)
+    _total_bytes = sum(i["file_size"] for i in items)
+
     if summary:
         print("\n" + "=" * 78)
         print("第一回合结果")
@@ -731,7 +730,8 @@ def main():
         print("    Modrinth 镜像 = mod.mcimirror.top/data/...（302 到官方 CDN）")
         print("    CurseForge 官方 = edge.forgecdn.net / mediafilez.forgecdn.net")
         print("    CurseForge 镜像 = mod.mcimirror.top/files/...（302 到官方 CDN）")
-        tbl = source_matrix(items, WORK, args.source_matrix)
+        _tbl = source_matrix(items, WORK, args.source_matrix)
+
         print("\n[7] 换源实战：官方链接写坏 + 镜像兜底")
         fb = mirror_fallback_test(items, WORK, max(1, args.source_matrix - 1))
         bad_ok = sum(1 for _i, only_bad, _ok, _dt in fb if only_bad)

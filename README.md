@@ -203,6 +203,17 @@ python3 tests/realworld_test.py    # 真实网络实战：Modrinth 10 + CurseFor
 当前合计 **367 项**检查：单元 **264** + 端到端 **82**（`e2e_flow` 41 /
 `e2e_incomplete` 41）+ 真实 GUI **21**。
 
+静态检查（项目本身是干净的）：
+
+```bash
+ruff check app main.py tests      # 0 条（tests/_baseline 是逐字对照副本，未纳入）
+pyflakes app main.py              # 无输出
+python -m compileall -q app main.py tests
+```
+
+约定：`except Exception: pass/continue` 这类"尽力而为"的兜底路径统一用
+`# noqa: BLE001, S110`（或 `S112`）标注；`attempt` 里不允许出现裸 except。
+
 * `tests/stubs.py` 把 tkinter / customtkinter 等替换成桩，让测试在没有
   显示器（甚至没有 tkinter）的机器上也能跑；它只保证**逻辑**正确。
 * `tests/gui_smoke.py` 是唯一跑**真实库 + 真实窗口**的测试：没有

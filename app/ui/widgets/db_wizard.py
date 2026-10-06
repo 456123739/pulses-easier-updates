@@ -104,13 +104,12 @@ class DatabaseWizard(ctk.CTkToplevel):
         if not folder:
             return
         root = Path(folder) / "pulses_easier_db"
-        if root.exists():
-            # 若已存在，直接当已有库处理
-            if db.is_valid_database(root):
-                db.set_db_path(root)
-                self.path_var.set(str(root))
-                self._finish(True)
-                return
+        # 已存在且是合法库 → 直接当"已有库"处理
+        if root.exists() and db.is_valid_database(root):
+            db.set_db_path(root)
+            self.path_var.set(str(root))
+            self._finish(True)
+            return
         if db.create_database(root):
             db.set_db_path(root)
             self.path_var.set(str(root))
@@ -138,7 +137,7 @@ class DatabaseWizard(ctk.CTkToplevel):
             self.on_done(ok)
         try:
             self.after(120, self.destroy)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
 
 

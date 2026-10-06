@@ -6,8 +6,8 @@ SHA-256 计算、目录遍历、文件大小格式化、安全路径拼接。
 
 import hashlib
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 
 def sha256_of_file(path: Path, chunk_size: int = 1 << 20) -> str:

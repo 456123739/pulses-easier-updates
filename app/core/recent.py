@@ -18,7 +18,7 @@ _MAX_ITEMS = 8
 def _ensure_dir():
     try:
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -31,7 +31,7 @@ def load_recent() -> list[Path]:
         if not isinstance(data, list):
             return []
         return [Path(p) for p in data if isinstance(p, str)]
-    except Exception:
+    except Exception:  # noqa: BLE001
         return []
 
 
@@ -41,7 +41,7 @@ def _save(paths: list[Path]):
         _RECENT_FILE.write_text(
             json.dumps([str(p) for p in paths], ensure_ascii=False, indent=2),
             encoding="utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -53,7 +53,7 @@ def add_recent(pack_root: Path) -> list[Path]:
     pack_root = Path(pack_root)
     try:
         resolved = str(pack_root.resolve())
-    except Exception:
+    except Exception:  # noqa: BLE001
         resolved = str(pack_root)
 
     items = load_recent()
@@ -69,7 +69,7 @@ def remove_recent(pack_root: Path) -> list[Path]:
     """从最近列表移除某项，返回更新后的列表"""
     try:
         resolved = str(Path(pack_root).resolve())
-    except Exception:
+    except Exception:  # noqa: BLE001
         resolved = str(pack_root)
     items = [p for p in load_recent() if str(p) != resolved]
     _save(items)

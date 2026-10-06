@@ -1063,7 +1063,7 @@ def _set_socket_timeout(resp, timeout: float) -> bool:
 def _get_socket(resp):
     try:
         return resp.fp.raw._sock  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
     try:
         return resp.fp  # type: ignore[attr-defined]

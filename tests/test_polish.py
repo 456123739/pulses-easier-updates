@@ -16,7 +16,6 @@ test_polish.py — 第三批（健壮性与整洁）回归测试
 运行：  python3 tests/test_polish.py
 """
 
-import inspect
 import json
 import sys
 import tempfile
@@ -31,7 +30,7 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                     # noqa: E402
+import stubs
 
 
 def _write(path: Path, text: str):
@@ -109,8 +108,8 @@ class TestApplyRulesAgree(_Base):
                              f"apply_rules 与实际计划不一致：{label}")
 
     def test_unchecked_means_skip_everywhere(self):
-        from app.core.differ import Change
         from app.config import ChangeKind
+        from app.core.differ import Change
         from app.core.updater import build_plan
         from app.ui.widgets.change_list import _will_skip
         ch = Change(Path("mods/a.jar"), ChangeKind.ADDED)
@@ -149,6 +148,7 @@ class TestRootFileDiff(_Base):
 
     def test_index_root_hash_is_used_as_target(self):
         import hashlib
+
         from app.core.differ import diff_packs_parallel
         old = self.tmp / "o3"
         new = self.tmp / "n3"
@@ -651,7 +651,8 @@ class TestResumeReusesCustomStrategies(_Base):
         return z
 
     def test_write_resume_records_strategies(self):
-        app, pv = self._view()
+        _app, pv = self._view()
+
         pack = self._pack_zip()
         inst = self.tmp / "inst"
         (inst / "mods").mkdir(parents=True)
@@ -674,7 +675,8 @@ class TestResumeReusesCustomStrategies(_Base):
                         "偏离基线却没有标记为已自定义")
 
     def test_customized_flag_false_for_defaults(self):
-        app, pv = self._view()
+        _app, pv = self._view()
+
         pv._baseline_strategies = {"mods": "完全匹配",
                                    "config": "替换重名"}
         pv.strategy_table.set_folders(["mods", "config"])
@@ -683,7 +685,8 @@ class TestResumeReusesCustomStrategies(_Base):
         self.assertFalse(pv._is_strategy_customized())
 
     def test_resume_from_reads_saved_strategies(self):
-        app, pv = self._view()
+        _app, pv = self._view()
+
         pack = self._pack_zip()
         inst = self.tmp / "inst2"
         (inst / "mods").mkdir(parents=True)
@@ -699,7 +702,8 @@ class TestResumeReusesCustomStrategies(_Base):
         self.assertEqual(pv._resume_checked, {"config": False})
 
     def test_restore_applies_to_table(self):
-        app, pv = self._view()
+        _app, pv = self._view()
+
         pv._resume_strategies = {"config": "跳过重名"}
         pv._resume_checked = {"config": False}
         pv.strategy_table.set_folders(["mods", "config"])
@@ -761,7 +765,7 @@ class TestNoDanglingReferences(unittest.TestCase):
             mod_name = ".".join(rel.parts)
             try:
                 mod = importlib.import_module(mod_name)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S112
                 continue
             src = path.read_text(encoding="utf-8")
             # 只认"裸方法引用"（self._x 后面紧跟 , 或 )）：
@@ -817,8 +821,7 @@ class TestNoDanglingReferences(unittest.TestCase):
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(root.parent).with_suffix("")
             mod = ".".join(rel.parts)
-            if mod.endswith(".__init__"):
-                mod = mod[:-len(".__init__")]
+            mod = mod.removesuffix(".__init__")
             try:
                 importlib.import_module(mod)
             except Exception as e:  # noqa: BLE001

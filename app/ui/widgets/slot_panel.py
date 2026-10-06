@@ -60,7 +60,7 @@ class _SlotRow(ctk.CTkFrame):
             self.name_label.configure(text="空闲", text_color=Color.TEXT_MUTED)
             self.bar.set(0)
             self.speed_label.configure(text="")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
     def set_active(self, rel: str, progress: float, speed_bps: float):
@@ -69,7 +69,7 @@ class _SlotRow(ctk.CTkFrame):
                                       text_color=Color.TEXT_PRIMARY)
             self.bar.set(max(0.0, min(1.0, progress)))
             self.speed_label.configure(text=_fmt_speed(speed_bps))
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
 
 
@@ -113,7 +113,7 @@ class SlotPanel(ctk.CTkFrame):
         if self._on_toggle is not None:
             try:
                 self._on_toggle(False)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     def set_slots(self, n: int):

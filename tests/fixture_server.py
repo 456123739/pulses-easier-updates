@@ -68,8 +68,7 @@ class Stats:
             if range_header:
                 self.ranges.append(range_header)
             self.concurrent += 1
-            if self.concurrent > self.max_concurrent:
-                self.max_concurrent = self.concurrent
+            self.max_concurrent = max(self.max_concurrent, self.concurrent)
 
     def note_done(self, nbytes=0):
         with self.lock:
@@ -184,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         try:
             time.sleep(STALL_SLEEP)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         with STATS.lock:
             STATS.slow_aborts += 1
@@ -225,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     # ------------------------------------------------------------------
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         global FLAKY_FAILS
         kind, name, params = self._parse()
         rng = self.headers.get("Range")
@@ -281,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             STATS.note_done(sent)
 
-    def do_HEAD(self):  # noqa: N802
+    def do_HEAD(self):
         self.do_GET()
 
 
@@ -320,11 +319,11 @@ class FixtureServer:
     def stop(self):
         try:
             self.httpd.shutdown()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         try:
             self.httpd.server_close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
 
     def __enter__(self):

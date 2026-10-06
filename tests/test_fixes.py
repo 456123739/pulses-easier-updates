@@ -25,7 +25,7 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                     # noqa: E402
+import stubs
 
 
 # ----------------------------------------------------------------------
@@ -96,8 +96,9 @@ class TestFolderDiffIgnoresMtime(unittest.TestCase):
 
     def test_diff_does_not_flag_identical_dir(self):
         """文件集合与内容都相同、只有 mtime 不同 → 不该判 MODIFIED。"""
-        from app.core.differ import ChangeKind, diff_packs_parallel
         import os
+
+        from app.core.differ import ChangeKind, diff_packs_parallel
         old = self.tmp / "instance"
         new = self.tmp / "overrides"
         _write(old / "config" / "shipped.toml", "a=1")
@@ -164,8 +165,8 @@ class TestSafeDirReplace(unittest.TestCase):
     def test_full_replace_rolls_back_on_copy_failure(self):
         from app.config import Strategy
         from app.core import updater
-        from app.core.updater import PlanSource, SourceLayer, _replace_dir
         from app.core.transfer import TransferResult
+        from app.core.updater import PlanSource, SourceLayer, _replace_dir
         old = self.tmp / "instance"
         new = self.tmp / "new"
         _write(old / "config" / "shipped.toml", "old")
@@ -226,8 +227,9 @@ class TestPackContract(unittest.TestCase):
     def test_export_without_overrides_still_has_overrides_entry(self):
         import json
         import zipfile
+
         from app.core import eapack
-        from app.core.mrpack import MRPack, OVERRIDES_DIR
+        from app.core.mrpack import OVERRIDES_DIR, MRPack
         with tempfile.TemporaryDirectory(prefix="easier-exp-") as td:
             tmp = Path(td)
             src = tmp / "src"
@@ -270,7 +272,6 @@ class TestPackContract(unittest.TestCase):
 
     def test_plan_source_skips_reserved_in_fallback(self):
         """老格式回退（内容根 = 解压根目录）时，包自身元数据不是更新内容。"""
-        from app.ui.player_view import PlayerView
         with tempfile.TemporaryDirectory(prefix="easier-ms-") as td:
             tmp = Path(td)
             view = _bare_view(tmp)
@@ -290,7 +291,6 @@ class TestPackContract(unittest.TestCase):
 
     def test_plan_source_keeps_legit_overrides_root_changelog(self):
         """真正的 overrides/ 里的 changelog.md 是内容，不能被当成元数据。"""
-        from app.ui.player_view import PlayerView
         with tempfile.TemporaryDirectory(prefix="easier-ms2-") as td:
             tmp = Path(td)
             view = _bare_view(tmp)

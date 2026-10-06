@@ -22,16 +22,18 @@ from time import time
 import customtkinter as ctk
 
 from ..config import Strategy, default_strategy_for_dir
-from ..core.apply_rules import resolve_strategy
 from ..core import cache as cache_mod
 from ..core import checkpoint as cp_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
+from ..core import pending as pending_logic
+from ..core import recover as recover_mod
 from ..core import resume as resume_mod
+from ..core import transfer
 from ..core.apply_rules import is_checked as _rule_is_checked
+from ..core.apply_rules import resolve_strategy
 from ..core.differ import DiffResult, diff_packs_parallel
 from ..core.downloader import DownloadTask, download_files
-from ..core import pending as pending_logic
 from ..core.mrpack import (
     index_top_folders,
     is_reserved_root_name,
@@ -43,16 +45,16 @@ from ..core.mrpack import (
 from ..core.pack_detector import PackKind, detect_pack_kind
 from ..core.pack_info import ModpackInfo, read_modpack_info
 from ..core.state import AppState
-from ..core import recover as recover_mod
-from ..core import transfer
 from ..core.updater import (
     PlanSource,
     SourceLayer,
     UpdatePlan,
     build_plan,
     execute_plan,
-    fill_expectations as updater_fill,
     verify_after_update,
+)
+from ..core.updater import (
+    fill_expectations as updater_fill,
 )
 from ..theme import Color, Font, Size
 from .widgets.change_list import ChangeList
@@ -453,7 +455,7 @@ class PlayerView(ctk.CTkFrame):
         try:
             self._slot_refresh_after_id = self.after(
                 150, self._do_slot_refresh)
-        except Exception:  # noqa: BLE001, S110
+        except Exception:  # noqa: BLE001
             self._slot_refresh_after_id = None
 
     def _do_slot_refresh(self):
@@ -787,7 +789,7 @@ class PlayerView(ctk.CTkFrame):
             if root is not None:
                 root.mkdir(parents=True, exist_ok=True)
                 return TemporaryDirectory(prefix="pulses_play_", dir=str(root))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         try:
             return TemporaryDirectory(prefix="pulses_play_")
@@ -2469,7 +2471,7 @@ class PlayerView(ctk.CTkFrame):
                 try:
                     if r.ok:
                         self._mark_completed(r.task.rel_path)
-                except Exception:  # noqa: BLE001, S110
+                except Exception:  # noqa: BLE001, S112
                     continue
             if self._cache_root:
                 # 线程还没停就清理 .part 会和它抢文件：可能导致正在写的

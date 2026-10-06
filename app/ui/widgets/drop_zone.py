@@ -20,7 +20,7 @@ from ...utils.animation import animate_color
 try:
     from tkinterdnd2 import DND_FILES
     _DND_READY = True
-except Exception:
+except Exception:  # noqa: BLE001
     DND_FILES = None
     _DND_READY = False
 

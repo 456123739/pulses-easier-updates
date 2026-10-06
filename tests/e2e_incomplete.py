@@ -25,8 +25,8 @@ import shutil
 import sys
 import tempfile
 import time
-import urllib.request
 import unittest.mock
+import urllib.request
 import zipfile
 from collections import deque
 from pathlib import Path
@@ -36,14 +36,14 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                       # noqa: E402
+import stubs
 
 stubs.install()
 
-from app.core import database as db                # noqa: E402
-from app.core import eapack as eapack_mod          # noqa: E402
-from app.core import pending as pending_logic      # noqa: E402
-from app.core.mrpack import merge_files, parse_mrpack  # noqa: E402
+from app.core import database as db
+from app.core import eapack as eapack_mod
+from app.core import pending as pending_logic
+from app.core.mrpack import merge_files, parse_mrpack
 
 _MODRINTH_PROJECT = "terrablender"
 _FALLBACK_FILE = {
@@ -289,7 +289,6 @@ def _run(tmp: Path, real: dict) -> int:
         cb = kw.get("on_result")
         if callable(cb):
             cb(True)
-        return None
 
     # 模拟"关掉软件再打开、重新定位这个整合包"
     pv._reset_pack_state()

@@ -216,7 +216,7 @@ def scan_checkpoints() -> list[Checkpoint]:
         for path in d.glob("*.json"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S112
                 continue
             if not isinstance(data, dict):
                 continue

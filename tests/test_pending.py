@@ -24,7 +24,6 @@ test_pending.py — 「更新受阻 / 补齐缺口」回归测试
 """
 
 import hashlib
-import inspect
 import json
 import sys
 import tempfile
@@ -38,7 +37,7 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                     # noqa: E402
+import stubs
 
 
 def _write(path: Path, text: str):
@@ -376,7 +375,8 @@ class TestPlayerPendingIntegration(_Base):
 
     def test_give_up_writes_marker_and_clears_resume(self):
         from app.core import pending as P
-        app, pv = self._view()
+        _app, pv = self._view()
+
         pack = self._pack()
         inst = self.tmp / "inst"
         (inst / "mods").mkdir(parents=True)
@@ -405,7 +405,8 @@ class TestPlayerPendingIntegration(_Base):
         self.assertEqual(marker["cache_root"], str(pv._cache_root))
 
     def test_compute_missing_skips_files_already_correct(self):
-        app, pv = self._view()
+        _app, pv = self._view()
+
         inst = self.tmp / "inst2"
         (inst / "mods").mkdir(parents=True)
         data = b"OK"
@@ -427,7 +428,8 @@ class TestPlayerPendingIntegration(_Base):
 
     def test_check_pending_record_asks_when_missing(self):
         from app.core import pending as P
-        app, pv = self._view()
+        _app, pv = self._view()
+
         inst = self.tmp / "inst3"
         (inst / "mods").mkdir(parents=True)
         P.write_marker(inst, P.build_marker(
@@ -445,7 +447,8 @@ class TestPlayerPendingIntegration(_Base):
 
     def test_check_pending_record_cleans_when_resolved(self):
         from app.core import pending as P
-        app, pv = self._view()
+        _app, pv = self._view()
+
         inst = self.tmp / "inst4"
         (inst / "mods").mkdir(parents=True)
         data = b"OK"
@@ -465,7 +468,8 @@ class TestPlayerPendingIntegration(_Base):
 
     def test_enter_complete_mode_builds_pages(self):
         from app.core import pending as P
-        app, pv = self._view()
+        _app, pv = self._view()
+
         inst = self.tmp / "inst5"
         (inst / "mods").mkdir(parents=True)
         cache = self.tmp / "cache5"
@@ -484,7 +488,8 @@ class TestPlayerPendingIntegration(_Base):
 
     def test_finish_complete_mode_runs_patch_plan(self):
         from app.core import pending as P
-        app, pv = self._view()
+        _app, pv = self._view()
+
         inst = self.tmp / "inst6"
         (inst / "mods").mkdir(parents=True)
         cache = self.tmp / "cache6" / "mods"

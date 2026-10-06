@@ -40,7 +40,7 @@ class AppState:
         for cb in self._on_modpack_changed:
             try:
                 cb(self._current_modpack_path)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     def clear_modpack(self):
@@ -55,7 +55,7 @@ class AppState:
         for cb in self._on_lock_changed:
             try:
                 cb(True)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     def unlock(self):
@@ -66,7 +66,7 @@ class AppState:
         for cb in self._on_lock_changed:
             try:
                 cb(False)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     # ------------------------------------------------------------------

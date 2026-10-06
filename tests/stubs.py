@@ -92,7 +92,7 @@ class _StubAny:
             raise AttributeError(name)
         return self
 
-    def __setattr__(self, name, value):  # noqa: D105
+    def __setattr__(self, name, value):
         pass
 
     def __iter__(self):
@@ -217,6 +217,7 @@ def isolate_user_dirs(tmpdir):
     返回一个 restore() 回调。
     """
     from pathlib import Path as _Path
+
     from app.core import database as _db
     from app.core import recent as _recent
 

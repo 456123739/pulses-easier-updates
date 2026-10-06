@@ -36,13 +36,14 @@ if not (_TLS / "cert.pem").is_file():
     try:
         from make_tls import ensure_certs
         ensure_certs()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001, S110
         pass
 if (_TLS / "cert.pem").is_file():
     os.environ.setdefault("SSL_CERT_FILE", str(_TLS / "cert.pem"))
 
-from fixture_server import FixtureServer, STATS, payload   # noqa: E402
-from app.core import downloader as new_dl                   # noqa: E402
+from fixture_server import STATS, FixtureServer, payload
+
+from app.core import downloader as new_dl
 
 
 def load_module(name, path):

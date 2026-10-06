@@ -161,7 +161,7 @@ def _parse_ini_key(path: Path, key: str) -> str | None:
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if not line or line.startswith("#") or line.startswith(";"):
+            if not line or line.startswith(("#", ";")):
                 continue
             if "=" in line:
                 k, _, v = line.partition("=")

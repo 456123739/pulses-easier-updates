@@ -502,7 +502,7 @@ class _HTMLToTk(HTMLParser):
         empty = True
         try:
             empty = self.text.compare("end-1c", "==", "1.0")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
         if not empty:
             try:
@@ -602,7 +602,7 @@ def _watch_preview(proc, html_path: Path):
                 import webbrowser
                 webbrowser.open(html_path.as_uri())
                 return          # 浏览器可能还在读，保留文件
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
         try:
             html_path.unlink()

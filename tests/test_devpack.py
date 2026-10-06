@@ -18,22 +18,19 @@ test_devpack.py — 第二批（闭环）回归测试
 运行：  python3 tests/test_devpack.py
 """
 
-import hashlib
 import json
 import sys
 import tempfile
-import types
 import unittest
 import zipfile
 from pathlib import Path
-from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
-import stubs                                     # noqa: E402
+import stubs
 
 
 def _write(path: Path, text: str):
@@ -348,7 +345,8 @@ class TestRecordedHashes(_Base):
         new = self.tmp / "new"
         _write(old / "config" / "a.toml", "key = 1\n")
         _write(new / "config" / "a.toml", "key = 1\n")
-        algo, value = hashing.file_hash(new / "config" / "a.toml")
+        algo, _value = hashing.file_hash(new / "config" / "a.toml")
+
         self.assertEqual(algo, "blake2b")
         # 不传期望哈希 → 内容相同（两侧都算）→ 无 MODIFIED
         d0 = diff_packs_parallel(old, new, whitelist=["config"])
@@ -360,7 +358,7 @@ class TestRecordedHashes(_Base):
         self.assertEqual(len(d1.modified), 1)
 
     def test_recorded_folder_hash_short_circuits(self):
-        from app.core.differ import folder_hash, diff_packs_parallel
+        from app.core.differ import diff_packs_parallel, folder_hash
         old = self.tmp / "old2"
         new = self.tmp / "new2"
         _write(old / "kubejs" / "a.js", "same")
@@ -393,8 +391,7 @@ class TestVerifyAndCheckpoint(_Base):
         self.assertIn("mods/should-be-gone.jar", rels)
 
     def test_verify_passes_after_real_apply(self):
-        from app.core.updater import (UpdatePlan, execute_plan,
-                                      verify_after_update)
+        from app.core.updater import UpdatePlan, execute_plan, verify_after_update
         old = self.tmp / "inst2"
         new = self.tmp / "src2"
         _write(new / "mods" / "a.jar", "CONTENT")
@@ -412,7 +409,6 @@ class TestVerifyAndCheckpoint(_Base):
 
     def test_execute_plan_stops_at_verify_until_checked(self):
         from app.core import checkpoint as cp_mod
-        from app.config import Strategy
         from app.core.updater import UpdatePlan, execute_plan
         old = self.tmp / "inst3"
         new = self.tmp / "src3"
@@ -421,6 +417,7 @@ class TestVerifyAndCheckpoint(_Base):
         execute_plan(plan, old, new)
         # 先直接读文件确认写成了 applied（scan_checkpoints 会顺手清掉它）
         import json
+
         from app.core.checkpoint import _pack_hash
         path = (self.dbdir / "cache" / "checkpoints"
                 / f"{_pack_hash(old)}.json")

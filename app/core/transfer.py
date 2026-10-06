@@ -68,7 +68,7 @@ def sys_path(p) -> str:
         return "\\\\?\\UNC\\" + s[2:]
     try:
         s = os.path.abspath(s)
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: BLE001
         return s
     if s.startswith("\\\\"):
         return "\\\\?\\UNC\\" + s[2:]
@@ -144,7 +144,7 @@ def running_blockers(max_age_s: float = 10.0) -> list[str]:
         import subprocess
         out = subprocess.run(
             ["tasklist", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout or ""
         for line in out.splitlines():
