@@ -1236,11 +1236,20 @@ class PlayerView(ctk.CTkFrame):
 
         # 槽位面板按**磁盘策略限制后**的有效并发显示，而不是配置值
         try:
-            from ..core.downloader import _get_options, resolve_disk_policy
+            from ..core.downloader import (
+                _get_options,
+                disk_policy_summary,
+                engine_banner,
+                resolve_disk_policy,
+            )
             policy = resolve_disk_policy(cache_root, _get_options())
             eff = int(policy.get("multi_slots", 0) or 0)
             if eff > 0:
                 self.slot_panel.set_slots(eff)
+            self.log.log("info", engine_banner())
+            self.log.log("info", disk_policy_summary(cache_root,
+                                                     _get_options(),
+                                                     with_engine=False))
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -1340,11 +1349,20 @@ class PlayerView(ctk.CTkFrame):
         self.log.log("warn", f"下载失败，加入待补入：{rel}")
         # 槽位面板按**磁盘策略限制后**的有效并发显示，而不是配置值
         try:
-            from ..core.downloader import _get_options, resolve_disk_policy
+            from ..core.downloader import (
+                _get_options,
+                disk_policy_summary,
+                engine_banner,
+                resolve_disk_policy,
+            )
             policy = resolve_disk_policy(cache_root, _get_options())
             eff = int(policy.get("multi_slots", 0) or 0)
             if eff > 0:
                 self.slot_panel.set_slots(eff)
+            self.log.log("info", engine_banner())
+            self.log.log("info", disk_policy_summary(cache_root,
+                                                     _get_options(),
+                                                     with_engine=False))
         except Exception:  # noqa: BLE001, S110
             pass
 

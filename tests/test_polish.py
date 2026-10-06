@@ -205,6 +205,39 @@ class TestConfigReallyUsed(_Base):
 
 
 # ======================================================================
+# 引擎命名（RideX / 锐驰引擎）
+# ======================================================================
+class TestEngineBranding(_Base):
+    def test_constants(self):
+        from app.core import downloader as dl
+        self.assertEqual(dl.ENGINE_NAME, "RideX")
+        self.assertEqual(dl.ENGINE_NAME_CN, "锐驰引擎")
+        self.assertIn("RideX", dl.ENGINE_FULL_NAME)
+        self.assertIn("锐驰引擎", dl.ENGINE_FULL_NAME)
+
+    def test_banner_and_summary(self):
+        from app.core import downloader as dl
+        banner = dl.engine_banner()
+        self.assertIn("RideX", banner)
+        self.assertIn("锐驰引擎", banner)
+        summary = dl.disk_policy_summary(self.tmp)
+        self.assertTrue(summary.startswith("RideX（锐驰引擎）"), summary)
+        plain = dl.disk_policy_summary(self.tmp, with_engine=False)
+        self.assertFalse(plain.startswith("RideX"), plain)
+
+    def test_docstring_and_ui_reference(self):
+        src = (_ROOT / "app" / "core" / "downloader.py").read_text(
+            encoding="utf-8")
+        self.assertIn("RideX（锐驰引擎）", src)
+        pref = (_ROOT / "app" / "ui" / "widgets"
+                / "preferences_dialog.py").read_text(encoding="utf-8")
+        self.assertIn("dl_mod.engine_banner()", pref)
+        pv = (_ROOT / "app" / "ui" / "player_view.py").read_text(
+            encoding="utf-8")
+        self.assertIn("engine_banner", pv)
+
+
+# ======================================================================
 # P2-4 单连接续传 Range 校验
 # ======================================================================
 class TestSingleResumeRangeCheck(_Base):

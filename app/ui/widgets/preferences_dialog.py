@@ -15,7 +15,7 @@ from ...core import downloader as dl_mod
 from ...theme import Color, Font, Size
 
 _CATEGORIES = [
-    ("download", "下载", db.DEFAULT_DOWNLOAD_OPTIONS,
+    ("download", "下载 · RideX", db.DEFAULT_DOWNLOAD_OPTIONS,
      db.DOWNLOAD_OPTION_META),
     ("compare", "比对", db.DEFAULT_COMPARE_OPTIONS,
      db.COMPARE_OPTION_META),
@@ -284,9 +284,15 @@ class PreferencesDialog(ctk.CTkToplevel):
         except Exception:  # noqa: BLE001
             ver = "开发版"
 
+        try:
+            engine_line = dl_mod.engine_banner()
+        except Exception:  # noqa: BLE001
+            engine_line = "RideX（锐驰引擎）"
+
         lines = [
             ("Pulses Easier", 18, "bold"),
             ("版本 " + str(ver), 12, "normal"),
+            ("下载引擎：" + engine_line, 11, "normal"),
             ("", 6, "normal"),
             ("Produced by Pulses0 Studio.", 12, "normal"),
             ("Made by NimShade & DS.", 12, "normal"),

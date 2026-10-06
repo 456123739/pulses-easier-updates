@@ -1,5 +1,20 @@
 """
-downloader.py — 两级槽位池下载器
+downloader.py — RideX（锐驰引擎）：多源并发下载引擎
+================================================
+RideX / 锐驰引擎 —— Pulses Easier 的下载核心。
+
+命名取意：
+  Ride  驰骋（并发下载一路跑满）
+  X     多源、多分片、多级重试的交叉调度（eXtended / cross-source）
+
+三个约束塑造了它：
+  1) **正确性优先**：每个字节都要能对得上 index 声明的哈希，
+     宁可重下也不写出错位/填充文件；
+  2) **不猜磁盘**：按目标盘类型（SSD / 机械 / 网络盘 / 可移动盘）
+     自动限制并发，只降不升；
+  3) **失败不吞**：下不下来的文件明确交还给用户（链接 + 文件名），
+     绝不静默跳过。
+
 ------------------------------------------------
 结构：
   [多线程槽位池] multi_slots 个 worker，每个跑一个文件
@@ -106,6 +121,23 @@ from queue import Queue
 from urllib import error as urlerr
 
 from . import database as db
+
+# ----------------------------------------------------------------------
+# 引擎标识（界面/日志/诊断统一用它，别再各处硬编码字符串）
+# ----------------------------------------------------------------------
+ENGINE_NAME = "RideX"
+ENGINE_NAME_CN = "锐驰引擎"
+ENGINE_FULL_NAME = f"{ENGINE_NAME}（{ENGINE_NAME_CN}）"
+ENGINE_DESCRIPTION = "多源并发下载引擎"
+# 引擎自身的迭代号（与程序版本解耦：程序版本变了引擎不一定变）
+ENGINE_BUILD = "G15"
+
+
+def engine_banner() -> str:
+    """一行引擎标识，用于日志与"关于"页。"""
+    return (f"{ENGINE_FULL_NAME} {ENGINE_DESCRIPTION}"
+            f"（engine build {ENGINE_BUILD}）")
+
 
 _DEFAULTS = {
     "multi_slots": 12,
@@ -598,10 +630,12 @@ def resolve_disk_policy(target_dir, opts: dict | None = None) -> dict:
     }
 
 
-def disk_policy_summary(target_dir, opts: dict | None = None) -> str:
-    """一行摘要，供日志/诊断使用。"""
+def disk_policy_summary(target_dir, opts: dict | None = None,
+                        with_engine: bool = True) -> str:
+    """一行摘要，供日志/诊断使用（默认带上引擎标识）。"""
     p = resolve_disk_policy(target_dir, opts)
-    return (f"磁盘 {p['type']}（{p['device'] or '-'}"
+    head = f"{ENGINE_FULL_NAME} · " if with_engine else ""
+    return (f"{head}磁盘 {p['type']}（{p['device'] or '-'}"
             f"{'/' + p['fstype'] if p['fstype'] else ''}，{p['source']}）"
             f" 并发文件数 {p['multi_slots']}"
             f"（配置 {p['configured_multi_slots']}）"

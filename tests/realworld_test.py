@@ -13,7 +13,7 @@ realworld_test.py — Easier 下载器真实网络实战测试。
   6. 三种下载方式各跑一遍、逐文件校验 sha1：
        A. 裸 urllib 顺序单线程（一个下完再下一个）
        B. 原版 downloader（改动前，出厂默认参数）
-       C. 新版 downloader（本次交付，出厂默认参数 + 磁盘类型策略）
+       C. RideX 锐驰引擎（本次交付，出厂默认参数 + 磁盘类型策略）
   7. 打印参数对照表 + 实测结果
 
 用法：
@@ -476,7 +476,7 @@ def dead_url_of(official: str) -> str:
 
 
 def _one_download(url: str, it: dict, root: Path, log=print):
-    """用**新版 downloader** 单文件下载一个源，返回 (ok, 秒数, 备注)。"""
+    """用 RideX 锐驰引擎单文件下载一个源，返回 (ok, 秒数, 备注)。"""
     from app.core import downloader as dl
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True, exist_ok=True)
@@ -563,7 +563,7 @@ def mirror_fallback_test(items, work, per_source=2, log=print):
 
 def print_param_table():
     print("\n" + "=" * 78)
-    print("参数对照：单线程顺序下载  vs  Easier 新版 downloader")
+    print("参数对照：单线程顺序下载  vs  RideX 锐驰引擎")
     print("=" * 78)
     w = max(len(r[0]) for r in PARAM_TABLE)
     print(f"  {'项目'.ljust(w)} | {'单线程顺序':<26} | Easier 新版")
@@ -640,7 +640,7 @@ def main():
     arms = [
         ("A 裸 urllib 顺序", None, None, "A"),
         ("B 原版 downloader（改动前）", orig, orig_opts, "B"),
-        ("C 新版 downloader（本次交付）", new_dl, base_opts, "C"),
+        ("C RideX 锐驰引擎（本次交付）", new_dl, base_opts, "C"),
     ]
 
     print("\n[4] 第一回合：全部 %d 个真实 mod（%s）"
@@ -744,7 +744,7 @@ def main():
     if summary:
         a = summary["A 裸 urllib 顺序"][0]
         b = summary["B 原版 downloader（改动前）"][0]
-        c = summary["C 新版 downloader（本次交付）"][0]
+        c = summary["C RideX 锐驰引擎（本次交付）"][0]
         print("\n" + "=" * 78)
         print("结论（第一回合：全部 20 个真实 mod）")
         print("=" * 78)
