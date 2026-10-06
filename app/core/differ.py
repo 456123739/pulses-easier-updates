@@ -199,17 +199,23 @@ def _list_entries(folder: Path | None
 # ----------------------------------------------------------------------
 def _split_index_by_top(
     index_hashes: dict[str, dict],
-) -> tuple[dict[str, dict[str, dict]], dict[str, set[str]]]:
+) -> tuple[dict[str, dict[str, dict]], dict[str, set[str]],
+           dict[str, dict]]:
     """
     预遍历 index_hashes 一次，产出：
       - by_top: {top_name: {rel_path: hashes}}
       - deep_dirs: {top_name: {相对 top 的目录路径集合}}
+      - root_files: {文件名: hashes}   ← 根目录散文件（旧实现直接丢弃，
+        导致根文件只能"按存在性"判断，内容改了也不一定能发现）
     """
     by_top: dict[str, dict[str, dict]] = {}
     deep_dirs: dict[str, set[str]] = {}
+    root_files: dict[str, dict] = {}
 
     for rel, hashes in index_hashes.items():
         if "/" not in rel:
+            if rel:
+                root_files[rel] = hashes
             continue
         top, _, sub = rel.partition("/")
         if not top or not sub:
@@ -224,7 +230,7 @@ def _split_index_by_top(
                 acc = seg if not acc else acc + "/" + seg
                 dirs.add(acc)
 
-    return by_top, deep_dirs
+    return by_top, deep_dirs, root_files
 
 
 # ----------------------------------------------------------------------
@@ -419,7 +425,8 @@ def diff_packs_parallel(
     idx = index_hashes or {}
     f_hashes = folder_hashes or {}
 
-    index_by_top, index_deep_dirs = _split_index_by_top(idx)
+    index_by_top, index_deep_dirs, index_root_files = \
+        _split_index_by_top(idx)
 
     def _p(done: int, total: int, phase: str):
         if progress:
@@ -503,14 +510,35 @@ def diff_packs_parallel(
 
         _p(i + 1, max(1, total_dirs), "merge")
 
+    # 根目录散文件：旧实现把"两侧都有"一律判 MODIFIED（从不比内容），
+    # 于是每次都会重写 options.txt 之类的文件。现在按内容比对：
+    # index 里声明过哈希就用它，否则两侧各算一次 sha1。
     old_files = set(_root_files(old_root))
     new_files = set(_root_files(new_root))
     for rel in sorted(new_files - old_files):
         result.added.append(Change(rel, ChangeKind.ADDED,
                                    is_folder_level=False))
     for rel in sorted(old_files & new_files):
-        result.modified.append(Change(rel, ChangeKind.MODIFIED,
-                                      is_folder_level=False))
+        name = rel.name
+        target_h: str | None = None
+        algo = "sha1"
+        idx_entry = index_root_files.get(name)
+        if idx_entry is not None:
+            algo_h, hash_v = _pick_hash(idx_entry)
+            if hash_v:
+                target_h, algo = hash_v, (algo_h or "sha1")
+        if not target_h:
+            target_h = _hash_file(new_root / rel, "sha1")
+            algo = "sha1"
+        if not target_h:
+            # 算不出目标哈希（读失败）：保守判"需更新"
+            result.modified.append(Change(rel, ChangeKind.MODIFIED,
+                                          is_folder_level=False))
+            continue
+        local_h = _hash_file(old_root / rel, algo)
+        if not local_h or local_h != target_h:
+            result.modified.append(Change(rel, ChangeKind.MODIFIED,
+                                          is_folder_level=False))
 
     return result
 

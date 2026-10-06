@@ -204,6 +204,21 @@ class MainWindow(ctk.CTk):
         except Exception:  # noqa: BLE001
             return False, ""
 
+    def on_exit_cleanup(self):
+        """退出前清理工作目录（main.py 在 os._exit 之前调用）。"""
+        for view in (getattr(self, "player_view", None),
+                     getattr(self, "developer_view", None)):
+            if view is None:
+                continue
+            for name in ("_discard_merged_source", "_cleanup_temp_dir",
+                         "_cleanup_export_tmp"):
+                fn = getattr(view, name, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+
     def on_boot_done(self):
         """splash 完成后调用：显示主窗口 + 注册延时任务"""
         if self._boot_done:
@@ -253,6 +268,18 @@ class MainWindow(ctk.CTk):
                                 root, dl_mod._get_options()))
                 except Exception:  # noqa: BLE001, S110
                     pass
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        try:
+            from ..core import cache as cache_mod
+            legacy = cache_mod.find_legacy_trash()
+            if legacy:
+                self.player_view.log.log(
+                    "warn", "检测到旧版本留下的备份目录（新版本不再使用，"
+                            "里面的文件是当时被替换的旧内容，可自行查看）：")
+                for path in legacy[:3]:
+                    self.player_view.log.log("warn", f"    {path}")
         except Exception:  # noqa: BLE001, S110
             pass
 

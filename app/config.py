@@ -31,15 +31,8 @@ CONTENT_DIR_MAP = {
     ContentType.OTHER:         None,   # None 代表根目录下其余内容
 }
 
-# 玩家端复选框默认勾选状态
-DEFAULT_CHECKED = {
-    ContentType.MODS:          True,
-    ContentType.CONFIG:        True,
-    ContentType.SAVES:         False,
-    ContentType.RESOURCEPACKS: False,
-    ContentType.OTHER:         False,
-}
-
+# 兼容：旧版 option_panel 用过的"默认勾选"表已随该模块删除；
+# 现在玩家端勾选状态由策略表逐项驱动（见 player_view._apply_strategies）。
 
 # ----------------------------------------------------------------------
 # 更新策略
@@ -82,16 +75,6 @@ def default_strategy_for_dir(top: str) -> Strategy:
     """顶层目录的默认策略；未知目录一律"替换重名"（合并覆盖，不删文件）。"""
     return DEFAULT_STRATEGY_BY_DIR.get(top, DEFAULT_STRATEGY[ContentType.OTHER])
 
-
-# ----------------------------------------------------------------------
-# 更新包元数据字段名（写入 ZIP 内的 meta.json）
-# ----------------------------------------------------------------------
-META_FILENAME = "pulses_meta.json"
-META_KEY_VERSION      = "pack_version"
-META_KEY_STRATEGIES   = "recommended_strategies"
-META_KEY_CHECKED      = "recommended_checked"
-META_KEY_CHANGELOG    = "changelog_markdown"
-META_KEY_CREATED_AT   = "created_at"
 
 
 # ----------------------------------------------------------------------

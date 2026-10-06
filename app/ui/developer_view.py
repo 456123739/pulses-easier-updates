@@ -20,7 +20,13 @@ import customtkinter as ctk
 
 from ..core import database as db
 from ..core.eapack import export_eapack
-from ..core.mrpack import MRPack, merge_files, parse_mrpack, top_level_folders
+from ..core.mrpack import (
+    MRPack,
+    locate_content_root,
+    merge_files,
+    parse_mrpack,
+    top_level_folders,
+)
 from ..theme import Color, Font, Size
 from ..utils.files import human_size
 from .widgets.drop_zone import DropZone
@@ -44,7 +50,9 @@ class DeveloperView(ctk.CTkFrame):
         self.export_tmp_dir: TemporaryDirectory | None = None
         self.pack: MRPack | None = None
         self.merged: list[dict] = []
-        self.version = "1.0.0"
+        # 导出时写进 manifest 的版本：优先用源包自己的 versionId
+        # （旧实现硬编码 "1.0.0"，manifest 里的版本永远是假的）
+        self.version = ""
         self._locked = False
         self._parsing = False
 
@@ -91,7 +99,9 @@ class DeveloperView(ctk.CTkFrame):
             command=self._on_clear_click)
         self.clear_btn.grid(row=1, column=0, sticky="e", pady=(6, 0))
 
-        self.strategy_table = StrategyTable(self.left, title="更新策略")
+        self.strategy_table = StrategyTable(
+            self.left, title="更新策略",
+            on_profile_imported=self._on_profile_imported)
         self.strategy_table.grid(row=1, column=0, sticky="nsew",
                                  pady=(Size.GAP, 0))
 
@@ -116,7 +126,8 @@ class DeveloperView(ctk.CTkFrame):
         self.editor = MarkdownEditor(self.right)
         self.editor.grid(row=0, column=0, sticky="nsew")
 
-        self.export_options = ExportOptionsPanel(self.right)
+        self.export_options = ExportOptionsPanel(
+            self.right, on_change=self._on_export_options_changed)
         self.export_options.grid(row=1, column=0, sticky="ew",
                                  pady=(Size.GAP, 0))
 
@@ -130,6 +141,15 @@ class DeveloperView(ctk.CTkFrame):
         self.log.grid(row=3, column=0, sticky="ew", pady=(Size.GAP, 0))
 
     # ------------------------------------------------------------------
+    def _on_export_options_changed(self):
+        """勾选即写库（旧实现只在点"导出"时才写，中途关掉就丢了）。"""
+        try:
+            if db.get_db_path() is None:
+                return
+            db.set_export_options(self.export_options.get_options())
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def _on_pack_dropped(self, paths: list[Path]):
         if self._locked or self._parsing:
             self.log.log("warn", "正在处理上一个导出包，请稍候")
@@ -137,10 +157,10 @@ class DeveloperView(ctk.CTkFrame):
 
         zip_candidates = [
             p for p in paths
-            if p.suffix.lower() in (".zip", ".mrpack")
+            if p.suffix.lower() in (".zip", ".mrpack", ".eapack")
         ]
         if not zip_candidates:
-            self.log.log("error", "请拖入 .zip 或 .mrpack 文件")
+            self.log.log("error", "请拖入 .zip / .mrpack / .eapack 文件")
             return
 
         # 先把旧包状态清干净：否则解析失败后点"导出"会用
@@ -182,9 +202,9 @@ class DeveloperView(ctk.CTkFrame):
                 extract_dir = Path(tmp.name)
                 with zipfile.ZipFile(zip_path, "r") as zf:
                     zf.extractall(extract_dir)
-                ovr = extract_dir / "overrides"
-                if ovr.is_dir():
-                    for e in ovr.iterdir():
+                content_root, is_fallback = locate_content_root(extract_dir)
+                if not is_fallback:
+                    for e in content_root.iterdir():
                         if e.is_file():
                             file_items.add(e.name)
             except Exception as e:  # noqa: BLE001
@@ -238,6 +258,15 @@ class DeveloperView(ctk.CTkFrame):
         self._log_pack_summary(pack, folders, file_items)
 
         self.main_btn.configure(text="开始制作更新包", state="normal")
+
+    def _on_profile_imported(self, profile: dict):
+        """导入配置后刷新导出选项面板（白名单已由策略表写库）。"""
+        try:
+            self.export_options.set_options(db.get_export_options())
+            self.log.log("info", "已导入配置（策略 / 黑名单 / 白名单 / "
+                                 "导出选项）")
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _log_pack_summary(self, pack: MRPack, folders: list[str],
                           file_items: set[str]):
@@ -382,8 +411,9 @@ class DeveloperView(ctk.CTkFrame):
                    strategies: dict, changelog: str,
                    excluded_folders: list[str]) -> Path | None:
         try:
-            self.tmp_dir = TemporaryDirectory(prefix="pulses_dev_")
-            self.extract_dir = Path(self.tmp_dir.name)
+            self._cleanup_export_tmp()
+            self.export_tmp_dir = TemporaryDirectory(prefix="pulses_dev_")
+            self.extract_dir = Path(self.export_tmp_dir.name)
             with zipfile.ZipFile(source_zip, "r") as zf:
                 zf.extractall(self.extract_dir)
 
@@ -408,10 +438,22 @@ class DeveloperView(ctk.CTkFrame):
                 progress=_prog)
         except Exception as e:  # noqa: BLE001
             self.after(0, self.log.log, "error", f"导出失败：{e}")
+            self.after(0, self._cleanup_export_tmp)
             return None
+
+    def _cleanup_export_tmp(self):
+        tmp = self.export_tmp_dir
+        self.export_tmp_dir = None
+        self.tmp_dir = None
+        if tmp is not None:
+            try:
+                tmp.cleanup()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     def _on_build_done(self, result, out_path: Path):
         self._set_locked(False)
+        self._cleanup_export_tmp()
         self.main_btn.configure(text="开始制作更新包", state="normal")
 
         if result is not None:

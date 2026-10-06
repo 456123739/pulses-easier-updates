@@ -174,6 +174,35 @@ def clean_orphan_parts() -> int:
     return count
 
 
+def find_legacy_trash() -> list[str]:
+    """
+    找出旧版本（<= v0.3.0）留下的 .pulses_trash 备份目录。
+
+    v0.5.0 起不再使用回收站，但**绝不自动删除**这些目录 —— 里面是用户
+    当时被替换/删除的文件。这里只报告路径，由用户自己决定。
+    """
+    found: list[str] = []
+    try:
+        from . import recent
+        candidates = list(recent.load_recent())
+    except Exception:  # noqa: BLE001
+        candidates = []
+    try:
+        db_root = db.get_db_path()
+    except Exception:  # noqa: BLE001
+        db_root = None
+    if db_root is not None:
+        candidates.append(Path(db_root))
+    for root in candidates:
+        try:
+            trash = Path(root).parent / ".pulses_trash"
+            if trash.is_dir() and str(trash) not in found:
+                found.append(str(trash))
+        except Exception:  # noqa: BLE001
+            continue
+    return found
+
+
 def work_root() -> Path | None:
     """更新流程的工作目录根：<db>/cache/temp（受 clean_cache 覆盖）。"""
     db_root = db.get_db_path()

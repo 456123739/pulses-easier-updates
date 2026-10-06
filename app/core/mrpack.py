@@ -112,8 +112,10 @@ def parse_mrpack(zip_path: Path) -> tuple[MRPack | None, str]:
 
             pack = _parse_index(data)
 
-            # 扫描 overrides/
-            prefix = OVERRIDES_DIR + "/"
+            # 扫描 overrides/：index 嵌在一层目录里时，overrides 也在同一层
+            prefix = (index_name[:-len(INDEX_FILENAME)]
+                      if index_name.endswith(INDEX_FILENAME) else "")
+            prefix += OVERRIDES_DIR + "/"
             for n in names:
                 if n.startswith(prefix) and not n.endswith("/"):
                     rel = n[len(prefix):]
@@ -125,6 +127,31 @@ def parse_mrpack(zip_path: Path) -> tuple[MRPack | None, str]:
         return None, "不是有效的 ZIP 文件"
     except Exception as e:  # noqa: BLE001
         return None, f"读取失败：{e}"
+
+
+def locate_content_root(extract_dir: Path) -> tuple[Path, bool]:
+    """
+    在**解压后**的目录里定位"内容根"。
+
+    返回 (root, is_fallback)：
+      - 找到 overrides/（根级，或与 index 同层的单层嵌套）→ (overrides, False)
+      - 找不到 → (extract_dir, True)。这是老格式/裸 ZIP 的回退分支，
+        调用方必须排除包自身的元数据文件名（否则它们会被当成更新内容）。
+
+    与 parse_mrpack 的 overrides 扫描规则保持一致，避免出现
+    "index 找得到、overrides 找不到"。
+    """
+    extract_dir = Path(extract_dir)
+    direct = extract_dir / OVERRIDES_DIR
+    if direct.is_dir():
+        return direct, False
+    try:
+        for child in sorted(extract_dir.iterdir()):
+            if child.is_dir() and (child / OVERRIDES_DIR).is_dir():
+                return child / OVERRIDES_DIR, False
+    except OSError:
+        pass
+    return extract_dir, True
 
 
 def _parse_index(data: dict) -> MRPack:

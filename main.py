@@ -103,6 +103,12 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        # 退出前清理解压/合并副本（os._exit 会跳过 TemporaryDirectory 的
+        # finalizer 与 atexit，所以必须显式清）
+        try:
+            app.on_exit_cleanup()
+        except Exception:  # noqa: BLE001, S110
+            pass
         # 强制退出：防止非 daemon 线程（如 ThreadPoolExecutor worker）
         # 阻止进程结束。文件句柄由 OS 回收。
         import os

@@ -85,20 +85,6 @@ def _from_dict(data: dict, fallback_root: str = "") -> Checkpoint:
     )
 
 
-def load_checkpoint(pack_root: Path) -> Checkpoint | None:
-    d = _checkpoint_dir()
-    if d is None:
-        return None
-    try:
-        path = d / f"{_pack_hash(pack_root)}.json"
-        if not path.is_file():
-            return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return _from_dict(data, str(pack_root))
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def scan_checkpoints() -> list[Checkpoint]:
     """
     扫描全部未完成的检查点（启动时用：判断上次更新是否被中断）。

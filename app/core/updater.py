@@ -26,9 +26,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import CONTENT_DIR_MAP, ChangeKind, ContentType, Strategy
+from ..config import ChangeKind, Strategy
 from ..utils.files import safe_join
 from . import checkpoint as cp_mod
+from .apply_rules import (
+    is_checked_n,
+    normalize_keys,
+    resolve_strategy_n,
+)
 
 
 @dataclass
@@ -39,18 +44,6 @@ class UpdatePlan:
     skip: list[Path] = field(default_factory=list)
     # 目录级操作：(相对路径, 策略)
     replace_dirs: list[tuple[Path, Strategy]] = field(default_factory=list)
-
-
-def _normalize_keys(mapping: dict) -> dict:
-    result: dict[str, object] = {}
-    for k, v in mapping.items():
-        if isinstance(k, ContentType):
-            folder = CONTENT_DIR_MAP.get(k)
-            if folder:
-                result[folder] = v
-        else:
-            result[str(k)] = v
-    return result
 
 
 def _expand_dir_files(root: Path | None, rel: Path) -> list[Path]:
@@ -72,28 +65,26 @@ def _expand_dir_files(root: Path | None, rel: Path) -> list[Path]:
 def build_plan(diff, checked, strategies,
                old_root: Path | None = None,
                new_root: Path | None = None) -> UpdatePlan:
-    checked_n = _normalize_keys(checked)
-    strategies_n = _normalize_keys(strategies)
-
+    """
+    生成执行计划。判定规则统一来自 apply_rules（与界面灰显、
+    下载任务收集共用同一套逻辑）。
+    """
     plan = UpdatePlan()
 
-    def _resolve_strategy(top: str) -> Strategy:
-        raw = strategies_n.get(top, Strategy.FULL_MATCH)
-        try:
-            return Strategy(raw) if not isinstance(raw, Strategy) else raw
-        except ValueError:
-            return Strategy.FULL_MATCH
+    # 归一化一次（ContentType 键 → 目录名），循环里不再逐条转换
+    checked_n = normalize_keys(checked)
+    strategies_n = normalize_keys(strategies)
 
     for change in diff.added + diff.modified + diff.deleted:
         rel = change.rel_path
         parts = rel.parts
         top = parts[0] if parts else ""
 
-        if not checked_n.get(top, False):
+        if not is_checked_n(checked_n, top):
             plan.skip.append(rel)
             continue
 
-        strat = _resolve_strategy(top)
+        strat = resolve_strategy_n(strategies_n, top)
 
         # ---- 文件夹级（非白名单） ----
         if change.is_folder_level:

@@ -22,15 +22,18 @@ from time import time
 import customtkinter as ctk
 
 from ..config import Strategy, default_strategy_for_dir
+from ..core.apply_rules import resolve_strategy
 from ..core import cache as cache_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
 from ..core import resume as resume_mod
+from ..core.apply_rules import is_checked as _rule_is_checked
 from ..core.differ import DiffResult, diff_packs_parallel
 from ..core.downloader import DownloadTask, download_files
 from ..core.mrpack import (
     index_top_folders,
     is_reserved_root_name,
+    locate_content_root,
     merge_files,
     parse_mrpack,
     top_level_folders,
@@ -108,6 +111,10 @@ class PlayerView(ctk.CTkFrame):
         self._speed_rel: str = ""
         self._speed_samples: deque[tuple[float, int]] = deque(
             maxlen=_SPEED_SAMPLES)
+        # 字节级进度节流（首选项 ui.progress_throttle_ms）：
+        # 下载回调是"每个读取块一次"，不节流会把 Tk 事件队列打满
+        self._byte_throttle_s: float = 0.2
+        self._byte_last_at: dict[str, float] = {}
         self._current_rel: str = ""
         self._done_count: int = 0
         self._total_count: int = 0
@@ -806,8 +813,12 @@ class PlayerView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     def _start_scan(self):
         if self._phase != _PHASE_IDLE:
+            # 早退时清掉"扫描完自动继续下载"的标记，否则下一次普通
+            # 「开始更新」会莫名其妙跳过确认直接下载+应用
+            self._resume_after_scan = False
             return
         if self.update_zip is None or self.pack_info is None:
+            self._resume_after_scan = False
             return
 
         self._phase = _PHASE_SCAN
@@ -847,15 +858,11 @@ class PlayerView(ctk.CTkFrame):
         with zipfile.ZipFile(update_zip, "r") as zf:
             zf.extractall(extract_dir)
 
-        overrides_dir = extract_dir / "overrides"
-        if overrides_dir.is_dir():
-            self._overrides_root = overrides_dir
-            self._overrides_fallback = False
-        else:
-            # 老格式/裸 ZIP：内容根退化为解压根目录，此时包自身的元数据
-            # 文件必须被排除（否则会被当成更新内容写进玩家整合包根目录）
-            self._overrides_root = extract_dir
-            self._overrides_fallback = True
+        content_root, is_fallback = locate_content_root(extract_dir)
+        self._overrides_root = content_root
+        # 老格式/裸 ZIP：内容根 = 解压根目录，包自身的元数据文件必须被排除
+        # （否则会被当成更新内容写进玩家整合包根目录）
+        self._overrides_fallback = is_fallback
 
         pack, err = parse_mrpack(update_zip)
         merged: list[dict] = []
@@ -959,11 +966,19 @@ class PlayerView(ctk.CTkFrame):
             label = f"比对  {done}/{total}"
             self.after(0, self._update_scan_progress, ratio, label)
 
+        # 比对线程数走首选项（compare.hash_threads），不再硬编码
+        try:
+            hash_threads = int(
+                db.get_compare_options().get("hash_threads", 16) or 16)
+        except Exception:  # noqa: BLE001
+            hash_threads = 16
+        hash_threads = max(1, min(64, hash_threads))
+
         diff = diff_packs_parallel(
             pack_info.path, compare_root,
             whitelist=final_wl,
             index_hashes=index_hashes,
-            threads=16, progress=_progress,
+            threads=hash_threads, progress=_progress,
             folder_hashes=folder_hashes)
         self.diff = diff
 
@@ -1012,31 +1027,17 @@ class PlayerView(ctk.CTkFrame):
         checked_map = dict(checked) if checked else {}
         strategies_map = dict(strategies) if strategies else {}
 
-        def _top_of(rel) -> str:
-            parts = rel.parts if hasattr(rel, "parts") else Path(rel).parts
-            return parts[0] if parts else ""
-
-        def _strategy_of(top: str) -> Strategy:
-            raw = strategies_map.get(top, Strategy.FULL_MATCH)
-            try:
-                return Strategy(raw) if not isinstance(raw, Strategy) else raw
-            except ValueError:
-                return Strategy.FULL_MATCH
-
         def _is_checked(top: str) -> bool:
-            if not checked_map:
-                return True
-            # 与 updater.build_plan / change_list._will_skip 保持一致：
-            # 缺省视为"未勾选 = 不应用"
-            return bool(checked_map.get(top, False))
+            # 统一走 apply_rules；空映射时按"全部需要"处理（尚未建表的早退路径）
+            return _rule_is_checked(checked_map, top, default=True)
 
         needed: set[str] = set()
         for ch in diff.added + diff.modified:
             rel = ch.rel_path
-            top = _top_of(rel)
+            top = rel.parts[0] if rel.parts else ""
             if not _is_checked(top):
                 continue
-            strat = _strategy_of(top)
+            strat = resolve_strategy(strategies_map, top)
 
             if ch.is_folder_level:
                 prefix = rel.as_posix() + "/"
@@ -1226,6 +1227,22 @@ class PlayerView(ctk.CTkFrame):
         self._total_count = len(self._download_tasks)
         self._active_files.clear()
         self._file_speed_samples.clear()
+        self._byte_last_at.clear()
+        try:
+            ms = float(db.get_ui_options().get("progress_throttle_ms", 200))
+        except Exception:  # noqa: BLE001
+            ms = 200.0
+        self._byte_throttle_s = max(0.0, min(2.0, ms / 1000.0))
+
+        # 槽位面板按**磁盘策略限制后**的有效并发显示，而不是配置值
+        try:
+            from ..core.downloader import _get_options, resolve_disk_policy
+            policy = resolve_disk_policy(cache_root, _get_options())
+            eff = int(policy.get("multi_slots", 0) or 0)
+            if eff > 0:
+                self.slot_panel.set_slots(eff)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
         self._ensure_download_panel(in_progress=True)
         if self.download_panel is not None and \
@@ -1321,6 +1338,16 @@ class PlayerView(ctk.CTkFrame):
         self._active_files.pop(rel, None)
         self._file_speed_samples.pop(rel, None)
         self.log.log("warn", f"下载失败，加入待补入：{rel}")
+        # 槽位面板按**磁盘策略限制后**的有效并发显示，而不是配置值
+        try:
+            from ..core.downloader import _get_options, resolve_disk_policy
+            policy = resolve_disk_policy(cache_root, _get_options())
+            eff = int(policy.get("multi_slots", 0) or 0)
+            if eff > 0:
+                self.slot_panel.set_slots(eff)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
         self._ensure_download_panel(in_progress=True)
         if self.download_panel is None:
             return
@@ -1349,11 +1376,19 @@ class PlayerView(ctk.CTkFrame):
 
     def _on_byte_progress(self, rel_path: str, received: int,
                           total_bytes: int):
+        now = time()
+        # 节流：同一文件在 progress_throttle_ms 内的中间进度直接丢掉，
+        # 但最后一个字节（received >= total）必须放行，保证进度条能到 100%
+        done_all = total_bytes > 0 and received >= total_bytes
+        if not done_all and self._byte_throttle_s > 0:
+            last = self._byte_last_at.get(rel_path, 0.0)
+            if now - last < self._byte_throttle_s:
+                return
+        self._byte_last_at[rel_path] = now
+
         if rel_path != self._speed_rel:
             self._speed_rel = rel_path
             self._speed_samples.clear()
-
-        now = time()
         self._speed_samples.append((now, received))
 
         info = self._active_files.get(rel_path)

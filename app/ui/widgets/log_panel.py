@@ -27,6 +27,10 @@ class LogPanel(ctk.CTkFrame):
                          corner_radius=Size.RADIUS_BUTTON, **kwargs)
 
         self.on_clear = on_clear
+        # 日志上限（首选项 ui.log_max_lines）：超出后丢弃最早的行，
+        # 否则长时间下载会把整个会话的日志都堆在 Tk 文本控件里
+        self._max_lines = self._read_max_lines()
+        self._since_limit_check = 0
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -63,12 +67,45 @@ class LogPanel(ctk.CTkFrame):
         for level, color in _LEVEL_COLORS.items():
             inner.tag_config(level, foreground=color)
 
+    @staticmethod
+    def _read_max_lines() -> int:
+        try:
+            from ...core import database as db
+            n = int(db.get_ui_options().get("log_max_lines", 500) or 500)
+            return max(50, n)
+        except Exception:  # noqa: BLE001
+            return 500
+
+    def set_max_lines(self, n: int):
+        self._max_lines = max(50, int(n))
+        self._trim(force=True)
+
+    def _trim(self, force: bool = False):
+        self._since_limit_check += 1
+        if not force and self._since_limit_check < 32:
+            return
+        self._since_limit_check = 0
+        if not force:
+            # 周期性重读配置，用户改完首选项不用重启
+            self._max_lines = self._read_max_lines()
+        try:
+            inner = self.text._textbox
+            total = int(inner.index("end-1c").split(".")[0])
+            over = total - self._max_lines
+            if over > 0:
+                inner.configure(state="normal")
+                inner.delete("1.0", f"{over + 1}.0")
+                inner.configure(state="disabled")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def log(self, level: str, message: str):
         inner = self.text._textbox
         inner.configure(state="normal")
         inner.insert("end", message + "\n", level)
         inner.see("end")
         inner.configure(state="disabled")
+        self._trim()
 
     def clear(self):
         inner = self.text._textbox

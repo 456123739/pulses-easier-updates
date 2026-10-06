@@ -12,7 +12,8 @@ from collections import defaultdict
 
 import customtkinter as ctk
 
-from ...config import ChangeKind, Strategy
+from ...config import ChangeKind
+from ...core.apply_rules import will_skip as _rules_will_skip
 from ...core.differ import Change, DiffResult
 from ...theme import Color, Font, Size
 
@@ -72,49 +73,10 @@ _KIND_MARKER = {
 
 
 # ----------------------------------------------------------------------
-# 策略判定：该条目是否会被跳过
+# 策略判定：该条目是否会被跳过（统一走 apply_rules，避免三套实现漂移）
 # ----------------------------------------------------------------------
-def _resolve_strategy(strategies: dict, top: str) -> Strategy:
-    raw = strategies.get(top, Strategy.FULL_MATCH)
-    try:
-        return Strategy(raw) if not isinstance(raw, Strategy) else raw
-    except ValueError:
-        return Strategy.FULL_MATCH
-
-
 def _will_skip(change: Change, checked: dict, strategies: dict) -> bool:
-    """
-    判断某条变更在当前策略/勾选下是否会被跳过（不应用）。
-    """
-    rel = change.rel_path
-    parts = rel.parts
-    top = parts[0] if parts else ""
-
-    if not checked.get(top, False):
-        return True
-
-    strat = _resolve_strategy(strategies, top)
-
-    if change.is_folder_level:
-        if change.kind == ChangeKind.ADDED:
-            # 新增目录总是会被应用（复制），不跳过
-            return False
-        if change.kind == ChangeKind.MODIFIED:
-            # 任意策略下都会以某种方式合并/替换，不跳过
-            return False
-        if change.kind == ChangeKind.DELETED:
-            # 完全匹配才删，其它跳过
-            return strat != Strategy.FULL_MATCH
-        return False
-
-    # 文件级
-    if change.kind == ChangeKind.ADDED:
-        return False
-    if change.kind == ChangeKind.MODIFIED:
-        return strat == Strategy.SKIP_SAME
-    if change.kind == ChangeKind.DELETED:
-        return strat != Strategy.FULL_MATCH
-    return False
+    return _rules_will_skip(change, checked, strategies)
 
 
 # ----------------------------------------------------------------------

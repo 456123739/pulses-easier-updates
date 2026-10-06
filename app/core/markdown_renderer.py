@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 from collections.abc import Callable
 from html.parser import HTMLParser
 from pathlib import Path
@@ -34,7 +35,8 @@ except ImportError:
 _md_to_html: Callable[..., str] | None = _md_to_html_imported
 
 # 弹窗临时文件（覆盖写）
-_PREVIEW_FILENAME = "pulses_easier_preview.html"
+_PREVIEW_PREFIX = "pulses_easier_preview_"
+_PREVIEW_FILENAME = _PREVIEW_PREFIX + "current.html"  # 兼容旧名
 
 
 # ----------------------------------------------------------------------
@@ -553,8 +555,11 @@ def open_preview_window(html: str) -> tuple[bool, str]:
     打开独立预览窗口，使用真浏览器内核（WebView2）渲染。
     缺 pywebview 时降级到系统默认浏览器。
     """
+    # 唯一文件名：固定名会被连续两次预览互相覆盖（后一次写入时
+    # 前一次的子进程可能还在读这个文件）
+    token = uuid.uuid4().hex[:12]
     try:
-        html_path = Path(tempfile.gettempdir()) / _PREVIEW_FILENAME
+        html_path = Path(tempfile.gettempdir()) / f"{_PREVIEW_PREFIX}{token}.html"
         html_path.write_text(html, encoding="utf-8")
     except Exception as e:  # noqa: BLE001
         return False, f"写入预览文件失败：{e}"
@@ -564,11 +569,14 @@ def open_preview_window(html: str) -> tuple[bool, str]:
         if os.name == "nt":
             creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, "-m", "app.core.preview_worker", str(html_path)],
             creationflags=creation_flags,
             close_fds=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
+        _watch_preview(proc, html_path)
         return True, ""
     except Exception as e:  # noqa: BLE001
         try:
@@ -577,6 +585,34 @@ def open_preview_window(html: str) -> tuple[bool, str]:
             return True, ""
         except Exception as e2:  # noqa: BLE001
             return False, f"启动预览失败：{e}；浏览器兜底失败：{e2}"
+
+
+def _watch_preview(proc, html_path: Path):
+    """
+    看着预览子进程：非 0 退出（pywebview 起不来等）时自动用系统浏览器
+    兜底打开，不再"静默什么都不发生"。子进程正常退出后删掉临时文件。
+    """
+    def _worker():
+        try:
+            rc = proc.wait(timeout=3600)
+        except Exception:  # noqa: BLE001
+            return
+        if rc != 0:
+            try:
+                import webbrowser
+                webbrowser.open(html_path.as_uri())
+                return          # 浏览器可能还在读，保留文件
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            html_path.unlink()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:  # noqa: BLE001, S110
+        pass
 
 
 # ----------------------------------------------------------------------

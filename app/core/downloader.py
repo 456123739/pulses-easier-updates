@@ -110,7 +110,6 @@ from . import database as db
 _DEFAULTS = {
     "multi_slots": 12,
     "single_slots": 4,
-    "defer_to_single_after": 0,
     "part_threads": 4,
     "max_connections": 128,
     "connect_timeout": 10,
@@ -664,7 +663,6 @@ class _AttemptOutcome:
     ok: bool
     error: str = ""
     aborted: bool = False
-    defer_to_single: bool = False
     fast_stalled: bool = False
 
 
@@ -1154,6 +1152,29 @@ def _content_range_ok(resp, start: int, end: int) -> bool:
         return False
 
 
+def _content_range_start_ok(resp, start: int) -> bool:
+    """
+    续传场景：服务器必须从我们要求的 `start` 开始返回。
+
+    只校验起点（终点是"到文件末尾"）。旧实现在单连接续传时只看
+    status==206，如果 CDN 返回了 `bytes 0-.../N`，数据会被追加到错误的
+    偏移上（最后虽然会被哈希校验拦下，但白白下载一整遍）。
+    """
+    cr = (resp.getheader("Content-Range") or "").strip()
+    if not cr:
+        # 没有该头：只能接受"看起来是完整响应"的情况
+        return resp.status != 206
+    try:
+        unit, _, rng = cr.partition(" ")
+        if unit.lower() != "bytes":
+            return False
+        span, _, _total = rng.partition("/")
+        s_str, _, _e_str = span.partition("-")
+        return int(s_str) == start
+    except (TypeError, ValueError):
+        return False
+
+
 def _sleep_backoff(opts: dict, attempt: int):
     """指数退避 + 抖动（attempt 从 1 开始）。"""
     base = max(0.0, _num(opts, "retry_backoff_ms", 500) / 1000.0)
@@ -1364,6 +1385,17 @@ def _try_single_url(url: str, target: Path, part: Path,
             start_at = existing
             if start_at and resp.status != 206:
                 # 服务器忽略 Range → 这份 .part 只能作废，从头下
+                start_at = 0
+                existing = 0
+                try:
+                    os.truncate(part, 0)
+                except OSError:
+                    pass
+            elif start_at and _flag(opts, "range_validate", True) \
+                    and not _content_range_start_ok(resp, start_at):
+                # 206 但起点不对（CDN 篡改/错配）→ 同样作废重下
+                log("warn", f"{url} 续传起点不匹配"
+                            f"（请求 {start_at}），已丢弃分片重下")
                 start_at = 0
                 existing = 0
                 try:

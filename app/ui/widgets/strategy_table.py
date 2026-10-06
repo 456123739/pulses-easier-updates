@@ -18,7 +18,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from ...config import STRATEGY_LIST, Strategy
+from ...config import STRATEGY_LIST, Strategy, default_strategy_for_dir
 from ...theme import Color, Font, Size
 from .strategy_group import StrategyGroup
 from .toggle_item import ToggleItem
@@ -41,11 +41,13 @@ class StrategyTable(ctk.CTkFrame):
     def __init__(self, master, title: str = "更新策略",
                  on_change: Callable[[str], None] | None = None,
                  protected_folders: list[str] | None = None,
+                 on_profile_imported: Callable[[dict], None] | None = None,
                  **kwargs):
         super().__init__(master, fg_color=Color.CARD_BG,
                          corner_radius=Size.RADIUS_CARD, **kwargs)
 
         self.on_change = on_change
+        self.on_profile_imported = on_profile_imported
         self._protected = set(protected_folders or ["mods"])
 
         self._rows: dict[str, _Row] = {}
@@ -157,7 +159,12 @@ class StrategyTable(ctk.CTkFrame):
             if name in self._rows:
                 continue
             checked = name not in self._blacklist
-            r = _Row(name, checked=checked, strategy=Strategy.FULL_MATCH)
+            # 默认策略与玩家端一致（mods 等 → 完全匹配；config → 替换重名）
+            if name in self._file_items:
+                default_strat = default_strategy_for_dir("")
+            else:
+                default_strat = default_strategy_for_dir(name)
+            r = _Row(name, checked=checked, strategy=default_strat)
             self._rows[name] = r
             self._create_row_widgets(r)
 
@@ -384,6 +391,21 @@ class StrategyTable(ctk.CTkFrame):
         blacklist = set(profile.get("blacklist", []))
         self._blacklist = blacklist
 
+        # 白名单与导出选项也一并导入（旧实现只恢复策略 + 黑名单，
+        # 另外两项静默丢弃，用户以为"导入了配置"其实只导入了一半）
+        wl = profile.get("whitelist")
+        if isinstance(wl, list):
+            try:
+                db.set_whitelist([str(x) for x in wl])
+            except Exception:  # noqa: BLE001, S110
+                pass
+        eo = profile.get("export_options")
+        if isinstance(eo, dict) and eo:
+            try:
+                db.set_export_options(eo)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
         for name, r in self._rows.items():
             if name in strategies:
                 try:
@@ -399,6 +421,11 @@ class StrategyTable(ctk.CTkFrame):
                 r.toggle.set_selected(r.checked, animate=False)
 
         self._apply_layout()
+        if self.on_profile_imported is not None:
+            try:
+                self.on_profile_imported(profile)
+            except Exception:  # noqa: BLE001, S110
+                pass
         self._fire_change("import")
 
     # ------------------------------------------------------------------

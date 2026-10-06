@@ -386,12 +386,19 @@ class TestVerifyAndCheckpoint(_Base):
         _write(new / "mods" / "a.jar", "CONTENT")
         plan = UpdatePlan(copy=[Path("mods/a.jar")])
         execute_plan(plan, old, new)
-        cp = cp_mod.load_checkpoint(old)
-        self.assertIsNotNone(cp)
-        self.assertEqual(cp.stage, "applied")
-        self.assertEqual([c.pack_root for c in cp_mod.scan_checkpoints()
-                          if c.pack_root == str(old)], [],
-                         "已完成的检查点不该出现在「中断」列表里")
+        # 先直接读文件确认写成了 applied（scan_checkpoints 会顺手清掉它）
+        import json
+        from app.core.checkpoint import _pack_hash
+        path = (self.dbdir / "cache" / "checkpoints"
+                / f"{_pack_hash(old)}.json")
+        self.assertTrue(path.is_file())
+        self.assertEqual(json.loads(path.read_text("utf-8"))["stage"],
+                         "applied")
+        # 已完成的不该出现在"中断"列表里（并且会被清理）
+        self.assertEqual([c for c in cp_mod.scan_checkpoints()
+                          if c.pack_root == str(old)], [])
+        self.assertFalse(path.is_file())
+
 
     def test_interrupted_checkpoint_is_detected(self):
         from app.core import checkpoint as cp_mod

@@ -28,7 +28,9 @@ resources/
 
 # 测试用的自签证书与临时产物
 tests/_tls/
-tests/logs/*.tmp
+# 测试运行日志（每次都重新生成，不纳入版本库；结论汇总在
+# docs/测试记录-v0.5.0.md 与 CHANGELOG.md 里）
+tests/logs/
 
 # 真实网络实测的临时下载目录
 _realworld/

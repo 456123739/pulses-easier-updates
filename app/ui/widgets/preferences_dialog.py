@@ -24,7 +24,7 @@ _CATEGORIES = [
 ]
 
 _INT_KEYS = {
-    "multi_slots", "single_slots", "defer_to_single_after",
+    "multi_slots", "single_slots",
     "part_threads", "max_connections",
     "connect_timeout", "read_idle_timeout", "per_url_timeout",
     "stall_timeout", "min_speed_bps",
