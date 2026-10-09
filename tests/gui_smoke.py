@@ -236,7 +236,62 @@ def main() -> int:
             print(f"    （截图跳过：{e}）")
         return True
 
-    steps = [step_locate, step_scan, step_apply, step_pending, step_shot]
+    def step_splash():
+        """
+        启动页（splash）：
+          · 露面第一帧就在屏幕中间 —— 不会先在左上角闪一个 100px 的小窗
+          · 露面后尺寸稳定 —— 不会"啪"地从占位尺寸跳到最终尺寸
+          · 进度条完整落在 logo 内（左右都不超出）
+          · 启动没结束前进度条不到顶（伪进度），但确实在推进
+        """
+        if getattr(step_splash, "sp", None) is None:
+            print("\n── 0) 启动页（splash）──")
+            from app.ui.splash import SplashScreen
+            step_splash.sp = SplashScreen(
+                app, on_done=lambda: None,
+                boot_tasks=[("smoke", lambda: time.sleep(0.6))])
+            step_splash.samples = []
+            step_splash.place = None
+            step_splash.t0 = time.time()
+            return False
+
+        sp = step_splash.sp
+        if not sp._closed:
+            if step_splash.place is None:
+                lp = sp._logo_wrap.place_info()
+                bp = sp.progress.place_info()
+                step_splash.place = (float(lp["relx"]), float(lp["relwidth"]),
+                                     float(bp["relx"]), float(bp["relwidth"]))
+            step_splash.samples.append(
+                (sp.state(), sp.winfo_rootx(), sp.winfo_rooty(),
+                 sp.winfo_width(), sp.winfo_height(),
+                 sp._progress_value, sp._finishing))
+        if not sp._closed and time.time() - step_splash.t0 < 3.0:
+            return False
+
+        samples = step_splash.samples
+        shown = [s for s in samples if s[0] != "withdrawn"]
+        check(bool(shown) and all(s[1] > 0 and s[2] > 0 for s in shown),
+              "启动页露面即在屏幕中间（不在左上角闪小窗）",
+              str([(s[1], s[2]) for s in shown[:3]]))
+        check(bool(shown) and len({(s[3], s[4]) for s in shown}) == 1,
+              "启动页露面后尺寸稳定（不从占位尺寸跳变）",
+              str(sorted({(s[3], s[4]) for s in shown})))
+        lx, lw, bx, bw = step_splash.place or (0.0, 0.0, 0.0, 0.0)
+        check(bx >= lx - 1e-6 and bx + bw <= lx + lw + 1e-6,
+              "进度条完整落在 logo 内（左右都不超出）",
+              f"logo {lx:.3f}+{lw:.3f} vs bar {bx:.3f}+{bw:.3f}")
+        mid = [s[5] for s in samples if not s[6]]
+        check(bool(mid) and max(mid) < 1.0,
+              "启动没完成时进度条不到顶（伪进度）",
+              f"max={max(mid):.3f}" if mid else "没有采样到")
+        span = f"{min(mid):.3f}→{max(mid):.3f}" if mid else "没有采样到"
+        check(bool(mid) and max(mid) - min(mid) > 0.05,
+              "进度条确实在推进（不是僵住）", span)
+        return True
+
+    steps = [step_splash, step_locate, step_scan, step_apply, step_pending,
+             step_shot]
 
     def tick():
         try:

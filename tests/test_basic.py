@@ -131,6 +131,47 @@ class TestStartupChain(unittest.TestCase):
         self.assertIn("on_done", sig.parameters)
         self.assertIn("boot_tasks", sig.parameters)
 
+    def test_splash_progress_never_tops_out(self):
+        """伪进度：一直逼近但永远到不了顶，只有启动完成才补满。"""
+        from app.ui.splash import _PROGRESS_CAP, progress_at
+        self.assertEqual(progress_at(0), 0.0)
+        vals = [progress_at(t) for t in range(0, 4000, 50)]
+        self.assertLess(max(vals), _PROGRESS_CAP)
+        self.assertLess(_PROGRESS_CAP, 1.0)
+        self.assertGreater(progress_at(2000), progress_at(300))  # 大趋势向上
+        self.assertGreater(progress_at(4000), 0.8)               # 也不能磨洋工
+
+    def test_splash_progress_is_smooth(self):
+        """不能有跳变（观感上要"灵动"，不是一格一格蹦）。"""
+        from app.ui.splash import _PROGRESS_CAP, progress_at
+        prev = 0.0
+        for t in range(0, 3000, 33):
+            v = progress_at(t)
+            self.assertGreaterEqual(v, 0.0)
+            self.assertLessEqual(v, _PROGRESS_CAP)
+            self.assertLess(abs(v - prev), 0.06, f"t={t} 跳变过大")
+            prev = v
+
+    def test_splash_ease_out_cubic(self):
+        from app.ui.splash import ease_out_cubic
+        self.assertEqual(ease_out_cubic(0.0), 0.0)
+        self.assertEqual(ease_out_cubic(1.0), 1.0)
+        self.assertGreater(ease_out_cubic(0.5), 0.5)   # 前段快、后段收
+        self.assertEqual(ease_out_cubic(-1.0), 0.0)    # 越界夹紧
+        self.assertEqual(ease_out_cubic(2.0), 1.0)
+
+    def test_splash_bar_stays_inside_logo(self):
+        """进度条必须比 logo 窄、居中、且完整落在 logo 范围内。"""
+        from app.ui.splash import _BAR_WIDTH_RATIO, bar_geometry
+        logo_x, logo_w = 30, 640
+        x, w = bar_geometry(logo_w, logo_x)
+        self.assertLess(w, logo_w)
+        self.assertGreaterEqual(x, logo_x)
+        self.assertLessEqual(x + w, logo_x + logo_w)
+        self.assertAlmostEqual(w / logo_w, _BAR_WIDTH_RATIO, places=2)
+        self.assertAlmostEqual(x - logo_x, (logo_x + logo_w) - (x + w),
+                               delta=1)  # 左右留白相等 = 居中
+
     def test_boot_tasks_shape(self):
         """boot_tasks 需要是可迭代的 (title, callable) 序列。"""
         src = (_ROOT / "app" / "ui" / "main_window.py").read_text(
