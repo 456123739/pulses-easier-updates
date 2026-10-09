@@ -322,8 +322,10 @@ def _run(tmp: Path, real: dict) -> int:
         check(not (cache_root / "mods" / real["filename"]).exists(),
               "更新成功后释放了本次下载缓存（腾空间）★批次3")
     check(pv._phase == "idle", "phase 回到 idle")
-    check(pv._btn_state == "ready",
-          "按钮复位为「开始更新」（不再停在「确认更新」）★T4")
+    check(pv.update_zip is None,
+          "更新完成后清掉了旧更新包（回到「请拖入更新包」状态）★T4")
+    check(pv._btn_state != "ready",
+          "不再留着「开始更新」让玩家重复点 ★T4")
     check(pv.diff is None and pv.plan is None,
           "应用完成后变更列表/计划已复位 ★T4")
     check(not pv._download_tasks, "待下载清单已清空 ★T4")
@@ -334,8 +336,8 @@ def _run(tmp: Path, real: dict) -> int:
 
     after_temp = {str(p) for p in
                   Path(tempfile.gettempdir()).glob("pulses_play_*")}
-    # 注意：pv._temp_dir 仍在（同一个更新包可以重复确认），退出时才该清理。
-    # 但"一次成功更新后残留一整份 merged 副本"属于已知问题（P1-5）。
+    # 注意：v0.6.3 起成功后会自动清包，_temp_dir 随 _reset_pack_state() 一起清掉；
+    # 这里只要求"没有新增残留"（残留一整份 merged 副本属已知问题 P1-5）。
     new_temp = after_temp - before_temp
     check(not new_temp, "系统临时目录没有新增残留", str(new_temp))
 
