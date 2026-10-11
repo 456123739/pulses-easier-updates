@@ -345,6 +345,23 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"    （遮罩自检异常：{e}）")
         check(ok, "遮罩能盖上、也能撤掉（Text 滑动时不拉丝）")
+
+        wl = getattr(app.sidebar, "whitelist_panel", None)
+        wl_ok = False
+        if wl is not None:
+            try:
+                wl._toggle()                 # 展开白名单面板
+                samples = []
+                t0 = time.time()
+                while time.time() - t0 < 0.35:
+                    app.update()
+                    samples.append(int(wl.list_frame.winfo_height()))
+                    time.sleep(0.008)
+                top = max(samples) if samples else 0
+                wl_ok = any(2 < h < top - 2 for h in samples)
+            except Exception as e:  # noqa: BLE001
+                print(f"    （白名单面板自检异常：{e}）")
+        check(wl_ok, "白名单面板展开也是高度动画")
         return True
 
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,

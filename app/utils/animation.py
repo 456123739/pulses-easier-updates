@@ -158,16 +158,20 @@ def tween(widget, duration_ms: int, on_frame: Callable,
 # ----------------------------------------------------------------------
 # 折叠 / 展开（切换式按钮）
 # ----------------------------------------------------------------------
-def natural_height(widget) -> int:
+def natural_height(widget, refresh: bool = False) -> int:
     """
-    内容自然高度（首次量一次就缓存）。
+    内容自然高度（默认量一次就缓存）。
 
-    动画会把 `configure(height=…)` 改成动画值，之后再量就不是自然高度了。
+    动画会把 `configure(height=…)` 改成动画值，之后再量就不是自然高度了 ——
+    所以量之前先把尺寸传播打开；内容会变的控件（列表）用 `refresh=True`
+    强制重新量。
     """
     cached = getattr(widget, "_anim_natural_h", 0)
-    if cached:
+    if cached and not refresh:
         return int(cached)
     try:
+        widget.grid_propagate(True)
+        widget.pack_propagate(True)
         widget.update_idletasks()
         h = int(widget.winfo_reqheight())
     except Exception:  # noqa: BLE001
@@ -201,14 +205,17 @@ def animate_height(widget, start_h: float, end_h: float,
 
 def toggle_height(widget, show: bool,
                   duration_ms: int = Anim.TOGGLE_MS,
-                  on_done: Callable[[], None] | None = None) -> Tween:
+                  on_done: Callable[[], None] | None = None,
+                  refresh_natural: bool = False) -> Tween:
     """
     展开 / 收起一个 grid 容器：高度 0 ↔ 自然高度。
 
     展开：先压成 0 再 `grid()`（避免闪一帧全高）→ 补到自然高度。
     收起：补到 0 → `grid_remove()`。
+
+    内容会变的控件（例如白名单列表）传 `refresh_natural=True`，每次都重量。
     """
-    target = natural_height(widget)
+    target = natural_height(widget, refresh=refresh_natural)
     cur = 0
     try:
         cur = int(widget.winfo_height())

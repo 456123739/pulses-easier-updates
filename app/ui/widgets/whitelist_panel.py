@@ -25,7 +25,8 @@ from pathlib import Path
 import customtkinter as ctk
 
 from ...core import database as db
-from ...theme import Color, Font, Size
+from ...theme import Anim, Color, Font, Size
+from ...utils.animation import natural_height, toggle_height
 
 try:
     from tkinterdnd2 import DND_FILES
@@ -194,15 +195,32 @@ class WhitelistPanel(ctk.CTkFrame):
     # 布局
     # ------------------------------------------------------------------
     def _toggle(self):
+        """展开/收起：列表高度补间（条目会变，所以每次都重量）。"""
         self._collapsed = not self._collapsed
-        if self._collapsed:
-            self.arrow.configure(text="▶")
-            self.hint.grid_remove()
-            self.list_frame.grid_remove()
-        else:
-            self.arrow.configure(text="▼")
+        show = not self._collapsed
+        if show:
             self.hint.grid()
             self.list_frame.grid()
+        else:
+            self.hint.grid_remove()
+        try:
+            self.after(Anim.TOGGLE_MS // 2, lambda: self.arrow.configure(
+                text="▼" if show else "▶"))
+        except Exception:  # noqa: BLE001, S110
+            pass
+        toggle_height(self.list_frame, show, duration_ms=Anim.TOGGLE_MS,
+                      refresh_natural=True)
+
+    def _resize_list(self):
+        """条目变化后同步列表高度（展开时高度被动画固定住了）。"""
+        if self._collapsed:
+            return
+        try:
+            self.list_frame.grid_propagate(False)
+            self.list_frame.configure(height=natural_height(
+                self.list_frame, refresh=True))
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _rebuild_rows(self):
         for w in self.list_frame.winfo_children():
@@ -215,10 +233,12 @@ class WhitelistPanel(ctk.CTkFrame):
                          font=Font.TINY, text_color=Color.TEXT_MUTED,
                          fg_color=Color.TRANSPARENT)\
                 .grid(row=0, column=0, sticky="w", padx=4, pady=4)
+            self._resize_list()
             return
 
         for i, path in enumerate(self._items):
             self._build_row(i, path)
+        self._resize_list()
 
     def _build_row(self, index: int, path: str):
         row = ctk.CTkFrame(self.list_frame, fg_color=Color.TRANSPARENT)
