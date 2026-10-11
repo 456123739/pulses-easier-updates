@@ -14,7 +14,8 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from ...core import cache as cache_mod
-from ...theme import Color, Font, Size
+from ...theme import Anim, Color, Font, Size
+from ...utils.animation import toggle_height
 from .dialog import alert
 from .preferences_dialog import open_preferences
 
@@ -110,14 +111,17 @@ class MorePanel(ctk.CTkFrame):
             pass
 
     def _toggle(self):
+        """展开/收起：高度补间（不是瞬间显隐），箭头在动画中点翻转。"""
         self._collapsed = not self._collapsed
-        if self._collapsed:
-            self.arrow.configure(text="▶")
-            self.body.grid_remove()
-        else:
-            self.arrow.configure(text="▼")
-            self.body.grid()
+        show = not self._collapsed
+        if show:
             self._refresh_size()
+        try:
+            self.after(Anim.TOGGLE_MS // 2, lambda: self.arrow.configure(
+                text="▼" if show else "▶"))
+        except Exception:  # noqa: BLE001, S110
+            pass
+        toggle_height(self.body, show, duration_ms=Anim.TOGGLE_MS)
 
     def _refresh_size(self):
         try:

@@ -24,7 +24,8 @@ from ...core.markdown_renderer import (
     tk_plain_text,
     wrap_html,
 )
-from ...theme import Color, Font, Size
+from ...theme import Anim, Color, Font, Size
+from ...utils.animation import toggle_height
 from .dialog import alert
 
 _MONO_FONT_CANDIDATES = [
@@ -157,6 +158,7 @@ class MarkdownEditor(ctk.CTkFrame):
         self._render_after_id: str | None = None
         self._render_token = 0
         self._advanced_shown = False
+        self._veil: ctk.CTkFrame | None = None
         self._line_spacing = 0
         self._preview_tags_ready = False
 
@@ -286,13 +288,10 @@ class MarkdownEditor(ctk.CTkFrame):
         return btn
 
     def _toggle_advanced(self):
+        """「更多」工具条：高度补间展开/收起，不是瞬间显隐。"""
         self._advanced_shown = not self._advanced_shown
-        if self._advanced_shown:
-            self.advanced.grid()
-            self.more_btn.configure(text="更多")
-        else:
-            self.advanced.grid_remove()
-            self.more_btn.configure(text="更多")
+        toggle_height(self.advanced, self._advanced_shown,
+                      duration_ms=Anim.TOGGLE_MS)
 
     # ------------------------------------------------------------------
     # Tooltip
@@ -527,6 +526,30 @@ class MarkdownEditor(ctk.CTkFrame):
         self._render_suspended = False
         if self._mode == "preview":
             self._schedule_render(immediate=True)
+
+    # ------------------------------------------------------------------
+    def set_transition_veil(self, on: bool):
+        """
+        切页滑动时用一块纯色盖住编辑区。
+
+        Tk 移动 Text 控件时会"拉丝"（文字残影）—— 盖一层平板后，滑动期间
+        真正被移动的只是这块色板；编辑区在底下怎么重绘都看不见。
+        """
+        if on:
+            try:
+                if self._veil is None:
+                    self._veil = ctk.CTkFrame(self, fg_color=Color.LOG_BG,
+                                              corner_radius=8)
+                self._veil.grid(row=2, column=0, sticky="nsew",
+                                padx=Size.PAD_PANEL, pady=(0, 6))
+                self._veil.lift()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        elif self._veil is not None:
+            try:
+                self._veil.grid_remove()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     # ------------------------------------------------------------------
     def get_markdown(self) -> str:

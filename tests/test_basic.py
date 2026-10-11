@@ -515,5 +515,104 @@ class TestConfigConsistency(unittest.TestCase):
                          self.db.DEFAULT_DOWNLOAD_OPTIONS["single_slots"])
 
 
+class TestAnimationTween(unittest.TestCase):
+    """补间核心：按真实时间推进（慢帧不拖长动画）+ 折叠高度补间。"""
+
+    class _FakeWidget:
+        """只实现 Tween / toggle_height 需要的那几个方法。"""
+
+        def __init__(self, height: int = 1, natural: int = 120):
+            self.scheduled: list = []
+            self.heights: list = []
+            self._h = height
+            self._natural = natural
+
+        def winfo_exists(self):
+            return True
+
+        def winfo_height(self):
+            return self._h
+
+        def winfo_reqheight(self):
+            return self._natural
+
+        def update_idletasks(self):
+            pass
+
+        def after(self, ms, fn, *args):
+            self.scheduled.append((ms, fn))
+            return f"id{len(self.scheduled)}"
+
+        def after_cancel(self, _aid):
+            pass
+
+        def grid(self):
+            pass
+
+        def grid_remove(self):
+            pass
+
+        def grid_propagate(self, *_a):
+            pass
+
+        def pack_propagate(self, *_a):
+            pass
+
+        def configure(self, **kw):
+            if "height" in kw:
+                self._h = int(kw["height"])
+                self.heights.append(self._h)
+
+    def setUp(self):
+        from app.utils import animation
+        self.animation = animation
+        self.clock = [0.0]
+        self._real = animation.time.perf_counter
+        animation.time.perf_counter = lambda: self.clock[0]
+        self.addCleanup(setattr, animation.time, "perf_counter", self._real)
+
+    def _drive(self, widget, step_ms: float = 20.0, guard: int = 500) -> int:
+        """手动跑帧：每"帧"把假时钟往前推 step_ms。"""
+        n = 0
+        while widget.scheduled and n < guard:
+            n += 1
+            _ms, fn = widget.scheduled.pop(0)
+            self.clock[0] += step_ms / 1000.0
+            fn()
+        return n
+
+    def test_slow_frames_do_not_stretch_duration(self):
+        """一帧卡 40ms 时，总时长仍≈目标时长（不是 帧数×40ms）。"""
+        w = self._FakeWidget()
+        seen = []
+        self.animation.Tween(
+            w, 100, lambda e, r: seen.append((self.clock[0] * 1000, e)))
+        self._drive(w, step_ms=40.0)
+        self.assertLessEqual(self.clock[0] * 1000, 100 + 40 + 1e-6)
+        self.assertEqual(seen[-1][1], 1.0)      # 最后一帧一定到位
+        self.assertFalse(w.scheduled)
+
+    def test_cancel_stops_scheduling(self):
+        w = self._FakeWidget()
+        tw = self.animation.Tween(w, 200, lambda e, r: None)
+        tw.cancel()
+        while w.scheduled:
+            _ms, fn = w.scheduled.pop(0)
+            fn()
+        self.assertEqual(w.scheduled, [])
+
+    def test_toggle_height_expands_then_collapses(self):
+        w = self._FakeWidget(height=1, natural=120)
+        self.animation.toggle_height(w, True, duration_ms=100)
+        self._drive(w, step_ms=20.0)
+        self.assertEqual(w.heights[0], 0)       # 先压成 0，避免闪一帧全高
+        self.assertEqual(w.heights[-1], 120)    # 补到自然高度
+
+        w2 = self._FakeWidget(height=120, natural=120)
+        self.animation.toggle_height(w2, False, duration_ms=100)
+        self._drive(w2, step_ms=20.0)
+        self.assertEqual(w2.heights[-1], 0)     # 收起补到 0
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

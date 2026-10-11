@@ -56,7 +56,8 @@ from ..core.updater import (
 from ..core.updater import (
     fill_expectations as updater_fill,
 )
-from ..theme import Color, Font, Size
+from ..theme import Anim, Color, Font, Size
+from ..utils.animation import toggle_height
 from .widgets.change_list import ChangeList
 from .widgets.dialog import confirm
 from .widgets.drop_zone import DropZone
@@ -405,12 +406,11 @@ class PlayerView(ctk.CTkFrame):
         self._on_slot_toggle(not self._slot_expanded)
 
     def _on_slot_toggle(self, expand: bool):
+        """槽位面板展开/收起：高度补间，不是瞬间显隐。"""
         self._slot_expanded = bool(expand)
         try:
-            if self._slot_expanded:
-                self.slot_panel.grid()
-            else:
-                self.slot_panel.grid_remove()
+            toggle_height(self.slot_panel, self._slot_expanded,
+                          duration_ms=Anim.TOGGLE_MS)
         except Exception:  # noqa: BLE001, S110
             pass
         self._refresh_slots()

@@ -14,7 +14,7 @@ import customtkinter as ctk
 from ..core import database as db
 from ..core import resume as resume_mod
 from ..core.state import AppState
-from ..theme import Color, Size
+from ..theme import Anim, Color, Size
 from ..utils.animation import slide_pages
 from .developer_view import DeveloperView
 from .player_view import PlayerView
@@ -671,11 +671,21 @@ class MainWindow(ctk.CTk):
             self._switch(self.developer_view, self.player_view)
 
     def _switch(self, old, new):
-        new.place(in_=self.page_host, relx=1.0, rely=0,
-                  relwidth=1.0, relheight=1.0)
+        """
+        玩家 ↔ 开发者：水平滑动换页。
 
+        滑动期间把两个视图里的**文本控件**（更新日志编辑区、日志区）盖上
+        一块纯色板：Tk 移动 Text 控件会"拉丝"，盖住之后滑动的只是色板。
+        """
         suspended = []
+        veiled = []
         for view in (old, new):
+            for obj in self._find_transition_veils(view):
+                try:
+                    obj.set_transition_veil(True)
+                    veiled.append(obj)
+                except Exception:  # noqa: BLE001, S110
+                    pass
             editor = self._find_markdown_editor(view)
             if editor is not None and hasattr(editor, "_suspend_render"):
                 try:
@@ -685,6 +695,11 @@ class MainWindow(ctk.CTk):
                     pass
 
         def _resume():
+            for obj in veiled:
+                try:
+                    obj.set_transition_veil(False)
+                except Exception:  # noqa: BLE001, S110
+                    pass
             for editor in suspended:
                 try:
                     editor._resume_render()
@@ -693,8 +708,18 @@ class MainWindow(ctk.CTk):
             self._switching = False
 
         slide_pages(self.page_host, old, new, direction="left",
-                    duration_ms=340,
+                    duration_ms=Anim.SWITCH_MS,
                     on_done=_resume)
+
+    @staticmethod
+    def _find_transition_veils(view):
+        """视图里需要"滑动时盖住"的控件（Text 类会拉丝）。"""
+        found = []
+        for attr in ("editor", "markdown_editor", "log", "log_panel"):
+            obj = getattr(view, attr, None)
+            if obj is not None and hasattr(obj, "set_transition_veil"):
+                found.append(obj)
+        return found
 
     @staticmethod
     def _find_markdown_editor(view):

@@ -290,8 +290,65 @@ def main() -> int:
               "进度条确实在推进（不是僵住）", span)
         return True
 
+    def step_toggles():
+        """折叠面板：「更多」展开是高度补间，不是瞬间弹出。"""
+        print("\n── 7) 折叠面板动画 ──")
+        panel = app.sidebar.more_panel
+        body = panel.body
+        natural = max(1, int(body.winfo_reqheight()))
+        samples = []
+        panel._toggle()
+        t0 = time.time()
+        while time.time() - t0 < 0.4:
+            app.update()
+            try:
+                samples.append(int(body.winfo_height()))
+            except Exception:  # noqa: BLE001
+                break
+            time.sleep(0.008)
+        mid = [h for h in samples if 2 < h < natural - 2]
+        check(bool(mid), "「更多」展开是高度动画（不是瞬间弹出）",
+              f"采样 {samples[:8]}… 自然高度 {natural}")
+        check(bool(samples) and abs(samples[-1] - natural) <= 2,
+              "展开结束停在自然高度",
+              f"{samples[-1] if samples else 'n/a'} vs {natural}")
+        panel._toggle()                      # 收回去，别影响后面的截图
+        _pump(app, 0.3)
+        return True
+
+    def step_switch():
+        """身份切换：滑动换页；文本区接入了遮罩（防拉丝），且按时结束。"""
+        print("\n── 8) 身份切换（滑动 + 遮罩）──")
+        t0 = time.time()
+        app._on_identity_changed("开发者")
+        while app._switching and time.time() - t0 < 5:
+            app.update()
+            time.sleep(0.008)
+        ms = (time.time() - t0) * 1000
+        check(app._current == "开发者", "身份切到开发者")
+        check(ms < 1500, "切页动画在合理时间内结束", f"{ms:.0f}ms")
+
+        veils = (app._find_transition_veils(app.developer_view)
+                 + app._find_transition_veils(app.player_view))
+        check(len(veils) >= 2, "两个视图的文本区都接入了切换遮罩",
+              f"{len(veils)} 个")
+        ed = getattr(app.developer_view, "editor", None)
+        ok = False
+        try:
+            ed.set_transition_veil(True)
+            app.update_idletasks()          # 映射要等一次 update 才生效
+            shown = bool(ed._veil.winfo_ismapped())
+            ed.set_transition_veil(False)
+            app.update_idletasks()
+            hidden = not ed._veil.winfo_ismapped()
+            ok = shown and hidden
+        except Exception as e:  # noqa: BLE001
+            print(f"    （遮罩自检异常：{e}）")
+        check(ok, "遮罩能盖上、也能撤掉（Text 滑动时不拉丝）")
+        return True
+
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,
-             step_shot]
+             step_shot, step_toggles, step_switch]
 
     def tick():
         try:

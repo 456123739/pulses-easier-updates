@@ -3,13 +3,18 @@ animation.py — 动画工具
 ------------------------------------------------
 基于 after() 的线性/缓动插值动画：
   - 颜色过渡
-  - 页面水平滑动（easeInOutCubic）
+  - 页面水平滑动（easeInOutCubic，整数像素步进）
+  - 折叠 / 展开的高度补间（切换式按钮）
   - 滑动色块（策略按钮组）
   - 数值平滑（进度条）
+
+统一按**真实经过时间**推进（见 `Tween`）：某一帧慢了，动画不会被跟着拖长 ——
+按固定帧数推进时，一帧卡 40ms 就会让整段动画多花一倍时间，看起来发涩。
 
 健壮性：widget 被销毁、after 被取消、configure 失败时静默停止。
 """
 
+import time
 from collections.abc import Callable
 
 from ..theme import Anim
@@ -68,6 +73,176 @@ def _safe_configure(widget, **kwargs) -> bool:
 
 
 # ----------------------------------------------------------------------
+# 补间核心：按真实时间推进
+# ----------------------------------------------------------------------
+class Tween:
+    """
+    一次补间动画。每帧回调 `on_frame(t_eased, t_raw)`：
+
+      * `t_raw`  = 已经过时间 / 总时长（0~1，真实时间）
+      * `t_eased`= 缓动后的值
+
+    与"跑固定帧数"的写法相比：慢帧只影响帧率，不影响**总时长**。
+    """
+
+    def __init__(self, widget, duration_ms: int, on_frame: Callable,
+                 on_done: Callable[[], None] | None = None,
+                 ease: Callable[[float], float] = ease_in_out_cubic,
+                 frame_ms: int = Anim.FRAME_MS):
+        self.widget = widget
+        self.duration_ms = max(1, int(duration_ms))
+        self.on_frame = on_frame
+        self.on_done = on_done
+        self.ease = ease
+        self.frame_ms = max(1, int(frame_ms))
+        self._after_id = None
+        self._cancelled = False
+        self._t0 = time.perf_counter()
+        self._tick()
+
+    # -- 控制 ----------------------------------------------------------
+    @property
+    def running(self) -> bool:
+        return not self._cancelled and self._after_id is not None
+
+    def cancel(self):
+        self._cancelled = True
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:  # noqa: BLE001, S110
+                pass
+            self._after_id = None
+
+    # -- 内部 ----------------------------------------------------------
+    def _tick(self):
+        if self._cancelled:
+            return
+        try:
+            if not self.widget.winfo_exists():
+                return
+        except Exception:  # noqa: BLE001
+            return
+
+        raw = (time.perf_counter() - self._t0) * 1000.0 / self.duration_ms
+        raw = max(0.0, min(1.0, raw))
+        try:
+            self.on_frame(self.ease(raw), raw)
+        except Exception:  # noqa: BLE001
+            return
+
+        if raw >= 1.0:
+            self._after_id = None
+            if self.on_done is not None:
+                try:
+                    self.on_done()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            return
+
+        try:
+            self._after_id = self.widget.after(self.frame_ms, self._tick)
+        except Exception:  # noqa: BLE001
+            self._after_id = None
+
+
+def tween(widget, duration_ms: int, on_frame: Callable,
+          on_done: Callable[[], None] | None = None,
+          ease: Callable[[float], float] = ease_in_out_cubic,
+          frame_ms: int = Anim.FRAME_MS) -> Tween:
+    """`Tween` 的简写入口。"""
+    return Tween(widget, duration_ms, on_frame, on_done=on_done, ease=ease,
+                 frame_ms=frame_ms)
+
+
+# ----------------------------------------------------------------------
+# 折叠 / 展开（切换式按钮）
+# ----------------------------------------------------------------------
+def natural_height(widget) -> int:
+    """
+    内容自然高度（首次量一次就缓存）。
+
+    动画会把 `configure(height=…)` 改成动画值，之后再量就不是自然高度了。
+    """
+    cached = getattr(widget, "_anim_natural_h", 0)
+    if cached:
+        return int(cached)
+    try:
+        widget.update_idletasks()
+        h = int(widget.winfo_reqheight())
+    except Exception:  # noqa: BLE001
+        h = 0
+    try:
+        widget._anim_natural_h = h  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return h
+
+
+def animate_height(widget, start_h: float, end_h: float,
+                   duration_ms: int = Anim.TOGGLE_MS,
+                   on_done: Callable[[], None] | None = None) -> Tween:
+    """高度补间（要求 widget 已关掉尺寸传播，否则会被内容顶回自然高度）。"""
+    try:
+        widget.grid_propagate(False)
+    except Exception:  # noqa: BLE001, S110
+        pass
+    try:
+        widget.pack_propagate(False)
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    def _frame(t_eased: float, _raw: float):
+        _safe_configure(widget, height=max(0, int(round(
+            lerp(start_h, end_h, t_eased)))))
+
+    return tween(widget, duration_ms, _frame, on_done=on_done)
+
+
+def toggle_height(widget, show: bool,
+                  duration_ms: int = Anim.TOGGLE_MS,
+                  on_done: Callable[[], None] | None = None) -> Tween:
+    """
+    展开 / 收起一个 grid 容器：高度 0 ↔ 自然高度。
+
+    展开：先压成 0 再 `grid()`（避免闪一帧全高）→ 补到自然高度。
+    收起：补到 0 → `grid_remove()`。
+    """
+    target = natural_height(widget)
+    cur = 0
+    try:
+        cur = int(widget.winfo_height())
+    except Exception:  # noqa: BLE001
+        cur = 0
+    if cur <= 1:                      # 收起状态（Tk 对未映射控件报 1）
+        cur = 0
+
+    if show:
+        _safe_configure(widget, height=0)
+        try:
+            widget.grid()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        start, end = 0, target
+    else:
+        start, end = (cur or target), 0
+
+    def _done():
+        if not show:
+            try:
+                widget.grid_remove()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        if on_done is not None:
+            try:
+                on_done()
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    return animate_height(widget, start, end, duration_ms, on_done=_done)
+
+
+# ----------------------------------------------------------------------
 # 颜色过渡
 # ----------------------------------------------------------------------
 def animate_color(widget, attr: str, start: str, end: str,
@@ -99,68 +274,81 @@ def animate_color(widget, attr: str, start: str, end: str,
 # ----------------------------------------------------------------------
 def slide_pages(container, old_widget, new_widget, direction: str = "left",
                 duration_ms: int = Anim.SWITCH_MS,
-                on_done: Callable[[], None] | None = None):
+                on_done: Callable[[], None] | None = None,
+                on_start: Callable[[], None] | None = None):
     """
     卡片式水平滑动：新页面从一侧滑入，旧页面向另一侧滑出。
-    使用 place 的 relx 位移实现，不涉及 alpha。
-    缓动：easeInOutCubic，视觉类似手机滑屏。
-    """
-    steps = max(1, duration_ms // Anim.FRAME_MS)
 
-    # 初始定位：新页面在另一侧
+    两个要点（都是踩过的坑）：
+      * 位移用**整数像素** `x`，不用 `relx` 小数 —— 小数位移会让 Tk 每帧
+        重绘子控件，Text / 编辑器一类控件会"拉丝"。
+      * 按真实时间推进（`Tween`），慢帧不会把动画拖长。
+    """
     try:
-        new_widget.place(in_=container, relx=1.0, rely=0,
-                         relwidth=1.0, relheight=1.0)
-        new_widget.lift()
+        width = int(container.winfo_width())
     except Exception:  # noqa: BLE001
-        # place 失败则直接显示
+        width = 0
+    if width <= 1:                      # 容器还没布局出来：直接换页
         try:
             old_widget.place_forget()
             new_widget.place(in_=container, relx=0, rely=0,
                              relwidth=1.0, relheight=1.0)
         except Exception:  # noqa: BLE001, S110
             pass
-        if on_done:
+        if on_done is not None:
             on_done()
-        return
+        return None
 
-    def _step(i: int):
-        t_raw = i / steps
-        t = ease_in_out_cubic(t_raw)
-        if direction == "left":
-            old_x, new_x = lerp(0.0, -1.0, t), lerp(1.0, 0.0, t)
-        else:
-            old_x, new_x = lerp(0.0, 1.0, t), lerp(-1.0, 0.0, t)
+    sign = -1.0 if direction == "left" else 1.0
+    try:
+        # 初始定位：新页面停在另一侧（relx 必须显式归零，否则会和 x 叠加）
+        new_widget.place(in_=container, relx=0, x=int(-sign * width), y=0,
+                         relwidth=1.0, relheight=1.0)
+        new_widget.lift()
+    except Exception:  # noqa: BLE001
+        try:
+            old_widget.place_forget()
+            new_widget.place(in_=container, relx=0, rely=0,
+                             relwidth=1.0, relheight=1.0)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        if on_done is not None:
+            on_done()
+        return None
 
+    if on_start is not None:
+        try:
+            on_start()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _frame(t: float, _raw: float):
+        new_x = int(round(lerp(-sign * width, 0.0, t)))
+        old_x = int(round(lerp(0.0, sign * width, t)))
         try:
             if old_widget.winfo_exists():
-                old_widget.place_configure(relx=old_x)
+                old_widget.place_configure(relx=0, x=old_x)
             if new_widget.winfo_exists():
-                new_widget.place_configure(relx=new_x)
-        except Exception:  # noqa: BLE001
-            return
+                new_widget.place_configure(relx=0, x=new_x)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
-        if i < steps:
+    def _done():
+        try:
+            if old_widget.winfo_exists():
+                old_widget.place_forget()
+            if new_widget.winfo_exists():
+                new_widget.place(in_=container, relx=0, rely=0,
+                                 relwidth=1.0, relheight=1.0)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        if on_done is not None:
             try:
-                container.after(Anim.FRAME_MS, _step, i + 1)
-            except Exception:  # noqa: BLE001
-                return
-        else:
-            try:
-                if old_widget.winfo_exists():
-                    old_widget.place_forget()
-                if new_widget.winfo_exists():
-                    new_widget.place(in_=container, relx=0, rely=0,
-                                     relwidth=1.0, relheight=1.0)
+                on_done()
             except Exception:  # noqa: BLE001, S110
                 pass
-            if on_done:
-                try:
-                    on_done()
-                except Exception:  # noqa: BLE001, S110
-                    pass
 
-    _step(0)
+    return tween(container, duration_ms, _frame, on_done=_done)
 
 
 # ----------------------------------------------------------------------

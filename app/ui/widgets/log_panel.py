@@ -27,6 +27,7 @@ class LogPanel(ctk.CTkFrame):
                          corner_radius=Size.RADIUS_BUTTON, **kwargs)
 
         self.on_clear = on_clear
+        self._veil: ctk.CTkFrame | None = None
         # 日志上限（首选项 ui.log_max_lines）：超出后丢弃最早的行，
         # 否则长时间下载会把整个会话的日志都堆在 Tk 文本控件里
         self._max_lines = self._read_max_lines()
@@ -66,6 +67,29 @@ class LogPanel(ctk.CTkFrame):
         inner = self.text._textbox
         for level, color in _LEVEL_COLORS.items():
             inner.tag_config(level, foreground=color)
+
+    def set_transition_veil(self, on: bool):
+        """
+        切页滑动时用一块纯色盖住日志文本区。
+
+        Tk 移动 Text 控件会"拉丝"（文字残影）—— 盖一层平板后，滑动期间
+        真正被移动的只是这块色板。
+        """
+        if on:
+            try:
+                if self._veil is None:
+                    self._veil = ctk.CTkFrame(self, fg_color=Color.LOG_BG,
+                                              corner_radius=0)
+                self._veil.grid(row=1, column=0, sticky="nsew",
+                                padx=8, pady=(4, 8))
+                self._veil.lift()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        elif self._veil is not None:
+            try:
+                self._veil.grid_remove()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     @staticmethod
     def _read_max_lines() -> int:
