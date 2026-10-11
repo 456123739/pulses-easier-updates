@@ -614,5 +614,45 @@ class TestAnimationTween(unittest.TestCase):
         self.assertEqual(w2.heights[-1], 0)     # 收起补到 0
 
 
+class TestSegmentedSwitch(unittest.TestCase):
+    """自绘分段切换（替代 CTkSegmentedButton）：接口与选中逻辑。"""
+
+    def _make(self, values=("玩家", "开发者"), command=None):
+        from app.ui.widgets.segmented_switch import SegmentedSwitch
+        return SegmentedSwitch(None, values=list(values), command=command)
+
+    def test_defaults_to_first_value(self):
+        sw = self._make()
+        self.assertEqual(sw.get(), "玩家")
+
+    def test_set_does_not_fire_command(self):
+        calls = []
+        sw = self._make(command=calls.append)
+        sw.set("开发者")
+        self.assertEqual(sw.get(), "开发者")
+        self.assertEqual(calls, [])
+
+    def test_select_fires_command_once(self):
+        calls = []
+        sw = self._make(command=calls.append)
+        sw.select("开发者")
+        self.assertEqual(calls, ["开发者"])
+        sw.select("开发者")            # 重复点同一段不再回调
+        self.assertEqual(calls, ["开发者"])
+
+    def test_unknown_value_ignored(self):
+        calls = []
+        sw = self._make(command=calls.append)
+        sw.select("管理员")
+        self.assertEqual(sw.get(), "玩家")
+        self.assertEqual(calls, [])
+
+    def test_has_sliding_highlight_bar(self):
+        sw = self._make()
+        self.assertTrue(hasattr(sw, "_bar"), "缺少高亮条（canvas 版没有这个）")
+        self.assertEqual(sw._bar_target_x(0), 0)
+        self.assertGreater(sw._bar_target_x(1), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

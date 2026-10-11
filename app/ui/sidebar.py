@@ -29,6 +29,7 @@ from .widgets.drop_zone import DropZone
 from .widgets.info_card import InfoCard
 from .widgets.more_panel import MorePanel
 from .widgets.whitelist_panel import WhitelistPanel
+from .widgets.segmented_switch import SegmentedSwitch
 
 _LOGO_PATH = _asset("logo.png")
 
@@ -322,15 +323,11 @@ class Sidebar(ctk.CTkFrame):
         inner = ctk.CTkFrame(wrap, fg_color=Color.TRANSPARENT)
         inner.pack(fill="both", expand=True, padx=12)
 
-        self.identity_switch = ctk.CTkSegmentedButton(  # type: ignore[call-arg]
+        # 不用 CTkSegmentedButton：它的高亮块画在 canvas 上，切换只能瞬间跳；
+        # SegmentedSwitch 用"按钮 + 滑动高亮条"等效实现，切换有过渡动画。
+        self.identity_switch = SegmentedSwitch(
             inner, values=["玩家", "开发者"],
             font=Font.BODY, height=Size.SEG_BTN_H,
-            fg_color=Color.CARD_BG,
-            selected_color=Color.ACCENT,
-            selected_hover_color=Color.ACCENT_HOVER,
-            unselected_color=Color.CARD_BG,
-            unselected_hover_color=Color.BORDER,
-            text_color=Color.TEXT_PRIMARY,
             command=self._on_identity)
         self.identity_switch.set("玩家")
         self.identity_switch.pack(fill="x")

@@ -27,6 +27,7 @@ from ...core.markdown_renderer import (
 from ...theme import Anim, Color, Font, Size
 from ...utils.animation import toggle_height
 from .dialog import alert
+from .segmented_switch import SegmentedSwitch
 
 _MONO_FONT_CANDIDATES = [
     "Sarasa Mono SC", "Sarasa Term SC", "Cascadia Mono",
@@ -229,15 +230,9 @@ class MarkdownEditor(ctk.CTkFrame):
         self.full_btn.grid(row=0, column=3, sticky="w", padx=(0, 6))
         self._bind_tip(self.full_btn, "大屏预览（GitHub 风格）")
 
-        self.mode_switch = ctk.CTkSegmentedButton(
+        self.mode_switch = SegmentedSwitch(
             bar, values=["编辑", "预览"],
             font=Font.SMALL, height=28, width=140,
-            fg_color=Color.LOG_BG,
-            selected_color=Color.ACCENT,
-            selected_hover_color=Color.ACCENT_HOVER,
-            unselected_color=Color.LOG_BG,
-            unselected_hover_color=Color.BORDER,
-            text_color=Color.TEXT_PRIMARY,
             command=self._on_mode_change)
         self.mode_switch.set("编辑")
         self.mode_switch.grid(row=0, column=4, sticky="w")

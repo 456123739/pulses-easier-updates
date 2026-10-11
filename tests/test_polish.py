@@ -19,6 +19,7 @@ test_polish.py — 第三批（健壮性与整洁）回归测试
 import json
 import sys
 import tempfile
+import time
 import types
 import unittest
 import zipfile
@@ -358,10 +359,22 @@ class TestDeveloperViewPolish(_Base):
             zf.writestr("overrides/", b"")
         view._on_pack_dropped([target])
         self.assertEqual(view.source_zip, target)
+        # 解析在后台线程里跑，收尾会 set_options() → on_change() 写库。
+        # 等它跑完并摘掉回调：否则这条线程会漏到后面的用例里，
+        # 把别的用例刚写好的导出选项覆盖掉（表现为偶发失败）。
+        deadline = time.time() + 5
+        while getattr(view, "_parsing", False) and time.time() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.05)
+        try:
+            view.export_options.on_change = None
+        except Exception:  # noqa: BLE001, S110
+            pass
         view._clear_pack_state()
 
     def test_export_options_written_on_toggle(self):
         """勾选即写库（桩控件存不住 BooleanVar，这里直接验证接线）。"""
+        self.assertIsNotNone(self.db.get_db_path(), "前置：库路径应可用")
         view = self._view()
         self.db.set_export_options({"min_size": False})
         with mock.patch.object(view.export_options, "get_options",

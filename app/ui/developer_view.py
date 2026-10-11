@@ -144,10 +144,21 @@ class DeveloperView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     def _on_export_options_changed(self):
         """勾选即写库（旧实现只在点"导出"时才写，中途关掉就丢了）。"""
+        if db.get_db_path() is None:
+            self._warn_export_options("数据库路径不可用，导出选项这次没能存下来")
+            return
         try:
-            if db.get_db_path() is None:
-                return
             db.set_export_options(self.export_options.get_options())
+        except Exception as e:  # noqa: BLE001
+            self._warn_export_options(f"导出选项写入失败：{e}")
+
+    def _warn_export_options(self, msg: str):
+        """写库失败别静默吞掉（以前是 pass，出问题查不到）。"""
+        log = getattr(self, "log", None)
+        if log is None:
+            return
+        try:
+            log.log("warn", msg)
         except Exception:  # noqa: BLE001, S110
             pass
 

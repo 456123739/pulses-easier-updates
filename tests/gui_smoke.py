@@ -362,6 +362,25 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001
                 print(f"    （白名单面板自检异常：{e}）")
         check(wl_ok, "白名单面板展开也是高度动画")
+
+        sw = app.sidebar.identity_switch
+        sw_ok = False
+        try:
+            sw.set("玩家")
+            app.update_idletasks()
+            x0 = int(sw._bar.winfo_x())
+            target = sw._bar_target_x(1)
+            sw.select("开发者", notify=False)
+            xs = []
+            t0 = time.time()
+            while time.time() - t0 < 0.4:
+                app.update()
+                xs.append(int(sw._bar.winfo_x()))
+                time.sleep(0.008)
+            sw_ok = any(x0 < x < target for x in xs) and abs(xs[-1] - target) <= 2
+        except Exception as e:  # noqa: BLE001
+            print(f"    （身份切换按钮自检异常：{e}）")
+        check(sw_ok, "身份切换按钮的高亮条是滑过去的（自绘，不用 canvas）")
         return True
 
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,
