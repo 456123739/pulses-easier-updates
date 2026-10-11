@@ -31,6 +31,7 @@ class MainWindow(ctk.CTk):
         super().__init__()
 
         self.title("Pulses Easier")
+        self._set_window_icon()
         self.geometry(f"{Size.WIN_W}x{Size.WIN_H}")
         self.minsize(Size.WIN_MIN_W, Size.WIN_MIN_H)
         self.configure(fg_color=Color.WINDOW_BG)
@@ -57,6 +58,34 @@ class MainWindow(ctk.CTk):
         # 默认只放玩家端
         self.player_view.place(in_=self.page_host, relx=0, rely=0,
                                relwidth=1.0, relheight=1.0)
+
+    # ------------------------------------------------------------------
+    def _set_window_icon(self):
+        """
+        标题栏 / 任务栏图标。
+
+        Windows 优先用 `app.ico`（多尺寸，任务栏和资源管理器都清楚），
+        其它平台退到 `app_icon.png`；两条路都失败就保持 Tk 默认图标。
+        """
+        import sys as _sys
+
+        from ..paths import asset as _asset
+
+        if _sys.platform.startswith("win"):
+            try:
+                ico = _asset("app.ico")
+                if ico.is_file():
+                    self.iconbitmap(default=str(ico))
+            except Exception:  # noqa: BLE001, S110
+                pass
+        try:
+            png = _asset("app_icon.png")
+            if png.is_file():
+                from tkinter import PhotoImage
+                self._icon_photo = PhotoImage(file=str(png))
+                self.iconphoto(True, self._icon_photo)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     # ------------------------------------------------------------------
     def _build_sidebar(self):
