@@ -248,7 +248,8 @@ class TestMoveIn(unittest.TestCase):
         try:
             T._IS_WINDOWS = True
             short = T.sys_path(Path("C:/a/b"))
-            self.assertEqual(short, "C:/a/b")
+            # 短路径原样返回：Windows 的 os.fspath 会把 / 换成 \，期望值按平台取
+            self.assertEqual(short, str(Path("C:/a/b")))
             long = "C:/" + "d" * 300 + "/x.txt"
             self.assertTrue(T.sys_path(long).startswith("\\\\?\\"))
             unc = "\\\\server\\share\\" + "d" * 300

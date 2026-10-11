@@ -17,6 +17,7 @@ fixture_server.py — 功能测试用的本地 HTTP 源。
 
 import hashlib
 import random
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -284,10 +285,24 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
 
+class _QuietHTTPServer(ThreadingHTTPServer):
+    """
+    客户端中途断开是测试**故意**制造的（取消 / 截断 / 换源类用例），
+    不算服务端错误 —— 但 socketserver 默认会给它打一整段 traceback，
+    Windows 上（WinError 10053）尤其明显，会把 CI 日志刷花。
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class FixtureServer:
     def __init__(self, host="127.0.0.1", port=0,
                  certfile=None, keyfile=None):
-        self.httpd = ThreadingHTTPServer((host, port), Handler)
+        self.httpd = _QuietHTTPServer((host, port), Handler)
         self.httpd.daemon_threads = True
         self.host, self.port = self.httpd.server_address[:2]
         self.scheme = "http"

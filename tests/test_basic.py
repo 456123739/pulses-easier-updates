@@ -387,7 +387,8 @@ class TestPendingLogic(unittest.TestCase):
             notice=lambda lv, t: notices.append((lv, t)))
         self.assertEqual(panel.current_rel(), "mods/a.jar")
         panel._handle_drop("mods/a.jar", [Path("/tmp/b.jar")])
-        self.assertEqual(calls, [("mods/b.jar", "/tmp/b.jar")])
+        # 回调里记的是 str(Path)：Windows 上会变成 \tmp\b.jar，别写死正斜杠
+        self.assertEqual(calls, [("mods/b.jar", str(Path("/tmp/b.jar")))])
         self.assertEqual(panel.pending_rels(), ["mods/a.jar"],
                          "校验通过的那一页应当被关掉，其余页保留")
         self.assertTrue(any("已切换到那一页" in t for _lv, t in notices),
@@ -399,7 +400,7 @@ class TestPendingLogic(unittest.TestCase):
             [self._item("mods/a.jar", ["u"])],
             notice=lambda lv, t: notices.append((lv, t)))
         panel._handle_drop("mods/a.jar", [Path("/tmp/a.jar")])
-        self.assertEqual(calls, [("mods/a.jar", "/tmp/a.jar")])
+        self.assertEqual(calls, [("mods/a.jar", str(Path("/tmp/a.jar")))])
         self.assertFalse(panel.has_pending())
 
     def test_drop_mismatch_reports(self):

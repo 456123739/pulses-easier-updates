@@ -15,6 +15,7 @@ test_downloader.py — 下载器功能测试（本地 simulated 源，不依赖�
 """
 
 import hashlib
+import os
 import sys
 import tempfile
 import threading
@@ -604,8 +605,10 @@ class TestDiskPolicy(TestBase):
         self.assertEqual(again["type"], info["type"])
 
     def test_probe_failure_is_unknown(self):
-        orig = dl._linux_mount_of
+        """探测拿不到设备信息 → unknown（Linux / Windows 各堵自己那条路）。"""
+        saved = (dl._linux_mount_of, dl._windows_drive_of)
         dl._linux_mount_of = lambda path: None
+        dl._windows_drive_of = lambda path: None
         try:
             dl._DISK_CACHE.clear()
             info = dl.detect_disk_type(self.tmp)
@@ -615,7 +618,7 @@ class TestDiskPolicy(TestBase):
             self.assertEqual(pol["multi_slots"], 16)
             self.assertEqual(pol["effective_part_threads"], 4)
         finally:
-            dl._linux_mount_of = orig
+            dl._linux_mount_of, dl._windows_drive_of = saved
             dl._DISK_CACHE.clear()
 
     def test_override_limits_are_downgrade_only(self):
@@ -725,13 +728,16 @@ class TestDiskPolicy(TestBase):
         不再碰 /proc/mounts、sysfs（Windows 上则是 IOCTL / PowerShell）。
         """
         calls = {"n": 0}
-        orig = dl._linux_mount_of
+        # Linux 走 _linux_mount_of，Windows 走 _windows_drive_of：
+        # 数当前平台真正会被调用的那条缝，否则在 Windows 上永远数是 0
+        seam = "_windows_drive_of" if os.name == "nt" else "_linux_mount_of"
+        orig = getattr(dl, seam)
 
         def counting(path):
             calls["n"] += 1
             return orig(path)
 
-        dl._linux_mount_of = counting
+        setattr(dl, seam, counting)
         try:
             dl.clear_disk_cache()
             info = dl.probe_disk_cache(self.tmp)
@@ -745,7 +751,7 @@ class TestDiskPolicy(TestBase):
             self.assertEqual(calls["n"], 1,
                              f"启动探过之后又探测了 {calls['n'] - 1} 次")
         finally:
-            dl._linux_mount_of = orig
+            setattr(dl, seam, orig)
             dl.clear_disk_cache()
 
     def test_clear_disk_cache_forces_reprobe(self):
