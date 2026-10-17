@@ -159,6 +159,9 @@ class _Job:
     def __init__(self, task: DownloadTask, target: Path):
         self.task = task
         self.target = target
+        # 先写临时名，校验通过才 rename 到正式名。
+        # 和 RideX 的 .part 一样：中途被杀不会留下"看起来已下完"的残文件。
+        self.temp = target.with_name(target.name + ".aster-tmp")
         self.size = -2                  # -2 未获取；-1 未知大小；>=0 已知
         self.chunks: list[_Chunk] = []
         # 可重入：_next_spec 会在持锁时调 pick_source（同一个锁）
@@ -261,8 +264,9 @@ class _Job:
             if self.fh is not None:
                 return self.fh
             self.target.parent.mkdir(parents=True, exist_ok=True)
-            fh = open(self.target, "r+b" if self.target.exists() else "w+b")
-            if self.size and self.size > 0:
+            fresh = not self.temp.exists()
+            fh = open(self.temp, "r+b" if not fresh else "w+b")
+            if self.size and self.size > 0 and fresh:
                 fh.truncate(self.size)
             self.fh = fh
             return fh
@@ -512,8 +516,14 @@ def _next_spec(job: _Job, budget: int):
 def _finalize(job: _Job, log) -> None:
     """收尾：关文件 → 校验 → 失败则整文件单线程重试一次。"""
     job.close_file()
-    ok, err = _verify(job.target, job.task)
+    ok, err = _verify(job.temp, job.task)
     if ok:
+        try:
+            os.replace(job.temp, job.target)
+        except OSError as e:
+            job.finished = True
+            job.failed_reason = f"落盘失败：{e}"
+            return
         job.finished = True
         return
     if job.retried:
@@ -527,6 +537,11 @@ def _finalize(job: _Job, log) -> None:
                         f"改用单线程整文件重试")
         except Exception:  # noqa: BLE001, S110
             pass
+    try:
+        if job.temp.exists():
+            job.temp.unlink()
+    except OSError:
+        pass
     with job.lock:
         job.once = list(job.sources)      # 全部降级成"只允许单线程"
         for s in job.sources:
@@ -536,11 +551,12 @@ def _finalize(job: _Job, log) -> None:
 
 
 def _cleanup_target(job: _Job):
-    try:
-        if job.target.exists():
-            job.target.unlink()
-    except OSError:
-        pass
+    for p in (job.temp, job.target):
+        try:
+            if p.exists():
+                p.unlink()
+        except OSError:
+            pass
 
 
 # ----------------------------------------------------------------------
@@ -685,8 +701,9 @@ def download_files(
             if job.size == 0:
                 job.open_file()
                 job.close_file()
-                job.finished = True
-                _finish(job, True)
+                _finalize(job, log)
+                if job.finished:
+                    _finish(job, not job.failed_reason, job.failed_reason)
                 continue
             # 没有可用源且没有在跑的线程 → 这个文件失败
             if not job.has_source() and running.get(id(job), 0) == 0 \
