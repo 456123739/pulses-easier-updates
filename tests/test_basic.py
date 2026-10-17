@@ -234,10 +234,12 @@ class TestUiContract(unittest.TestCase):
         self.assertEqual(list(sig.parameters), ["self", "expand"])
 
     def test_player_view_calls_download_files_with_expected_kwargs(self):
+        """调用点必须经引擎注册表，且回调参数一个都不能少（两条引擎同签名）。"""
         src = (_ROOT / "app" / "ui" / "player_view.py").read_text(
             encoding="utf-8")
-        self.assertIn("from ..core.downloader import DownloadTask, download_files",
-                      src)
+        self.assertIn("from ..core.downloader import DownloadTask", src)
+        self.assertIn("self._engine_module().download_files(", src,
+                      "下载必须走选中的引擎，不能写死 RideX")
         for kwarg in ("target_dir=", "threads=", "progress=", "log=",
                       "byte_progress=", "should_abort=",
                       "on_file_started=", "on_file_done=",
