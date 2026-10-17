@@ -1,7 +1,8 @@
 """
-strategy_group.py — 三连策略按钮组
+strategy_group.py — 策略按钮组
 ------------------------------------------------
-三个策略按钮紧贴排列，每个按钮都是独立圆角矩形。
+目录行三档（完全匹配 / 替换重名 / 跳过重名），根目录散文件多一档
+「保留键位」。按钮紧贴排列，每个按钮都是独立圆角矩形。
 选中态：亮黄背景 + 深色文字。
 切换时按钮颜色 150ms 渐变。
 """
@@ -18,9 +19,13 @@ from ...utils.animation import lerp_color
 class StrategyGroup(ctk.CTkFrame):
     def __init__(self, master, value: Strategy = Strategy.FULL_MATCH,
                  on_change: Callable[[Strategy], None] | None = None,
-                 btn_width: int = 72, height: int = 28, **kwargs):
-        # 整体宽度 = 三按钮宽之和（无间隙，紧贴）
-        total_w = btn_width * len(STRATEGY_LIST)
+                 btn_width: int = 72, height: int = 28,
+                 strategies: list[Strategy] | None = None, **kwargs):
+        self._strategies = list(strategies or STRATEGY_LIST)
+        if value not in self._strategies:
+            value = self._strategies[0]
+        # 整体宽度 = 按钮宽之和（无间隙，紧贴）
+        total_w = btn_width * len(self._strategies)
 
         super().__init__(master, fg_color=Color.TRANSPARENT,
                          corner_radius=0, width=total_w, height=height,
@@ -36,11 +41,11 @@ class StrategyGroup(ctk.CTkFrame):
         self._buttons: list[ctk.CTkButton] = []
         self._anim_tokens: list[int] = []
 
-        # 三列等宽，无间隙
-        for i in range(len(STRATEGY_LIST)):
+        # 等宽，无间隙
+        for i in range(len(self._strategies)):
             self.grid_columnconfigure(i, weight=1, minsize=btn_width)
 
-        for i, strat in enumerate(STRATEGY_LIST):
+        for i, strat in enumerate(self._strategies):
             selected = (strat == value)
 
             btn = ctk.CTkButton(
@@ -89,8 +94,11 @@ class StrategyGroup(ctk.CTkFrame):
                   notify: bool = True):
         if value == self._value:
             return
+        try:
+            idx = self._strategies.index(value)
+        except ValueError:
+            return
         self._value = value
-        idx = STRATEGY_LIST.index(value)
 
         # 每轮动画使用独立 token，互不干扰
         token = id(self) ^ (idx << 8)

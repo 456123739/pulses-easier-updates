@@ -4,7 +4,7 @@ updater.py — 按策略执行更新
 plan 生成规则：
   白名单文件夹（文件级变更）：
     - ADDED 文件 → copy
-    - MODIFIED 文件 → 完全匹配/替换重名 copy；跳过重名 skip
+    - MODIFIED 文件 → 完全匹配/替换重名/保留键位 copy；跳过重名 skip
     - DELETED 文件 → 完全匹配 delete；其他 skip
   非白名单文件夹（文件夹级变更）：
     - ADDED 目录 → 整个目录 copy
@@ -13,6 +13,11 @@ plan 生成规则：
         · 替换重名 → 目录合并（同名覆盖）
         · 跳过重名 → 目录合并（同名跳过）
     - DELETED 目录 → 完全匹配 delete 整个目录；其他 skip
+
+「保留键位」（MERGE_KEYS）只用于根目录 options.txt 这类键位文件：
+  搬运照常（包里的新内容覆盖过去），搬完再把本地原有的 key_* 行写回去，
+  于是"更新 + 玩家键位不动"同时成立。这类文件不参与大小/摘要校验
+  （合并后必然和源不一致），只校验存在性。
 
 执行阶段：
   1) replace_dirs 目录操作（事务性：旧目录先改名，任一步失败整体回滚）
@@ -71,6 +76,85 @@ class UpdatePlan:
     dir_files: dict[str, list[str]] = field(default_factory=dict)
     # 目录 rel → 该目录下"允许保留玩家版本"的文件（跳过重名策略）
     dir_optional: dict[str, list[str]] = field(default_factory=dict)
+    # 需要"搬运后写回本地键位行"的文件 rel（保留键位策略）
+    merge_keys: set[str] = field(default_factory=set)
+
+
+# ----------------------------------------------------------------------
+# 键位行合并（options.txt）
+# ----------------------------------------------------------------------
+_KEY_PREFIX = "key_"
+
+
+def read_keybind_lines(path: Path) -> dict[str, str]:
+    """
+    读出本地文件里的键位行：{键名: 整行}（不含行尾）。
+
+    读不了（不存在 / 权限 / 不是 UTF-8）就当没有键位，退化成普通覆盖。
+    """
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return {}
+    text = data.decode("utf-8", "surrogateescape")
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        s = line.strip()
+        if not s.startswith(_KEY_PREFIX) or ":" not in s:
+            continue
+        out[s.split(":", 1)[0]] = s
+    return out
+
+
+def merge_keybind_lines(path: Path, saved: dict[str, str]) -> bool:
+    """
+    把 saved 里的键位行写回 path：
+
+      - 同名的 key_* 行 → 换成玩家本地那一行（这就是"保留键位"）
+      - 包里没有、本地有的 key_* 行 → 追加到末尾
+      - 其余行一律以 path 现有内容为准（= 更新包的新版本）
+
+    行尾沿用文件原本的风格（Windows 的 options.txt 是 CRLF）。
+    返回是否真的改动了文件。
+    """
+    if not saved:
+        return False
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return False
+
+    text = data.decode("utf-8", "surrogateescape")
+    nl = "\r\n" if "\r\n" in text else "\n"
+    out: list[str] = []
+    seen: set[str] = set()
+    changed = False
+
+    for line in text.splitlines():
+        s = line.strip()
+        name = s.split(":", 1)[0] if ":" in s else ""
+        if name.startswith(_KEY_PREFIX) and name in saved:
+            want = saved[name]
+            out.append(want)
+            seen.add(name)
+            if want != s:
+                changed = True
+        else:
+            out.append(line)
+
+    for name, line in saved.items():
+        if name not in seen:
+            out.append(line)
+            changed = True
+
+    if not changed:
+        return False
+    try:
+        Path(path).write_bytes(
+            (nl.join(out) + nl).encode("utf-8", "surrogateescape"))
+    except OSError:
+        return False
+    return True
 
 
 # ----------------------------------------------------------------------
@@ -239,8 +323,12 @@ def fill_expectations(plan: UpdatePlan, source: PlanSource,
 
     这是"搬运"能成立的前提：文件搬过去之后源可能已经不在了（同卷移动），
     校验不能再回头去读源，只能靠事先记下的期望值。
+
+    「保留键位」的文件跳过登记：合并后它必然和源不一致，登记了只会让
+    校验报假失败（这类文件只校验存在性，见 verify_after_update）。
     """
-    targets = list(plan.copy)
+    merge = plan.merge_keys
+    targets = [rel for rel in plan.copy if rel.as_posix() not in merge]
     for files in plan.dir_files.values():
         targets.extend(Path(f) for f in files)
     for rel in targets:
@@ -320,6 +408,8 @@ def build_plan(diff, checked, strategies,
                 plan.skip.append(rel)
             else:
                 plan.copy.append(rel)
+                if strat == Strategy.MERGE_KEYS:
+                    plan.merge_keys.add(rel.as_posix())
         elif change.kind == ChangeKind.DELETED:
             if strat == Strategy.FULL_MATCH:
                 plan.delete.append(rel)
@@ -541,6 +631,7 @@ def execute_plan(
         "failed": [],
         "moved": 0,          # 瞬时搬运（rename/硬链接）的文件数
         "bytes": 0,          # 真正复制过的字节数
+        "merged": 0,         # 写回本地键位的文件数
     }
 
     copy_list = list(dict.fromkeys(plan.copy))
@@ -625,6 +716,11 @@ def execute_plan(
         parent_key = parent.as_posix()
         need_parent = parent_key not in ready_dirs
 
+        # 保留键位：搬运前先把本地键位行读进内存（搬完源文件可能已经
+        # 被 move 走了，那时再读就晚了）
+        saved_keys = (read_keybind_lines(dst)
+                      if key in plan.merge_keys and dst.is_file() else None)
+
         def _copy(pr=pair, d=dst, k=key, es=expect_size, eh=expect_hash,
                   p=parent, pk=parent_key, mk=need_parent) -> bool:
             if mk and pk not in ready_dirs:
@@ -645,6 +741,11 @@ def execute_plan(
         before_bytes = report["bytes"]
         if _retry_once(_copy, _log, f"写入 {key}"):
             report["applied"] += 1
+            # 保留键位：把本地 key_* 行写回刚搬过来的新文件
+            if saved_keys:
+                if merge_keybind_lines(dst, saved_keys):
+                    report["merged"] += 1
+                    _log("info", f"已保留 {len(saved_keys)} 条本地键位：{key}")
             cpw.done(key)
         else:
             report["failed"].append(
@@ -700,6 +801,8 @@ def execute_plan(
          f"失败 {len(report['failed'])}"
          f"（其中瞬时搬运 {report['moved']} 个，"
          f"实际复制 {transfer.human_bytes(report['bytes'])}）")
+    if report["merged"]:
+        _log("info", f"其中 {report['merged']} 个文件保留了本地键位")
 
     return report
 
@@ -804,6 +907,14 @@ def verify_after_update(plan: UpdatePlan, old_root: Path,
     for rel in dict.fromkeys(plan.copy):
         key = rel.as_posix()
         target = old_root / rel
+        if key in plan.merge_keys:
+            # 「保留键位」合并过：内容必然和源不同，只要求文件在
+            try:
+                if not target.is_file():
+                    failed.append({"rel": key, "error": "缺失"})
+            except OSError as e:
+                failed.append({"rel": key, "error": str(e)})
+            continue
         try:
             if not target.is_file():
                 failed.append({"rel": key, "error": "缺失"})

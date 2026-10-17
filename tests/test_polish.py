@@ -73,7 +73,7 @@ class TestApplyRulesAgree(_Base):
         for kind in (ChangeKind.ADDED, ChangeKind.MODIFIED, ChangeKind.DELETED):
             for folder_level in (False, True):
                 for checked in (True, False):
-                    for strat in ("完全匹配", "替换重名", "跳过重名"):
+                    for strat in ("完全匹配", "替换重名", "跳过重名", "保留键位"):
                         combos.append(Change(
                             Path("config/x.toml"), kind,
                             is_folder_level=folder_level))
@@ -840,6 +840,167 @@ class TestNoDanglingReferences(unittest.TestCase):
             except Exception as e:  # noqa: BLE001
                 failed.append(f"{mod}: {type(e).__name__}: {e}")
         self.assertEqual(failed, [], "模块导入失败：" + "; ".join(failed))
+
+
+# ======================================================================
+# 保留键位：更新 options.txt 时玩家键位不动
+# ======================================================================
+class TestKeybindMerge(_Base):
+    """
+    键位都在根目录 options.txt 的 key_* 行里（原版 + 绝大多数模组）。
+    「保留键位」= 包内新内容照常覆盖，本地 key_* 行原样写回。
+    """
+
+    def test_default_strategy_for_keybind_file(self):
+        from app.config import Strategy, default_strategy_for_file
+        self.assertEqual(default_strategy_for_file("options.txt"),
+                         Strategy.MERGE_KEYS)
+        self.assertEqual(default_strategy_for_file("OPTIONS.TXT"),
+                         Strategy.MERGE_KEYS)
+        self.assertEqual(default_strategy_for_file("servers.dat"),
+                         Strategy.REPLACE_SAME)
+
+    def test_read_keybind_lines_keeps_only_keys(self):
+        from app.core.updater import read_keybind_lines
+        p = self.tmp / "options.txt"
+        _write(p, "fov:70\n"
+                  "key_key.forward:key.keyboard.w\n"
+                  "soundCategory_master:0.5\n"
+                  "key_key.jump:key.keyboard.space\n")
+        got = read_keybind_lines(p)
+        self.assertEqual(set(got), {"key_key.forward", "key_key.jump"})
+        self.assertEqual(got["key_key.forward"],
+                         "key_key.forward:key.keyboard.w")
+
+    def test_merge_replaces_appends_and_keeps_crlf(self):
+        from app.core.updater import merge_keybind_lines
+        p = self.tmp / "options.txt"
+        p.write_bytes(b"fov:70\r\nkey_key.forward:key.keyboard.q\r\n")
+        changed = merge_keybind_lines(p, {
+            "key_key.forward": "key_key.forward:key.keyboard.w",
+            "key_key.jump": "key_key.jump:key.keyboard.space",
+        })
+        self.assertTrue(changed)
+        data = p.read_bytes()
+        self.assertIn(b"\r\n", data, "Windows 的 CRLF 不能被改成 LF")
+        text = data.decode("utf-8")
+        self.assertIn("fov:70", text)                    # 包里的新内容保留
+        self.assertIn("key_key.forward:key.keyboard.w", text)   # 键位覆盖回来
+        self.assertIn("key_key.jump:key.keyboard.space", text)  # 本地独有补回
+        self.assertNotIn("key.keyboard.q", text)
+
+    def test_merge_noop_returns_false(self):
+        from app.core.updater import merge_keybind_lines
+        p = self.tmp / "options.txt"
+        _write(p, "fov:70\nkey_key.forward:key.keyboard.w\n")
+        self.assertFalse(merge_keybind_lines(p, {
+            "key_key.forward": "key_key.forward:key.keyboard.w"}))
+
+    def test_plan_marks_merge_files(self):
+        from app.config import ChangeKind, Strategy
+        from app.core.differ import Change
+        from app.core.updater import build_plan
+        ch = Change(Path("options.txt"), ChangeKind.MODIFIED)
+        diff = types.SimpleNamespace(added=[], modified=[ch], deleted=[],
+                                     total=1)
+        plan = build_plan(diff, {"options.txt": True},
+                          {"options.txt": Strategy.MERGE_KEYS.value})
+        self.assertEqual(plan.copy, [Path("options.txt")])
+        self.assertEqual(plan.merge_keys, {"options.txt"})
+
+    def test_will_skip_semantics(self):
+        from app.config import ChangeKind
+        from app.core import apply_rules
+        from app.core.differ import Change
+        strat = {"options.txt": "保留键位"}
+        checked = {"options.txt": True}
+        mod = Change(Path("options.txt"), ChangeKind.MODIFIED)
+        dele = Change(Path("options.txt"), ChangeKind.DELETED)
+        self.assertFalse(apply_rules.will_skip(mod, checked, strat))
+        self.assertTrue(apply_rules.will_skip(dele, checked, strat))
+
+    def test_apply_keeps_player_keys(self):
+        from app.config import ChangeKind, Strategy
+        from app.core.differ import Change
+        from app.core.updater import (build_plan, execute_plan,
+                                      verify_after_update)
+        old = self.tmp / "inst"
+        new = self.tmp / "src"
+        _write(old / "options.txt",
+               "fov:90\n"
+               "key_key.forward:key.keyboard.w\n"
+               "key_key.jump:key.keyboard.space\n")
+        _write(new / "options.txt",
+               "fov:70\n"
+               "key_key.forward:key.keyboard.q\n"
+               "key_key.sprint:key.keyboard.left.control\n")
+        ch = Change(Path("options.txt"), ChangeKind.MODIFIED)
+        diff = types.SimpleNamespace(added=[], modified=[ch], deleted=[],
+                                     total=1)
+        plan = build_plan(diff, {"options.txt": True},
+                          {"options.txt": Strategy.MERGE_KEYS.value},
+                          old_root=old, new_root=new)
+        report = execute_plan(plan, old, new)
+        self.assertEqual(report["failed"], [])
+        self.assertEqual(report["merged"], 1)
+        text = (old / "options.txt").read_text("utf-8")
+        self.assertIn("fov:70", text)                    # 新版设置生效
+        self.assertIn("key_key.forward:key.keyboard.w", text)   # 键位保留
+        self.assertIn("key_key.jump:key.keyboard.space", text)  # 本地独有保留
+        self.assertIn("key_key.sprint:key.keyboard.left.control", text)
+        self.assertEqual(verify_after_update(plan, old, new), [])
+
+    def test_replace_same_still_overwrites(self):
+        """没选「保留键位」时行为不变：整文件覆盖。"""
+        from app.config import ChangeKind, Strategy
+        from app.core.differ import Change
+        from app.core.updater import build_plan, execute_plan
+        old = self.tmp / "inst2"
+        new = self.tmp / "src2"
+        _write(old / "options.txt", "fov:90\nkey_key.jump:key.keyboard.space\n")
+        _write(new / "options.txt", "fov:70\n")
+        ch = Change(Path("options.txt"), ChangeKind.MODIFIED)
+        diff = types.SimpleNamespace(added=[], modified=[ch], deleted=[],
+                                     total=1)
+        plan = build_plan(diff, {"options.txt": True},
+                          {"options.txt": Strategy.REPLACE_SAME.value},
+                          old_root=old, new_root=new)
+        execute_plan(plan, old, new)
+        self.assertEqual((old / "options.txt").read_text("utf-8"), "fov:70\n")
+
+    # -- 界面：文件行多一档，目录行不受影响 --------------------------------
+    def _table(self, folders, file_items):
+        from app.ui.widgets.strategy_table import StrategyTable
+        t = StrategyTable(None)
+        t.set_folders(folders, file_items=set(file_items))
+        return t
+
+    def test_file_row_has_merge_button(self):
+        from app.config import Strategy
+        t = self._table(["config", "options.txt"], {"options.txt"})
+        row = t._rows["options.txt"]
+        self.assertEqual(t.get_strategies()["options.txt"],
+                         Strategy.MERGE_KEYS.value)
+        self.assertEqual(len(row.group._buttons), 4)
+        self.assertEqual(row.group.get(), Strategy.MERGE_KEYS)
+        # 目录行还是三档
+        self.assertEqual(len(t._rows["config"].group._buttons), 3)
+
+    def test_folder_row_ignores_merge_strategy(self):
+        from app.config import Strategy
+        t = self._table(["config"], set())
+        t.set_strategies({"config": Strategy.MERGE_KEYS.value})
+        self.assertEqual(t.get_strategies()["config"],
+                         Strategy.REPLACE_SAME.value)
+        self.assertEqual(t._rows["config"].group.get(),
+                         Strategy.REPLACE_SAME)
+
+    def test_unify_never_puts_merge_on_folders(self):
+        from app.config import Strategy
+        t = self._table(["config", "options.txt"], {"options.txt"})
+        t._on_unify()
+        self.assertNotEqual(t.get_strategies()["config"],
+                            Strategy.MERGE_KEYS.value)
 
 
 if __name__ == "__main__":

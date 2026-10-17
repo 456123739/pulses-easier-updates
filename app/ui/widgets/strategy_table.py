@@ -18,7 +18,8 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from ...config import STRATEGY_LIST, Strategy, default_strategy_for_dir
+from ...config import (FILE_STRATEGY_LIST, STRATEGY_LIST, Strategy,
+                       default_strategy_for_dir, default_strategy_for_file)
 from ...theme import Color, Font, Size
 from .strategy_group import StrategyGroup
 from .toggle_item import ToggleItem
@@ -159,9 +160,10 @@ class StrategyTable(ctk.CTkFrame):
             if name in self._rows:
                 continue
             checked = name not in self._blacklist
-            # 默认策略与玩家端一致（mods 等 → 完全匹配；config → 替换重名）
+            # 默认策略与玩家端一致（mods 等 → 完全匹配；config → 替换重名；
+            # options.txt → 保留键位）
             if name in self._file_items:
-                default_strat = default_strategy_for_dir("")
+                default_strat = default_strategy_for_file(name)
             else:
                 default_strat = default_strategy_for_dir(name)
             r = _Row(name, checked=checked, strategy=default_strat)
@@ -222,6 +224,11 @@ class StrategyTable(ctk.CTkFrame):
                     s = Strategy(strat) if isinstance(strat, str) else strat
                 except ValueError:
                     continue
+                # 目录行没有"保留键位"这一档，收到就忽略（保持界面与计划一致）
+                allowed = (FILE_STRATEGY_LIST if name in self._file_items
+                           else STRATEGY_LIST)
+                if s not in allowed:
+                    continue
                 r.strategy = s
                 if r.group is not None:
                     r.group.set_value(s, animate=False, notify=False)
@@ -262,8 +269,12 @@ class StrategyTable(ctk.CTkFrame):
         body.grid_columnconfigure(0, weight=1)
         r.body = body
 
+        # 根目录散文件多一档「保留键位」；按钮窄一点，四个才放得下
+        strategies = FILE_STRATEGY_LIST if is_file else STRATEGY_LIST
         group = StrategyGroup(
             body, value=(Strategy.FULL_MATCH if locked else r.strategy),
+            strategies=strategies,
+            btn_width=(60 if is_file else 72),
             on_change=lambda _s, name=r.folder: self._on_strategy(name))
         group.grid(row=0, column=0, sticky="w")
         r.group = group
@@ -373,11 +384,18 @@ class StrategyTable(ctk.CTkFrame):
         if not candidates:
             return
 
-        cur = candidates[0].strategy
+        # 统一策略只在目录级三档里轮换；「保留键位」是键位文件专用的，
+        # 不参与轮换（否则 options.txt 一行会把整个循环卡住）
+        cur = next((r.strategy for r in candidates
+                    if r.strategy in STRATEGY_LIST), STRATEGY_LIST[0])
         idx = STRATEGY_LIST.index(cur)
         next_strat = STRATEGY_LIST[(idx + 1) % len(STRATEGY_LIST)]
 
         for r in candidates:
+            allowed = (FILE_STRATEGY_LIST if r.folder in self._file_items
+                       else STRATEGY_LIST)
+            if next_strat not in allowed:
+                continue
             r.strategy = next_strat
             if r.group is not None:
                 r.group.set_value(next_strat, animate=True, notify=False)

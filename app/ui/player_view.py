@@ -21,7 +21,8 @@ from time import time
 
 import customtkinter as ctk
 
-from ..config import Strategy, default_strategy_for_dir
+from ..config import (Strategy, default_strategy_for_dir,
+                      default_strategy_for_file)
 from ..core import cache as cache_mod
 from ..core import checkpoint as cp_mod
 from ..core import database as db
@@ -1203,14 +1204,16 @@ class PlayerView(ctk.CTkFrame):
         - 白名单内容文件夹（mods/resourcepacks/shaderpacks/tacz）走文件级
           比对，需要能删除"新版已移除"的条目 → 完全匹配；
         - config / saves / 其余目录是文件夹级比对 → 替换重名 / 跳过重名
-          （合并覆盖，绝不删玩家自己写的文件）。
+          （合并覆盖，绝不删玩家自己写的文件）；
+        - 根目录散文件默认"替换重名"，但 options.txt 走"保留键位"
+          （见 config.default_strategy_for_file）：更新照常，键位不动。
         """
         kind = kind if kind is not None else self.pack_kind
         if kind == PackKind.EXPORT:
             return Strategy.FULL_MATCH.value
         if is_file:
             # 根目录散文件（options.txt 等）：覆盖同名，但不删玩家文件
-            return default_strategy_for_dir("").value
+            return default_strategy_for_file(top).value
         return default_strategy_for_dir(top).value
 
     def _apply_strategies(self, mapping: dict,

@@ -20,6 +20,7 @@ apply_rules.py — 「这条变更是应用还是跳过」的唯一判定
     ADDED                       → 应用（复制/下载）
     MODIFIED   + 跳过重名        → 跳过
     MODIFIED   + 其他策略        → 应用
+    MODIFIED   + 保留键位        → 应用（搬运后写回本地 key_* 行）
     DELETED    + 完全匹配        → 删除（应用）
     DELETED    + 其他策略        → 跳过
 

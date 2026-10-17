@@ -42,12 +42,16 @@ class Strategy(str, Enum):
     FULL_MATCH   = "完全匹配"   # 全部覆盖，含删除
     REPLACE_SAME = "替换重名"   # 仅覆盖重名文件，不删除
     SKIP_SAME    = "跳过重名"   # 跳过已存在文件
+    MERGE_KEYS   = "保留键位"   # 覆盖内容，但本地 key_* 行原样保留
 
     @property
     def label(self) -> str:
         return self.value
 
+# 目录级可选策略：整目录替换/合并，没有"键位"概念
 STRATEGY_LIST = [Strategy.FULL_MATCH, Strategy.REPLACE_SAME, Strategy.SKIP_SAME]
+# 根目录散文件多一档「保留键位」
+FILE_STRATEGY_LIST = STRATEGY_LIST + [Strategy.MERGE_KEYS]
 
 # 每种内容类型的默认策略
 DEFAULT_STRATEGY = {
@@ -75,6 +79,23 @@ del _d
 def default_strategy_for_dir(top: str) -> Strategy:
     """顶层目录的默认策略；未知目录一律"替换重名"（合并覆盖，不删文件）。"""
     return DEFAULT_STRATEGY_BY_DIR.get(top, DEFAULT_STRATEGY[ContentType.OTHER])
+
+
+# ----------------------------------------------------------------------
+# 键位保护
+#   原版 + 绝大多数 Forge/Fabric 模组的键位都写在根目录 options.txt 的
+#   key_* 行里（模组注册 KeyBinding，游戏整表写回同一个文件）。
+#   这类文件默认走「保留键位」：包里的内容照常覆盖（新版默认值生效），
+#   玩家本地已有的 key_* 行原样保留。
+# ----------------------------------------------------------------------
+KEYBIND_FILES = frozenset({"options.txt"})
+
+
+def default_strategy_for_file(name: str) -> Strategy:
+    """根目录散文件的默认策略（键位文件走保留键位，其余替换重名）。"""
+    if str(name).strip().lower() in KEYBIND_FILES:
+        return Strategy.MERGE_KEYS
+    return default_strategy_for_dir("")
 
 
 
