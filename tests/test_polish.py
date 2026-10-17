@@ -235,7 +235,11 @@ class TestEngineBranding(_Base):
         self.assertIn("dl_mod.engine_banner()", pref)
         pv = (_ROOT / "app" / "ui" / "player_view.py").read_text(
             encoding="utf-8")
-        self.assertIn("engine_banner", pv)
+        self.assertIn("engines.banner(", pv)
+        reg = (_ROOT / "app" / "core" / "engines" / "__init__.py").read_text(
+            encoding="utf-8")
+        self.assertIn("Aster", reg)
+        self.assertIn("RideX", reg)
 
 
 # ======================================================================

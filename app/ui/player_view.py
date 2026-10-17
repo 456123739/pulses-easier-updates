@@ -34,7 +34,7 @@ from ..core import transfer
 from ..core.apply_rules import is_checked as _rule_is_checked
 from ..core.apply_rules import resolve_strategy
 from ..core.differ import DiffResult, diff_packs_parallel
-from ..core.downloader import DownloadTask, download_files
+from ..core.downloader import DownloadTask
 from ..core.mrpack import (
     index_top_folders,
     is_reserved_root_name,
@@ -1310,6 +1310,29 @@ class PlayerView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     # 阶段 2：下载
     # ------------------------------------------------------------------
+    def _engine_name(self) -> str:
+        from ..core import engines
+        try:
+            return engines.normalize(db.get_download_options().get("engine"))
+        except Exception:  # noqa: BLE001
+            return engines.DEFAULT_ENGINE
+
+    def _engine_module(self):
+        from ..core import engines
+        return engines.load(self._engine_name())
+
+    def _engine_threads(self):
+        """Aster 用全局线程预算；RideX 自己按槽位调度（传 None）。"""
+        if self._engine_name() != "aster":
+            return None
+        try:
+            opts = db.get_download_options()
+            n = (int(opts.get("multi_slots", 16))
+                 * int(opts.get("part_threads", 4)))
+        except Exception:  # noqa: BLE001
+            n = 32
+        return max(4, min(64, n))
+
     def _start_download_and_apply(self):
         if self._phase != _PHASE_IDLE:
             return
@@ -1351,17 +1374,17 @@ class PlayerView(ctk.CTkFrame):
 
         # 槽位面板按**磁盘策略限制后**的有效并发显示，而不是配置值
         try:
+            from ..core import engines
             from ..core.downloader import (
                 _get_options,
                 disk_policy_summary,
-                engine_banner,
                 resolve_disk_policy,
             )
             policy = resolve_disk_policy(cache_root, _get_options())
             eff = int(policy.get("multi_slots", 0) or 0)
             if eff > 0:
                 self.slot_panel.set_slots(eff)
-            self.log.log("info", engine_banner())
+            self.log.log("info", engines.banner(self._engine_name()))
             self.log.log("info", disk_policy_summary(cache_root,
                                                      _get_options(),
                                                      with_engine=False))
@@ -1406,10 +1429,10 @@ class PlayerView(ctk.CTkFrame):
             return self._abort_flag
 
         def worker():
-            results = download_files(
+            results = self._engine_module().download_files(
                 self._download_tasks,
                 target_dir=cache_root,
-                threads=None,
+                threads=self._engine_threads(),
                 progress=_prog,
                 log=_log,
                 byte_progress=_bytes,
@@ -1742,7 +1765,8 @@ class PlayerView(ctk.CTkFrame):
         def worker():
             ok, msg = False, ""
             try:
-                res = download_files([task], target_dir=cache, threads=1,
+                res = self._engine_module().download_files(
+                    [task], target_dir=cache, threads=1,
                                      should_abort=lambda: self._abort_flag)
                 if res and res[0].ok:
                     ok = True

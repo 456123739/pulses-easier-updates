@@ -49,6 +49,8 @@ DEFAULT_EXPORT_OPTIONS = {
 # 下载器配置
 # ----------------------------------------------------------------------
 DEFAULT_DOWNLOAD_OPTIONS = {
+    # 下载引擎：ridex = RideX 锐驰（默认）；aster = Aster 星驰
+    "engine": "ridex",
     # 两级槽位池
     "multi_slots": 16,
     "single_slots": 4,

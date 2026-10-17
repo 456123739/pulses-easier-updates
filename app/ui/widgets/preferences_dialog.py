@@ -149,6 +149,7 @@ class PreferencesDialog(ctk.CTkToplevel):
         self._current_cat = "download"
         self._rows: dict[str, _FieldRow] = {}
         self._cat_buttons: dict[str, ctk.CTkButton] = {}
+        self._engine_switch = None
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -269,6 +270,9 @@ class PreferencesDialog(ctk.CTkToplevel):
             return
 
         current = self._load_current(key)
+        self._engine_switch = None
+        if key == "download":
+            self._build_engine_row(current)
         hidden = db._HIDDEN_DOWNLOAD_KEYS if key == "download" else set()
         for opt_key, opt_label, desc, example in meta:
             if opt_key in hidden:
@@ -277,6 +281,36 @@ class PreferencesDialog(ctk.CTkToplevel):
             row = _FieldRow(self.form_scroll, opt_key, opt_label,
                             desc, example, initial)
             self._rows[opt_key] = row
+
+    def _build_engine_row(self, current: dict):
+        """下载引擎二选一（RideX / Aster）。"""
+        from ...core import engines
+        from .segmented_switch import SegmentedSwitch
+
+        box = ctk.CTkFrame(self.form_scroll, fg_color=Color.LOG_BG,
+                           corner_radius=Size.RADIUS_CARD)
+        box.pack(fill="x", padx=16, pady=(6, 14))
+
+        ctk.CTkLabel(box, text="下载引擎", font=Font.SUBTITLE,
+                     text_color=Color.TEXT_PRIMARY,
+                     fg_color=Color.TRANSPARENT)\
+            .pack(anchor="w", padx=14, pady=(12, 2))
+        ctk.CTkLabel(
+            box,
+            text=("RideX：多槽位池 + 文件内分片直写，默认。\n"
+                  "Aster：单线程起步、按剩余量自适应增开分片，"
+                  "源失败逐个降级。\n换引擎只影响下载调度，"
+                  "任务、校验和落盘结果完全一致。"),
+            font=Font.SMALL, text_color=Color.TEXT_SECONDARY,
+            justify="left", fg_color=Color.TRANSPARENT)\
+            .pack(anchor="w", padx=14, pady=(0, 10))
+
+        sw = SegmentedSwitch(
+            box, values=[engines.label("ridex"), engines.label("aster")],
+            command=lambda _v: None, height=32)
+        sw.set(engines.label(current.get("engine")))
+        sw.pack(anchor="w", padx=14, pady=(0, 14))
+        self._engine_switch = sw
 
     def _build_about(self):
         frame = ctk.CTkFrame(self.form_scroll, fg_color=Color.CARD_BG)
@@ -337,6 +371,12 @@ class PreferencesDialog(ctk.CTkToplevel):
                 return
             values[k] = v
 
+        if self._current_cat == "download" and self._engine_switch is not None:
+            from ...core import engines
+            picked = self._engine_switch.get()
+            values["engine"] = ("aster" if picked == engines.label("aster")
+                                else "ridex")
+
         try:
             if self._current_cat == "download":
                 db.set_download_options(values)
@@ -367,6 +407,9 @@ class PreferencesDialog(ctk.CTkToplevel):
         for k, row in self._rows.items():
             if k in defaults:
                 row.var.set(str(defaults[k]))
+        if self._engine_switch is not None and "engine" in defaults:
+            from ...core import engines
+            self._engine_switch.set(engines.label(defaults["engine"]))
 
     def _toast(self, message: str, level: str = "warn"):
         try:
