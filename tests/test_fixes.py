@@ -355,8 +355,9 @@ class TestPlayerStateMachine(unittest.TestCase):
         self.pv._download_tasks = [types.SimpleNamespace(rel_path="a")]
         self.pv._cache_root = Path(self._tmp.name) / "cache"
         self.pv._cache_root.mkdir(parents=True, exist_ok=True)
-        with mock.patch.object(pv, "download_files",
-                               return_value=[_Res("a")]):
+        # 下载调用点现在经引擎注册表 → 要打在引擎模块上
+        with mock.patch("app.core.downloader.download_files",
+                        return_value=[_Res("a")]):
             self.pv._start_download_and_apply()
         self.assertEqual(self.pv._phase, pv._PHASE_DOWNLOAD)
         self.assertTrue(self.app.app_state.is_locked)
