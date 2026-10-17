@@ -523,6 +523,75 @@ class TestPlayerPendingIntegration(_Base):
                          "补齐成功后应当清理凭证")
         self.assertFalse(P.notice_path(inst).is_file())
 
+    # ---- 窗口该关的时候必须关（玩家反馈：重复弹 / 放弃后不关）----
+    def test_file_done_clears_stale_pending_error(self):
+        """文件最终下好了（含下载器内部重试）→ 不再算「待补入」。"""
+        _app, pv = self._view()
+        pv._pending_errors = {"mods/a.jar": "连接被重置"}
+        pv._download_tasks = [types.SimpleNamespace(
+            rel_path="mods/a.jar", urls=["u"], sha1="a" * 40,
+            sha256="", sha512="", file_size=1)]
+        self.assertEqual(len(pv._pending_items()), 1)
+        pv._handle_file_done("mods/a.jar")
+        self.assertEqual(pv._pending_items(), [])
+
+    def test_complete_mode_pending_shrinks_after_retry(self):
+        """补齐模式：重试成功后待补清单必须变短，否则窗口永远不关。"""
+        from app.core import pending as P
+        _app, pv = self._view()
+        inst = self.tmp / "inst7"
+        (inst / "mods").mkdir(parents=True)
+        cache = self.tmp / "cache7"
+        missing = [{"rel": "mods/a.jar", "sha1": "0" * 40, "size": 1,
+                    "urls": ["u"]},
+                   {"rel": "mods/b.jar", "sha1": "1" * 40, "size": 1,
+                    "urls": ["u"]}]
+        marker = P.build_marker(inst, pack_name="X", cache_root=str(cache),
+                                missing=missing)
+        pv.pack_info = types.SimpleNamespace(name="X", version="1", path=inst)
+        pv._enter_complete_mode(marker, marker["missing"])
+        self.assertEqual(len(pv._pending_items()), 2)
+
+        pv._on_retry_done("mods/a.jar", True, "", lambda *a, **k: None)
+        self.assertEqual([i["rel"] for i in pv._pending_items()],
+                         ["mods/b.jar"])
+
+    def test_give_up_without_pending_closes_window(self):
+        """没有待补项时点放弃：直接收掉窗口，不能静默无反应。"""
+        _app, pv = self._view()
+
+        class _Win:
+            def __init__(self):
+                self.destroyed = False
+
+            def destroy(self):
+                self.destroyed = True
+
+            def winfo_exists(self):
+                return not self.destroyed
+
+        win = _Win()
+        pv.pending_window = win
+        pv._pending_errors = {}
+        pv._on_give_up()
+        self.assertTrue(win.destroyed)
+        self.assertIsNone(pv.pending_window)
+
+    def test_blocked_state_does_not_reset_auto_opened(self):
+        """玩家收起过窗口后，下载收尾不该把它再弹出来。"""
+        _app, pv = self._view()
+        pv._pending_auto_opened = True
+        pv._pending_errors = {"mods/a.jar": "超时"}
+        pv._download_tasks = [types.SimpleNamespace(
+            rel_path="mods/a.jar", urls=["u"], sha1="a" * 40,
+            sha256="", sha512="", file_size=1)]
+        with mock.patch.object(pv, "_open_pending_window") as op, \
+             mock.patch.object(pv, "_write_resume"):
+            pv._enter_blocked_state(pv._pending_items())
+        op.assert_called_once_with(auto=True)
+        self.assertTrue(pv._pending_auto_opened,
+                        "受阻态不该重置「已自动弹出」标志")
+
     def test_marker_files_never_appear_as_changes(self):
         """凭证文件是本地专属，永不能被当成更新内容或被删除。"""
         from app.core import pending as P

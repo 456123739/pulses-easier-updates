@@ -137,6 +137,8 @@ class PlayerView(ctk.CTkFrame):
         self._record_marker: dict | None = None
         self._record_cache_root: Path | None = None
         self._record_rels: list[str] = []
+        # 补齐模式里已经补好的 rel（凭证里的 missing 是快照，不会自己变短）
+        self._record_resolved: set[str] = set()
         # 续传时恢复玩家上次自定义的策略
         self._resume_strategies: dict = {}
         self._resume_checked: dict = {}
@@ -1454,8 +1456,10 @@ class PlayerView(ctk.CTkFrame):
     def _pending_items(self) -> list[dict]:
         """当前仍需要玩家补入的文件（界面与凭证共用同一份数据）。"""
         if self._pending_mode == "complete":
+            done = self._record_resolved
             return [dict(it) for it in
-                    (self._record_marker or {}).get("missing", [])]
+                    (self._record_marker or {}).get("missing", [])
+                    if str(it.get("rel", "")) not in done]
         items: list[dict] = []
         for rel in list(self._pending_errors):
             task = self._task_for(rel)
@@ -1575,7 +1579,22 @@ class PlayerView(ctk.CTkFrame):
             self.change_list.grid_remove()
             self.placeholder.grid_remove()
         else:
+            # 缺口清零 = 这次受阻/补齐结束了：收掉窗口，并把流程接着跑下去
+            was_blocked = self._phase == _PHASE_MANUAL
+            complete = self._pending_mode == "complete"
             self._teardown_pending_ui()
+            if complete or was_blocked:
+                self._on_all_failures_resolved()
+
+    def _hide_pending_window(self):
+        """只把子窗口收起来（不放弃、不清状态），主窗口留入口。"""
+        win = self.pending_window
+        if win is None:
+            return
+        try:
+            win.hide_window()
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _teardown_pending_ui(self):
         win, self.pending_window = self.pending_window, None
@@ -1635,16 +1654,22 @@ class PlayerView(ctk.CTkFrame):
         self.log.log("warn", f"{n} 个文件所有下载源都失败了，需要手动补入")
         self._set_hint(f"更新受阻：还差 {n} 个文件", color=Color.WARNING)
         self._ensure_banner()
-        self._pending_auto_opened = False
+        # 不要在这里重置 _pending_auto_opened：同一批缺口只会自动弹一次，
+        # 玩家手动收起之后不该因为下载收尾又被弹出来（要开就点提示条）。
         self._open_pending_window(auto=True)
         self._refresh_pending_ui()
         self._refresh_ui_state()
 
     def _on_give_up(self):
         if self._phase == _PHASE_APPLY:
+            # 已经在应用了，窗口不该还挂着；收起来而不是静默无响应
+            self._hide_pending_window()
             return
         pending = self._pending_items()
         if not pending:
+            # 已经没有要放弃的东西了（文件都被补上了）：直接收掉窗口
+            self._teardown_pending_ui()
+            self._refresh_ui_state()
             return
         names = "\n".join("· " + str(it.get("rel", ""))
                           for it in pending[:10])
@@ -1734,6 +1759,8 @@ class PlayerView(ctk.CTkFrame):
         if ok:
             self._mark_completed(rel)
             self._pending_errors.pop(rel, None)
+            if self._pending_mode == "complete" and rel:
+                self._record_resolved.add(rel)
             self.log.log("info", f"重新下载成功：{rel}")
         else:
             self.log.log("warn", f"重新下载失败：{rel}（{msg}）")
@@ -1812,6 +1839,7 @@ class PlayerView(ctk.CTkFrame):
             except Exception:  # noqa: BLE001, S110
                 pass
         self._record_cache_root = root
+        self._record_resolved = set()
         self._pending_errors = {str(it.get("rel", "")): "上次更新未完成"
                                 for it in outstanding}
         self.log.log("warn", f"上次更新还差 {len(outstanding)} 个文件，"
@@ -1886,6 +1914,7 @@ class PlayerView(ctk.CTkFrame):
         self._record_marker = None
         self._record_cache_root = None
         self._record_rels = []
+        self._record_resolved.clear()
         self._pending_errors.clear()
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
@@ -1932,6 +1961,16 @@ class PlayerView(ctk.CTkFrame):
         self._active_files.pop(rel, None)
         self._file_speed_samples.pop(rel, None)
         self._refresh_slots()
+        # 这个文件最终下好了（下载器内部重试成功也会走到这里）：
+        # 撤掉"待补入"记录，否则窗口会一直挂着一个其实已经不需要的文件
+        if self._pending_errors.pop(rel, None) is not None:
+            win = self.pending_window
+            if win is not None:
+                try:
+                    win.resolve(rel, notify=False)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            self._refresh_pending_ui()
 
     def _update_download_progress(self, done: int, total: int):
         self._done_count = done
@@ -2086,6 +2125,8 @@ class PlayerView(ctk.CTkFrame):
         self.log.log("info", f"{rel_path} 校验通过")
         self._mark_completed(rel_path)
         self._pending_errors.pop(rel_path, None)
+        if self._pending_mode == "complete":
+            self._record_resolved.add(rel_path)
         return True
 
     def _join_download_thread(self, timeout: float = 5.0) -> bool:

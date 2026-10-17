@@ -71,11 +71,19 @@ class PendingWindow(ctk.CTkToplevel):
         self._after_ids: list[str] = []
         self._closed = False
 
-        self._build()
-
-        for item in items or []:
-            self.add_item(item)
-        self._refresh()
+        try:
+            self._build()
+            for item in items or []:
+                self.add_item(item)
+            self._refresh()
+        except Exception:
+            # 构造中途失败绝不能留下一个半成品窗口：它会一直挂在屏幕上，
+            # 下一次失败又建一个 —— 玩家看到的就是「弹窗重复弹出」。
+            try:
+                self.destroy()
+            except Exception:  # noqa: BLE001, S110
+                pass
+            raise
 
     # ==================================================================
     # 构建
