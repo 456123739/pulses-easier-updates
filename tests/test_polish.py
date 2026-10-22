@@ -990,6 +990,14 @@ class TestKeybindMerge(_Base):
         # 目录行还是三档
         self.assertEqual(len(t._rows["config"].group._buttons), 3)
 
+    def test_options_txt_row_disabled_by_default(self):
+        """玩家端默认不更新 options.txt（进「已禁用」折叠区）。"""
+        t = self._table(["config", "options.txt"], {"options.txt"})
+        checked = t.get_checked()
+        self.assertFalse(checked["options.txt"])
+        self.assertTrue(checked["config"])
+        self.assertEqual(t.get_blacklist(), ["options.txt"])
+
     def test_folder_row_ignores_merge_strategy(self):
         from app.config import Strategy
         t = self._table(["config"], set())

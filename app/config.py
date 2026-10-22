@@ -90,6 +90,13 @@ def default_strategy_for_dir(top: str) -> Strategy:
 # ----------------------------------------------------------------------
 KEYBIND_FILES = frozenset({"options.txt"})
 
+# 玩家端策略表里**默认禁用**的根目录散文件（进了「已禁用」折叠区，不参与更新）。
+# options.txt 里全是玩家本地设置（键位/画质/音量），更新它收益低、风险高。
+DEFAULT_DISABLED_FILES = frozenset({"options.txt"})
+
+# 开发者打包时**永远不带**的根目录散文件（即使勾选了也不打进去）
+NEVER_PACK_FILES = frozenset({"options.txt"})
+
 
 def default_strategy_for_file(name: str) -> Strategy:
     """根目录散文件的默认策略（键位文件走保留键位，其余替换重名）。"""

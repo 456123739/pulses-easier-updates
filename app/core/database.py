@@ -51,9 +51,11 @@ DEFAULT_EXPORT_OPTIONS = {
 DEFAULT_DOWNLOAD_OPTIONS = {
     # 下载引擎：ridex = RideX 锐驰（默认）；aster = Aster 星驰
     "engine": "ridex",
+    # Modrinth 镜像优先（1 开 / 0 关）+ 镜像前缀（分号分隔）
+    "mirror_first": 1,
+    "mirror_hosts": "https://mod.mcimirror.top",
     # 两级槽位池
     "multi_slots": 16,
-    "single_slots": 4,
     # 文件内分片
     "part_threads": 4,
     "max_connections": 128,
@@ -135,14 +137,17 @@ DEFAULT_UI_OPTIONS = {
 # 配置项描述（首选项 UI 显示）
 # ----------------------------------------------------------------------
 DOWNLOAD_OPTION_META = [
+    ("mirror_first", "镜像优先",
+     "Modrinth 资源先走镜像源，镜像不通自动退回官方。",
+     ("默认 1（开）。镜像全挂、或你在海外网络下想直连官方，填 0。")),
+    ("mirror_hosts", "镜像地址",
+     "分号分隔的镜像前缀，只在「镜像优先」打开时生效。",
+     ("默认 https://mod.mcimirror.top；"
+      "多个用分号隔开，例如 a;b。留空 = 不用镜像。")),
     ("multi_slots", "并行下载槽位",
      "同时并行下载几个文件。每个槽位跑一个文件（大文件会自动分片）。",
      ("如果你家宽带很快、想更快下完，可以调到 6 或 8；"
       "如果网络经常卡、或想省内存，保持 3~4。")),
-    ("single_slots", "单线程重试槽位",
-     "多线程槽位失败的文件，会移到单线程槽位重试。这里设置同时重试几个。",
-     ("默认 2 个；如果失败文件很多、想更快补完，调到 3；"
-      "如果网络很慢，保持 1 也可以。")),
     ("part_threads", "单文件分片线程数",
      "对大于 4 MB 的文件，拆成几段同时下载。",
      ("默认 4；网络不稳定时调到 2 更稳，"

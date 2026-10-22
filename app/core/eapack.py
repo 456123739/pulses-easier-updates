@@ -18,6 +18,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from ..config import NEVER_PACK_FILES
 from .database import get_export_options, get_whitelist
 from .hashing import build_hash_manifest
 from .mrpack import (
@@ -123,6 +124,9 @@ def export_eapack(
     if not opts.get("min_size"):
         excluded = set()
 
+    # 根目录散文件里的"玩家本地设置"永远不进包（与 min_size 无关）：
+    # options.txt 里是键位/画质/音量，随包分发只会覆盖玩家自己的设置。
+
     try:
         # 源包可能把 index 与 overrides 放在一层子目录里（launcher 导出很常见）。
         # 旧实现在这里只认根级 overrides/，于是嵌套源包会被导出成
@@ -136,6 +140,8 @@ def export_eapack(
                     continue
                 rel = p.relative_to(ovr)
                 if rel.parts and rel.parts[0] in excluded:
+                    continue
+                if rel.as_posix() in NEVER_PACK_FILES:
                     continue
                 override_files.append(p)
 

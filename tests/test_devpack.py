@@ -216,6 +216,48 @@ class TestRoundTrip(_Base):
 # ======================================================================
 # min_size / 完整性 / 原子写
 # ======================================================================
+class TestNeverPack(_Base):
+    """options.txt 永远不进更新包（与「最小体积」开关无关）。"""
+
+    def test_options_txt_is_never_packed(self):
+        from app.core import eapack as ep
+        from app.core.mrpack import merge_files, parse_mrpack
+
+        src = self.tmp / "src_np"
+        src.mkdir(parents=True, exist_ok=True)
+        index = {"formatVersion": 1, "game": "minecraft",
+                 "versionId": "1.0", "name": "NP",
+                 "dependencies": {"minecraft": "1.20.1"}, "files": []}
+        (src / "modrinth.index.json").write_text(
+            json.dumps(index, ensure_ascii=False), encoding="utf-8")
+        _write(src / "overrides" / "options.txt", "fov:90\n")
+        _write(src / "overrides" / "config" / "c.toml", "k=1\n")
+        zip_path = self.tmp / "src_np.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for f in src.rglob("*"):
+                if f.is_file():
+                    zf.write(f, f.relative_to(src).as_posix())
+
+        pack, err = parse_mrpack(zip_path)
+        self.assertFalse(err)
+        out = self.tmp / "np.eapack"
+        self.db.set_export_options({"min_size": False})
+        try:
+            res = ep.export_eapack(
+                source_dir=src, source_zip=zip_path, out_path=out,
+                pack=pack, merged_files=merge_files(pack),
+                strategies={}, changelog_md="", version="1.0")
+        finally:
+            self.db.set_export_options({"min_size": False})
+        self.assertIsNotNone(res)
+        with zipfile.ZipFile(out) as zf:
+            names = zf.namelist()
+        self.assertFalse([n for n in names if n.endswith("options.txt")],
+                         f"options.txt 不该进包：{names}")
+        self.assertTrue([n for n in names if n.endswith("config/c.toml")],
+                        "其它内容必须照常打进去")
+
+
 class TestExportOptions(_Base):
     def _export(self, name, src, zip_path, pack, **kw):
         from app.core import eapack as ep

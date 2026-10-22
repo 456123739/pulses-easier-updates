@@ -514,8 +514,9 @@ class TestConfigConsistency(unittest.TestCase):
         self.assertEqual(opts["read_poll_interval"], 0.5)
         self.assertEqual(opts["part_meta_enabled"], 0)
         # 未修改的键必须保留
-        self.assertEqual(opts["single_slots"],
-                         self.db.DEFAULT_DOWNLOAD_OPTIONS["single_slots"])
+        self.assertEqual(opts["multi_slots"], 6)
+        self.assertEqual(opts["engine"],
+                         self.db.DEFAULT_DOWNLOAD_OPTIONS["engine"])
 
 
 class TestAnimationTween(unittest.TestCase):

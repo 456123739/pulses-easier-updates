@@ -19,9 +19,10 @@ RideX / 锐驰引擎 —— Pulses Easier 的下载核心。
 结构：
   [多线程槽位池] multi_slots 个 worker，每个跑一个文件
        ↓ 慢速/失败 → 移出
-  [单线程重试队列] retry_queue
+  [重试队列] retry_queue
        ↓ 多线程池全部结束
-  [单线程槽位池] single_slots 个 worker 顺序重试
+  [Aster 引擎] 整批重下（源降级 + 整文件重试 + 镜像优先）
+       不再有 RideX 自己的"单线程耐心池"。
 
 A 分片直写：
   - 分片直接写入 target.part 的对应偏移（seek + write）
@@ -120,6 +121,7 @@ from queue import Queue
 from urllib import error as urlerr
 
 from . import database as db
+from . import mirrors
 
 # ----------------------------------------------------------------------
 # 引擎标识（界面/日志/诊断统一用它，别再各处硬编码字符串）
@@ -186,8 +188,10 @@ def engine_banner() -> str:
 
 
 _DEFAULTS = {
+    "engine": "ridex",
+    "mirror_first": 1,
+    "mirror_hosts": "https://mod.mcimirror.top",
     "multi_slots": 12,
-    "single_slots": 4,
     "part_threads": 4,
     "max_connections": 128,
     "connect_timeout": 10,
@@ -2070,7 +2074,10 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
         return _download_multi_part(url, target, task, task.file_size,
                                     progress, should_abort, opts)
 
-    for url in task.urls:
+    # 镜像优先：cdn.modrinth.com 这类官方源在国内偏慢，先试镜像，
+    # 挂了自动退回官方（健康度会把这个镜像在本次运行里关掉）。
+    urls = mirrors.ordered(list(task.urls))
+    for url in urls:
         if _is_abort(should_abort):
             return _AttemptOutcome(False, "用户中止", aborted=True)
         tried.append(url)
@@ -2095,6 +2102,7 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
                 if res.ok:
                     v_ok, v_err = _verify(target, task)
                     if v_ok:
+                        mirrors.note_success(url)
                         return _AttemptOutcome(True)
                     last_err = f"{url} → {v_err}"
                     try:
@@ -2126,6 +2134,7 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
             if res.ok:
                 v_ok, v_err = _verify(target, task)
                 if v_ok:
+                    mirrors.note_success(url)
                     return _AttemptOutcome(True)
                 last_err = f"{url} → {v_err}"
                 try:
@@ -2159,6 +2168,7 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
                 if res.ok:
                     v_ok, v_err = _verify(target, task)
                     if v_ok:
+                        mirrors.note_success(url)
                         return _AttemptOutcome(True)
                     last_err = f"{url} → {v_err}"
                     try:
@@ -2167,6 +2177,9 @@ def _attempt_file_inner(task: DownloadTask, target_dir: Path,
                         pass
                 else:
                     last_err = res.error
+
+        # 这个源没救回来 → 记账（镜像连续失败会被整轮跳过）
+        mirrors.note_failure(url)
 
     if len(tried) > 1:
         last_err = f"{last_err}（已尝试 {len(tried)} 个源）"
@@ -2217,7 +2230,6 @@ def download_files(
     """
     opts = _get_options()
     multi_slots = int(opts.get("multi_slots", 12))
-    single_slots = int(opts.get("single_slots", 4))
     if threads is not None and threads > 0:
         multi_slots = max(1, int(threads))
 
@@ -2339,7 +2351,7 @@ def download_files(
         # 转入单线程重试槽位：**不算最终态**，进度与收尾回调都不动
         if log:
             try:
-                log("warn", f"{task.rel_path} 转入单线程重试队列")
+                log("warn", f"{task.rel_path} 转入重试队列（稍后交给 Aster）")
             except Exception:  # noqa: BLE001, S110
                 pass
         retry_queue.put(task)
@@ -2347,81 +2359,76 @@ def download_files(
         _store(task, res)
         return res
 
-    def _run_single(task: DownloadTask) -> DownloadResult:
-        """耐心档：放宽超时、关掉快速筛除，给不稳定源最后一次机会。"""
-        if _is_abort(should_abort):
-            res = DownloadResult(task, False, None, "用户中止",
-                                 aborted=True)
-            _store(task, res)
-            _report_final(task, False, "用户中止", aborted=True)
-            return res
-        if on_file_started is not None:
-            try:
-                on_file_started(task)
-            except Exception:  # noqa: BLE001, S110
-                pass
-        try:
-            outcome = _attempt_file(task, target_dir, byte_progress,
-                                    should_abort, opts,
-                                    single_mode=True, log=log)
-        except Exception as e:  # noqa: BLE001
-            outcome = _AttemptOutcome(
-                False, f"内部异常：{type(e).__name__}: {e}")
-
-        if outcome.aborted:
-            res = DownloadResult(task, False, None, "用户中止",
-                                 aborted=True)
-            _store(task, res)
-            _report_final(task, False, "用户中止", aborted=True)
-            return res
-        if outcome.ok:
-            target = target_dir / task.rel_path
-            res = DownloadResult(task, True, target, "")
-            _store(task, res)
-            _report_final(task, True, "")
-            return res
-
-        if on_file_failed is not None:
-            try:
-                on_file_failed(task, outcome.error)
-            except Exception:  # noqa: BLE001, S110
-                pass
-        res = DownloadResult(task, False, None, outcome.error)
-        _store(task, res)
-        _report_final(task, False, outcome.error)
-        return res
-
-    # -------------------- 主池 + 耐心池（并行） --------------------
-    # 为什么不是"主池全部结束再跑耐心池"：那样降级文件会形成一条**串行尾巴**
-    # （第一个阶段跑完才开始第二阶段）。而慢速/失败的文件本来就在早期就暴露
-    # 出来了，让它们立刻进耐心池，就能和"还没下完的正常文件"重叠。
-    # 耐心档的并发仍由 single_slots 封顶，所以不会出现"12 个槽位全被卡住的
-    # 文件占满"的局面。
+    # -------------------- 主池 → 失败文件整批交 Aster --------------------
+    # 不再保留 RideX 自己的"单线程耐心池"：主池救不回来的文件直接整批交给
+    # Aster 引擎（它自带源降级 + 整文件重试 + 镜像优先），省掉一层无意义的
+    # 队列转换。Aster 在主池收尾后启动，失败文件本来就是少数，尾巴很短。
     multi_workers = max(1, multi_slots)
-    single_workers = max(1, single_slots)
-    patient_futures: dict = {}
 
-    def _drain_retries(patient_pool) -> int:
-        """把 retry_queue 里新产生的降级文件立刻提交给耐心池。"""
-        moved = 0
-        while True:
-            try:
-                t = retry_queue.get_nowait()
-            except Exception:  # noqa: BLE001
-                break
-            if _is_abort(should_abort):
+    def _hand_to_aster(pending: list[DownloadTask]) -> None:
+        """把主池失败的文件整批交给 Aster 重下。"""
+        if not pending:
+            return
+        if _is_abort(should_abort):
+            for t in pending:
                 res = DownloadResult(t, False, None, "用户中止",
                                      aborted=True)
                 _store(t, res)
                 _report_final(t, False, "用户中止", aborted=True)
+            return
+        if log:
+            try:
+                log("info",
+                    f"{len(pending)} 个文件转交 Aster 引擎重下（镜像优先）")
+            except Exception:  # noqa: BLE001, S110
+                pass
+        results: list[DownloadResult] = []
+        try:
+            from .engines import aster
+            results = aster.download_files(
+                pending, target_dir=target_dir, threads=multi_workers,
+                log=log, byte_progress=byte_progress,
+                should_abort=should_abort) or []
+        except Exception as e:  # noqa: BLE001
+            if log:
+                try:
+                    log("error", f"Aster 引擎异常：{e}")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+        got = {id(r.task) for r in results}
+        for r in results:
+            t = r.task
+            if r.ok:
+                res = DownloadResult(t, True, target_dir / t.rel_path, "")
+                _store(t, res)
+                _report_final(t, True, "")
                 continue
-            patient_futures[patient_pool.submit(_run_single, t)] = t
-            moved += 1
-        return moved
+            err = r.error or "下载失败"
+            if on_file_failed is not None:
+                try:
+                    on_file_failed(t, err)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            res = DownloadResult(t, False, None, err, aborted=r.aborted)
+            _store(t, res)
+            _report_final(t, False, err, aborted=r.aborted)
+        # Aster 没返回结果的（异常兜底）按失败收尾，保证每个任务一条结果
+        for t in pending:
+            if id(t) in got:
+                continue
+            err = "Aster 引擎没有返回结果"
+            if on_file_failed is not None:
+                try:
+                    on_file_failed(t, err)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            res = DownloadResult(t, False, None, err)
+            _store(t, res)
+            _report_final(t, False, err)
 
     try:
-        with ThreadPoolExecutor(max_workers=multi_workers) as main_pool, \
-                ThreadPoolExecutor(max_workers=single_workers) as patient_pool:
+        with ThreadPoolExecutor(max_workers=multi_workers) as main_pool:
             futures = {main_pool.submit(_run_multi, t): t for t in tasks}
             for fut in as_completed(futures):
                 try:
@@ -2431,36 +2438,26 @@ def download_files(
                     res = DownloadResult(t, False, None, str(e))
                     _store(t, res)
                     _report_final(t, False, str(e))
-                _drain_retries(patient_pool)
-            # 主池已空：收尾再扫一遍（最后完成的那些 future 之后产生的降级）
-            _drain_retries(patient_pool)
-            if patient_futures and log:
-                try:
-                    log("info",
-                        f"{len(patient_futures)} 个文件进入耐心重试"
-                        f"（与主池并行，最多 {single_workers} 个同时）")
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            for pf in as_completed(list(patient_futures)):
-                t = patient_futures[pf]
-                try:
-                    pf.result()
-                except Exception as e:  # noqa: BLE001
-                    res = DownloadResult(t, False, None, str(e))
-                    _store(t, res)
-                    _report_final(t, False, str(e))
     except Exception as e:  # noqa: BLE001
         if log:
             try:
                 log("error", f"下载池异常：{e}")
             except Exception:  # noqa: BLE001, S110
                 pass
-        # 池子异常退出：把所有还没定论的任务按中止收尾，保证结果齐全
         for t in tasks:
             if id(t) not in outcome_map:
                 res = DownloadResult(t, False, None, f"下载池异常：{e}")
                 _store(t, res)
                 _report_final(t, False, str(e))
+
+    # 主池结束：把降级的文件整批交给 Aster
+    pending: list[DownloadTask] = []
+    while True:
+        try:
+            pending.append(retry_queue.get_nowait())
+        except Exception:  # noqa: BLE001
+            break
+    _hand_to_aster(pending)
 
     if _flag(opts, "cleanup_residual_parts", True):
         _cleanup_residual_parts(target_dir)

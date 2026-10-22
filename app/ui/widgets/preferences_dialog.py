@@ -46,6 +46,8 @@ _INT_KEYS = {
     # 分片策略：按大小分级
     "multi_part_min_bytes", "target_part_size", "max_part_count",
     "large_file_multi_first_bytes",
+    # 镜像优先（1/0）
+    "mirror_first",
 }
 _FLOAT_KEYS = {"speed_window", "read_poll_interval", "disk_probe_timeout",
                "apply_chunk_pause_ms", "apply_batch_pause_ms"}
