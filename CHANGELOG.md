@@ -23,11 +23,23 @@
 新增 `app/core/mirrors.py`：把 `cdn.modrinth.com` 的地址派生成镜像地址，
 **排在官方地址前面**；镜像不通就自动退回官方，对上层完全透明。
 
+* **镜像是一张表**（`MIRROR_SITES`），加/停一个镜像只改数据，不动引擎。
+  每个条目带 `enabled`、`note`（停用原因）、`checked`（最后核对日期）。
+* 支持两种写法：前缀式（`base` + 官方路径）和模板式
+  （`https://你的反代/?url={qurl}`），自建 Cloudflare Worker 之类可以直接填。
 * 设置 → 下载 → **镜像优先**（`mirror_first`，默认开）、**镜像地址**
-  （`mirror_hosts`，默认 `https://mod.mcimirror.top`，分号分隔，可留空）。
+  （`mirror_hosts`，临时追加的前缀，排在表前面）。
 * **健康度**：同一个镜像连续失败 3 次，本轮不再尝试，避免每个文件都先等一次超时；
   成功一次立刻清零。
 * 两条引擎都生效（RideX 主池、Aster 重试），所以"失败文件优先用镜像"也自然成立。
+* **自检脚本** `python scripts/mirror_check.py`：对表里每个镜像实测首字节/速度，
+  和官方 CDN 对比排序，一眼看出该启用哪个。
+
+> 现状（2026-10 核对）：MCIM 一系（`mod.mcimirror.top` / `api.mcimirror.top`）
+> 已停服，条目保留但默认停用；BMCLAPI 只镜像原版资源、没有模组文件；
+> 公开的通用反代（corsproxy / allorigins / codetabs）实测扛不住二进制大文件。
+> 所以默认表里**没有启用中的镜像**，下载行为与旧版一致（直连官方），
+> 有可用镜像时再在表里打开。
 
 ### 三、options.txt 默认不更新、也不打包
 
@@ -38,7 +50,8 @@
 
 ### 实现（给维护者）
 
-* `app/core/mirrors.py`（新增）：`ordered()` / `candidates()` / 健康度
+* `app/core/mirrors.py`（新增）：`MirrorSite` 表 + `ordered()` / `candidates()` / 健康度
+* `scripts/mirror_check.py`（新增）：镜像自检（实测延迟/速度并排序）
 * `app/core/downloader.py`：删除 `_run_single` 与单线程池；主池结束后
   `_hand_to_aster()` 整批交给 Aster；URL 循环改成镜像优先
 * `app/core/engines/aster.py`：源列表走镜像优先；超时/重试次数改为读设置
@@ -46,7 +59,7 @@
 * `app/config.py`：`DEFAULT_DISABLED_FILES` / `NEVER_PACK_FILES`
 * `app/ui/widgets/strategy_table.py`、`app/core/eapack.py`：默认禁用 + 永不打包
 * 测试：新增 `tests/test_mirrors.py`（10 项）；下载器/引擎/导出/策略表补了
-  7 项；单元共 **340** 项
+  7 项；单元共 **343** 项
 
 ### 从旧版本升上来
 

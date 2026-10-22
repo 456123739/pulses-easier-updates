@@ -1,38 +1,96 @@
 """
-mirrors.py — 下载镜像源（Modrinth 优先走镜像）
-================================================
-官方 CDN（`cdn.modrinth.com`）在国内经常比镜像慢，所以下载时把镜像地址
-排在前面：镜像通了就直接用，镜像挂了就退回官方地址，对上层完全透明。
+mirrors.py — 下载镜像站表（Modrinth / CurseForge）
+====================================================
+官方 CDN（`cdn.modrinth.com`）在国内经常偏慢，所以下载时把镜像地址排在前面：
+镜像通了就用，挂了就退回官方，对上层完全透明。
 
-设计要点：
+**这张表是数据，不是逻辑**：新增/停用一个镜像只改 `MIRROR_SITES`，不用动引擎。
+每个条目记录"什么时候核过"（`checked`），方便下次排查。
 
-* **只在有镜像配置时生效**：`download.mirror_first = 0` 或
-  `download.mirror_hosts` 为空 → 原样返回，行为与旧版一致。
-* **镜像地址是"派生"的**，不改任务本身：`ordered(urls)` 只返回一个新列表。
-* **进程内健康度**：某个镜像连续失败 3 次就整轮跳过，避免每个文件都先
-  等一次超时。成功一次立刻清零。
-* 同一个镜像会生成两种路径（`<host><path>` 与 `<host>/modrinth<path>`），
-  让不同实现的反向代理都能命中；哪种能用由健康度自动筛掉。
+现状（2026-10 核对）：
+  * MCIM（mod.mcimirror.top / api.mcimirror.top）已停服（503 / DNS 不可达），
+    条目保留但 `enabled=False`，服务恢复后改一个字段就能用。
+  * BMCLAPI 只镜像 Minecraft 原版资源（版本/库/资源文件），不含模组文件，
+    所以不在本表里（模组下载用不上）。
+  * 公开的通用反代（corsproxy / allorigins / codetabs …）实测无法承载二进制
+    大文件（401/520/522/400），不进表。
+  * 官方 CDN 永远是最后兜底，不依赖表。
 
-配置（设置 → 下载）：
+如果自己有加速通道（例如自建的 Cloudflare Worker），两种写法都能直接进表：
 
-    mirror_first  1/0      默认 1
-    mirror_hosts  https://mod.mcimirror.top;https://...   分号分隔
+    MirrorSite("my-worker", "我的 Worker",
+               template="https://my-worker.example.workers.dev/?url={qurl}")
+    MirrorSite("my-proxy", "我的反代", base="https://cdn.example.com")
+
+设置里的「镜像地址」(`download.mirror_hosts`) 是**临时追加**的前缀列表，
+不用改代码就能试；和表里的条目一起参与排序。
+
+自检：`python scripts/mirror_check.py` —— 对每个镜像实测延迟/速度并排序。
 """
 
 import threading
 import urllib.parse
+from dataclasses import dataclass
 
-# 默认镜像：MCIM（国内常用的 Modrinth/CurseForge 反代）
-DEFAULT_HOSTS = "https://mod.mcimirror.top"
+# ----------------------------------------------------------------------
+# 表
+# ----------------------------------------------------------------------
+@dataclass(frozen=True)
+class MirrorSite:
+    """一个镜像站。base 与 template 二选一。"""
 
-# 只给这些官方主机派生镜像
-MIRRORED_HOSTS = ("cdn.modrinth.com", "cdn-raw.modrinth.com")
+    key: str
+    name: str
+    base: str = ""                     # 前缀式：base + 官方 path
+    template: str = ""                 # 模板式：含 {url} 或 {qurl}
+    kinds: tuple[str, ...] = ("modrinth",)
+    enabled: bool = True
+    note: str = ""
+    checked: str = ""                  # 最后一次人工核对日期
 
+    def build(self, official: str, path: str) -> str:
+        if self.template:
+            q = urllib.parse.quote(official, safe="")
+            return (self.template
+                    .replace("{qurl}", q)
+                    .replace("{url}", official))
+        return self.base.rstrip("/") + path
+
+
+#: 主机 → 内容类型
+HOST_KIND = {
+    "cdn.modrinth.com": "modrinth",
+    "cdn-raw.modrinth.com": "modrinth",
+    "edge.forgecdn.net": "curseforge",
+    "mediafilez.forgecdn.net": "curseforge",
+}
+
+MIRROR_SITES: list[MirrorSite] = [
+    # ---- 已停服，保留记录（恢复后把 enabled 改回 True 即可）----
+    MirrorSite(
+        key="mcim", name="MCIM（Modrinth 反代）",
+        base="https://mod.mcimirror.top", kinds=("modrinth",),
+        enabled=False,
+        note="2026-10 起全站 503，DNS 仅返回 IPv6；服务恢复后可重新启用",
+        checked="2026-10-22"),
+    MirrorSite(
+        key="mcim-api", name="MCIM（API 反代）",
+        base="https://api.mcimirror.top", kinds=("modrinth",),
+        enabled=False,
+        note="DNS 不可达（已随主站下线）", checked="2026-10-22"),
+    MirrorSite(
+        key="bmclapi", name="BMCLAPI",
+        base="https://bmclapi2.bangbang93.com", kinds=("minecraft",),
+        enabled=False,
+        note="只镜像 MC 原版资源（版本/库/资源），没有模组文件；本工具用不上",
+        checked="2026-10-22"),
+]
+
+# 失败几次后本次运行不再用这个镜像
 _FAIL_LIMIT = 3
 
 _lock = threading.Lock()
-_fail_count: dict[str, int] = {}     # host → 连续失败次数
+_fail_count: dict[str, int] = {}
 _dead: set[str] = set()
 
 
@@ -49,7 +107,7 @@ def _settings() -> tuple[bool, list[str]]:
         enabled = bool(int(opts.get("mirror_first", 1)))
     except (TypeError, ValueError):
         enabled = True
-    raw = str(opts.get("mirror_hosts", DEFAULT_HOSTS) or "")
+    raw = str(opts.get("mirror_hosts", "") or "")
     hosts: list[str] = []
     for part in raw.replace("；", ";").replace(",", ";").split(";"):
         h = part.strip().rstrip("/")
@@ -58,9 +116,27 @@ def _settings() -> tuple[bool, list[str]]:
     return enabled, hosts
 
 
+def _active() -> list[MirrorSite]:
+    """表里启用的 + 设置里临时追加的（后者排前面，方便覆盖）。"""
+    out: list[MirrorSite] = []
+    _on, hosts = _settings()
+    for h in hosts:
+        out.append(MirrorSite(key="user:" + h, name=h, base=h,
+                              checked="(设置)"))
+    out.extend(s for s in MIRROR_SITES if s.enabled)
+    return out
+
+
 def enabled() -> bool:
-    on, hosts = _settings()
-    return on and bool(hosts)
+    on, _hosts = _settings()
+    return on and bool(_active())
+
+
+def sites(include_disabled: bool = False) -> list[MirrorSite]:
+    """当前生效的镜像表（自检脚本用）。"""
+    if include_disabled:
+        return list(MIRROR_SITES)
+    return _active()
 
 
 # ----------------------------------------------------------------------
@@ -75,31 +151,35 @@ def _split(url: str) -> tuple[str, str]:
 
 
 def candidates(url: str) -> list[str]:
-    """给一个官方地址返回它的镜像候选（按配置顺序，已去掉不可用的）。"""
-    on, hosts = _settings()
-    if not on or not hosts:
+    """给一个官方地址返回它的镜像候选（按表顺序，已去掉不可用的）。"""
+    on, _hosts = _settings()
+    if not on:
         return []
     host, path = _split(url)
-    if host not in MIRRORED_HOSTS:
+    kind = HOST_KIND.get(host)
+    if not kind:
         return []
     out: list[str] = []
     with _lock:
         dead = set(_dead)
-    for base in hosts:
-        if base in dead:
+    for site in _active():
+        if kind not in site.kinds:
             continue
-        for cand in (base + path, base + "/modrinth" + path):
-            if cand not in out:
-                out.append(cand)
+        base = _base_of_site(site)
+        if base and base in dead:
+            continue
+        cand = site.build(url, path)
+        if cand and cand not in out:
+            out.append(cand)
     return out
 
 
 def ordered(urls: list[str]) -> list[str]:
-    """镜像在前、官方在后；无镜像配置时原样返回（同一个对象）。"""
+    """镜像在前、官方在后；没有可用镜像时原样返回（同一个对象）。"""
     if not urls:
         return urls
-    on, hosts = _settings()
-    if not on or not hosts:
+    on, _hosts = _settings()
+    if not on:
         return urls
     head: list[str] = []
     tail: list[str] = []
@@ -132,12 +212,22 @@ def _base_of(url: str) -> str:
     return f"{p.scheme}://{p.netloc}".rstrip("/")
 
 
+def _base_of_site(site: MirrorSite) -> str:
+    if site.base:
+        return site.base.rstrip("/")
+    if site.template:
+        return _base_of(site.template.replace("{qurl}", "")
+                        .replace("{url}", ""))
+    return ""
+
+
+def _known_bases() -> set[str]:
+    return {b for b in (_base_of_site(s) for s in _active()) if b}
+
+
 def note_failure(url: str) -> None:
     base = _base_of(url)
-    if not base:
-        return
-    on, hosts = _settings()
-    if base not in hosts:
+    if not base or base not in _known_bases():
         return
     with _lock:
         n = _fail_count.get(base, 0) + 1
@@ -156,9 +246,7 @@ def note_success(url: str) -> None:
 
 
 def is_mirror(url: str) -> bool:
-    base = _base_of(url)
-    on, hosts = _settings()
-    return bool(base) and base in hosts
+    return _base_of(url) in _known_bases()
 
 
 def reset() -> None:

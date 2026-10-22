@@ -53,7 +53,8 @@ DEFAULT_DOWNLOAD_OPTIONS = {
     "engine": "ridex",
     # Modrinth 镜像优先（1 开 / 0 关）+ 镜像前缀（分号分隔）
     "mirror_first": 1,
-    "mirror_hosts": "https://mod.mcimirror.top",
+    # 临时追加的镜像前缀（分号分隔）；内置镜像表见 app/core/mirrors.py
+    "mirror_hosts": "",
     # 两级槽位池
     "multi_slots": 16,
     # 文件内分片
@@ -141,9 +142,9 @@ DOWNLOAD_OPTION_META = [
      "Modrinth 资源先走镜像源，镜像不通自动退回官方。",
      ("默认 1（开）。镜像全挂、或你在海外网络下想直连官方，填 0。")),
     ("mirror_hosts", "镜像地址",
-     "分号分隔的镜像前缀，只在「镜像优先」打开时生效。",
-     ("默认 https://mod.mcimirror.top；"
-      "多个用分号隔开，例如 a;b。留空 = 不用镜像。")),
+     "临时追加的镜像前缀（分号分隔），只在「镜像优先」打开时生效。",
+     ("内置镜像表在 app/core/mirrors.py，可用 python scripts/mirror_check.py "
+      "实测哪家快；这里填的前缀会排在表前面，例如 https://cdn.example.com。")),
     ("multi_slots", "并行下载槽位",
      "同时并行下载几个文件。每个槽位跑一个文件（大文件会自动分片）。",
      ("如果你家宽带很快、想更快下完，可以调到 6 或 8；"
