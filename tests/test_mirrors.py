@@ -61,18 +61,37 @@ class _Base(unittest.TestCase):
 class TestOrdered(_Base):
     def test_mirror_first_for_modrinth(self):
         out = self.m.ordered([CDN])
-        self.assertEqual(len(out), 3, out)
+        self.assertEqual(len(out), 2, out)
         self.assertTrue(out[0].startswith("https://mirror.example/"),
                         "镜像必须排在第一个")
         self.assertIn("/data/AANobbMI/versions/g6ju16VJ/", out[0])
         self.assertEqual(out[-1], CDN, "官方地址必须留在最后兜底")
 
-    def test_two_path_variants(self):
-        out = self.m.candidates(CDN)
-        self.assertTrue(any(u == "https://mirror.example" + CDN.split(
-            "cdn.modrinth.com")[1] for u in out))
-        self.assertTrue(any(u.startswith("https://mirror.example/modrinth/")
-                            for u in out))
+    def test_disabled_table_entries_are_skipped(self):
+        # 内置表里的条目当前全部停用 → 没有设置项时不该产出任何候选
+        self.db.set_download_options({"mirror_hosts": ""})
+        self.assertEqual(self.m.candidates(CDN), [])
+        self.assertFalse(self.m.enabled())
+
+    def test_template_site(self):
+        self.db.set_download_options({"mirror_hosts": ""})
+        site = self.m.MirrorSite(
+            key="tpl", name="模板反代",
+            template="https://w.example/?url={qurl}")
+        self.m.MIRROR_SITES.append(site)
+        try:
+            out = self.m.candidates(CDN)
+            self.assertEqual(len(out), 1, out)
+            self.assertTrue(out[0].startswith("https://w.example/?url=https%3A%2F%2F"))
+        finally:
+            self.m.MIRROR_SITES.remove(site)
+
+    def test_table_entries_carry_notes(self):
+        for site in self.m.sites(include_disabled=True):
+            self.assertTrue(site.key)
+            self.assertTrue(site.name)
+            if not site.enabled:
+                self.assertTrue(site.note, f"{site.key} 停用却没写原因")
 
     def test_other_hosts_untouched(self):
         url = "https://example.com/a.jar"
@@ -125,6 +144,28 @@ class TestHealth(_Base):
     def test_unknown_host_not_tracked(self):
         self.m.note_failure("https://other.example/x")
         self.assertEqual(self.m.dead_hosts(), set())
+
+
+class TestChecker(unittest.TestCase):
+    def test_measure_works_against_local_server(self):
+        """自检脚本的 measure() 能真的量出速度（用本地 fixture 源）。"""
+        import importlib.util
+        from fixture_server import FixtureServer
+
+        path = (_ROOT / "scripts" / "mirror_check.py")
+        spec = importlib.util.spec_from_file_location("mirror_check", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        srv = FixtureServer().start()
+        try:
+            url = srv.url("data", "mc", 65536)
+            row = mod.measure(url, 65536, 10)
+            self.assertTrue(row["ok"], row)
+            self.assertGreaterEqual(row["bytes"], 65536)
+            self.assertGreater(row["speed"], 0)
+        finally:
+            srv.stop()
 
 
 if __name__ == "__main__":
