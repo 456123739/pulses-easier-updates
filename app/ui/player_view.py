@@ -1257,6 +1257,8 @@ class PlayerView(ctk.CTkFrame):
         更新包（UPDATE）：目录级比对只能"合并"，默认必须是**替换重名**
         （同名覆盖、不删除）。默认"完全匹配"会在玩家本地目录里做
         rmtree + copytree，把玩家自己写的配置一并清掉。
+        （config 的默认值另见 `default_strategy_for_dir`：0.7.0 起是
+        「智能剔除」，比替换重名更保守。）
         导出包（EXPORT）：保持历史语义（整包镜像）。
         """
         if kind == PackKind.EXPORT:

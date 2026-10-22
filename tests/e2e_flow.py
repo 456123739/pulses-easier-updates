@@ -11,7 +11,8 @@ e2e_flow.py — 玩家端完整流程端到端测试（真实文件 + 真实网�
   A. 更新包声明的 mod 被真实下载、sha1 校验通过、字节数与 CDN 一致
   B. 「新版已移除」的本地 mod 被**永久删除**（完全匹配 = 含删除），
      且不产生任何回收站/备份目录
-  C. config/ 里玩家本地文件保留；包内同名文件被覆盖（替换重名）
+  C. config/ 里玩家本地文件保留；包内同名文件被覆盖（替换重名）；
+     优化/渲染类模组的配置保持玩家本地版本（智能剔除，0.7.0 起的默认策略）
   D. 玩家根目录散文件（options.txt）保留
   E. 包自身的元数据（modrinth.index.json / ea_*.json / changelog.md）
      **没有**被写进整合包根目录
@@ -161,6 +162,9 @@ def _run(tmp: Path, real: dict) -> int:
     _write(inst / "mods" / "removed-in-new-version.jar", "LOCAL ONLY MOD")
     _write(inst / "config" / "shipped.toml", "key = \"old\"\n")
     _write(inst / "config" / "player-only.toml", "my_setting = 42\n")
+    # 玩家自己调过的优化模组配置：更新后必须原样保留（智能剔除）
+    _write(inst / "config" / "sodium-options.json",
+           '{"render_distance": 8, "tuned_by": "player"}\n')
     _write(inst / "options.txt", "fov:90\n")
     _write(inst / "resourcepacks" / "keep.zip", "PK")
 
@@ -186,6 +190,9 @@ def _run(tmp: Path, real: dict) -> int:
         json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
     _write(src / "overrides" / "config" / "shipped.toml",
            "key = \"new-from-pack\"\n")
+    # 包里的 Sodium 默认值：不该覆盖玩家那份
+    _write(src / "overrides" / "config" / "sodium-options.json",
+           '{"render_distance": 16, "tuned_by": "pack"}\n')
     _write(src / "overrides" / "mods" / "pack-local.jar", "SHIPPED LOCALLY")
 
     src_zip = tmp / "TestPack-2.0.0.zip"
@@ -200,7 +207,7 @@ def _run(tmp: Path, real: dict) -> int:
     out = eapack_mod.export_eapack(
         source_dir=src, source_zip=src_zip, out_path=eapack,
         pack=pack, merged_files=merge_files(pack),
-        strategies={"mods": "完全匹配", "config": "替换重名"},
+        strategies={"mods": "完全匹配"},
         changelog_md="# TestPack 2.0.0\n\n- 更新 mod\n- 改了 config\n")
     assert out is not None, "导出更新包失败"
     print(f"导出更新包：{eapack.name} ({eapack.stat().st_size} B)")
@@ -253,8 +260,8 @@ def _run(tmp: Path, real: dict) -> int:
     strategies = pv.strategy_table.get_strategies()
     checked = pv.strategy_table.get_checked()
     print(f"    策略表：{strategies}")
-    check(strategies.get("config") == "替换重名",
-          "config 默认策略是「替换重名」（不再整体替换）",
+    check(strategies.get("config") == "智能剔除",
+          "config 默认策略是「智能剔除」（0.7.0 起）",
           f"实际 {strategies.get('config')!r}")
     check(strategies.get("mods") == "完全匹配",
           "mods 默认策略是「完全匹配」")
@@ -305,7 +312,13 @@ def _run(tmp: Path, real: dict) -> int:
     check((inst / "mods" / "pack-local.jar").is_file(),
           "更新包 overrides 自带的 mod 已就位")
     check((inst / "config" / "shipped.toml").read_text("utf-8")
-          == 'key = "new-from-pack"\n', "config 里的同名文件被覆盖（替换重名）")
+          == 'key = "new-from-pack"\n',
+          "config 里普通模组的同名文件照常覆盖")
+    check((inst / "config" / "sodium-options.json").read_text("utf-8")
+          == '{"render_distance": 8, "tuned_by": "player"}\n',
+          "优化模组的配置保持玩家本地版本（智能剔除）★0.7.0")
+    check(any("智能剔除" in m for _l, m in logs),
+          "日志里说明了智能剔除保护了哪些配置")
     check((inst / "config" / "player-only.toml").is_file(),
           "config 里玩家本地文件被保留 ★P0-1")
     check((inst / "options.txt").read_text("utf-8") == "fov:90\n",

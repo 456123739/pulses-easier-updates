@@ -251,6 +251,19 @@ class TestMatching(unittest.TestCase):
         self.assertEqual(cands[0], "sodiumoptions")
         self.assertIn("sodium", cands)
 
+    def test_weird_names_do_not_crash(self):
+        """中文/空格/奇怪名字不能崩，也不能误命中。"""
+        for rel in ("config/钠 优化.json", "config/我的配置.toml",
+                    "config/a b/c d.json", "config/.hidden", "config/"):
+            self.assertIsNone(ce.owner_of(rel), rel)
+            self.assertFalse(ce.is_protected(rel), rel)
+
+    def test_protected_inside_subdir(self):
+        for rel in ("config/sodium/options.json",
+                    "config/embeddium/embeddium-options.json",
+                    "config/iris/shaders.properties"):
+            self.assertTrue(ce.is_protected(rel), rel)
+
     def test_summarize(self):
         text = ce.summarize(["config/sodium-options.json",
                              "config/iris.properties",
@@ -465,6 +478,80 @@ class TestPlanAndExecute(unittest.TestCase):
 # ======================================================================
 # 5. 策略列表 / 界面 / 下载任务
 # ======================================================================
+class TestDefaultStrategy(unittest.TestCase):
+    """0.7.0 起 config 的默认策略就是「智能剔除」——这里守住它。"""
+
+    def test_config_default_is_smart_exclude(self):
+        from app.config import (DEFAULT_STRATEGY, DEFAULT_STRATEGY_BY_DIR,
+                                ContentType)
+        self.assertIs(DEFAULT_STRATEGY[ContentType.CONFIG],
+                      Strategy.SMART_EXCLUDE)
+        self.assertIs(DEFAULT_STRATEGY_BY_DIR["config"],
+                      Strategy.SMART_EXCLUDE)
+
+    def test_other_defaults_unchanged(self):
+        from app.config import (DEFAULT_STRATEGY, DEFAULT_STRATEGY_BY_DIR,
+                                ContentType, default_strategy_for_file)
+        self.assertIs(DEFAULT_STRATEGY[ContentType.MODS], Strategy.FULL_MATCH)
+        self.assertIs(DEFAULT_STRATEGY[ContentType.SAVES], Strategy.SKIP_SAME)
+        self.assertIs(DEFAULT_STRATEGY[ContentType.OTHER],
+                      Strategy.REPLACE_SAME)
+        self.assertIs(DEFAULT_STRATEGY_BY_DIR["mods"], Strategy.FULL_MATCH)
+        self.assertIs(DEFAULT_STRATEGY_BY_DIR["resourcepacks"],
+                      Strategy.FULL_MATCH)
+        # 根目录散文件仍是「保留键位」，不能被智能剔除带偏
+        self.assertIs(default_strategy_for_file("options.txt"),
+                      Strategy.MERGE_KEYS)
+
+    def test_table_row_defaults_to_smart_exclude(self):
+        from app.ui.widgets.strategy_table import StrategyTable
+        table = StrategyTable(None)
+        table.set_folders(["mods", "config", "saves"])
+        got = table.get_strategies()
+        self.assertEqual(got["config"], Strategy.SMART_EXCLUDE.value)
+        self.assertEqual(got["mods"], Strategy.FULL_MATCH.value)
+        self.assertEqual(got["saves"], Strategy.SKIP_SAME.value)
+        # 按钮组选中态也要跟着默认值
+        self.assertIs(table._rows["config"].group.get(),
+                      Strategy.SMART_EXCLUDE)
+
+    def test_player_default_for_update_pack(self):
+        """玩家端（更新包）走 config 默认值；导出包仍是整包镜像。"""
+        from app.core.pack_detector import PackKind
+        from app.ui.player_view import PlayerView
+        fake = types.SimpleNamespace(pack_kind=PackKind.UPDATE)
+        got = PlayerView._default_strategy_for_top(
+            fake, "config", False, PackKind.UPDATE)
+        self.assertEqual(got, Strategy.SMART_EXCLUDE.value)
+        got = PlayerView._default_strategy_for_top(
+            fake, "config", False, PackKind.EXPORT)
+        self.assertEqual(got, Strategy.FULL_MATCH.value)
+
+    def test_plan_built_from_defaults_protects(self):
+        """不改任何设置，直接按默认策略建计划：优化配置进 dir_skip。"""
+        from app.config import default_strategy_for_dir
+        tmp = tempfile.TemporaryDirectory(prefix="easier-ced-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        inst, ov = root / "inst", root / "ov"
+        _write(inst / "config" / "sodium-options.json", "player")
+        _write(ov / "config" / "sodium-options.json", "pack")
+        _write(ov / "config" / "jei.toml", "pack")
+        src = PlanSource([SourceLayer(ov, consume=True)])
+        strategies = {"config": default_strategy_for_dir("config").value}
+        plan = build_plan(_Diff(folders_modified=["config"]),
+                          {"config": True}, strategies,
+                          old_root=inst, source=src)
+        self.assertEqual(plan.dir_skip["config"],
+                         ["config/sodium-options.json"])
+        report = execute_plan(plan, inst, source=src)
+        self.assertEqual(report["smart_skipped"], 1)
+        self.assertEqual((inst / "config" / "sodium-options.json").read_text(),
+                         "player")
+        self.assertEqual((inst / "config" / "jei.toml").read_text(), "pack")
+        self.assertEqual(verify_after_update(plan, inst), [])
+
+
 class TestStrategyList(unittest.TestCase):
     def test_config_has_four_options(self):
         self.assertEqual(strategy_list_for("config"),

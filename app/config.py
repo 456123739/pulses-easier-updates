@@ -58,9 +58,12 @@ FILE_STRATEGY_LIST = STRATEGY_LIST + [Strategy.MERGE_KEYS]
 CONFIG_STRATEGY_LIST = STRATEGY_LIST + [Strategy.SMART_EXCLUDE]
 
 # 每种内容类型的默认策略
+#   config 默认「智能剔除」：优化/渲染类模组的配置按玩家机器调，更新时保持
+#   本地版本，其余配置照常覆盖（见 core/config_exclude.py）。这是 0.7.0 起
+#   的默认值；旧版（≤0.6.x）的默认是「替换重名」。
 DEFAULT_STRATEGY = {
     ContentType.MODS:          Strategy.FULL_MATCH,
-    ContentType.CONFIG:        Strategy.REPLACE_SAME,
+    ContentType.CONFIG:        Strategy.SMART_EXCLUDE,
     ContentType.SAVES:         Strategy.SKIP_SAME,
     ContentType.RESOURCEPACKS: Strategy.REPLACE_SAME,
     ContentType.OTHER:         Strategy.REPLACE_SAME,

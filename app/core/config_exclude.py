@@ -112,6 +112,9 @@ TABLE: tuple[ConfigOwner, ...] = (
     ConfigOwner("better-clouds", "Better Clouds", KIND_RENDER),
     ConfigOwner("bettergrassify", "BetterGrassify", KIND_RENDER,
                 aliases=("bettergrass",)),
+    ConfigOwner("fism", "Faster Iris Shadow Mapper（FISM）", KIND_RENDER,
+                aliases=("fastershadowmapper",),
+                note="Iris/Oculus 阴影渲染加速，配置只在光影场景生效"),
 
     # ---- 客户端优化 ---------------------------------------------------
     ConfigOwner("immediatelyfast", "ImmediatelyFast", KIND_PERF),
@@ -174,6 +177,25 @@ TABLE: tuple[ConfigOwner, ...] = (
     ConfigOwner("better-biome-blend", "Better Biome Blend", KIND_PERF),
     ConfigOwner("bbrb", "Better Biome Reblend", KIND_PERF,
                 aliases=("betterbiomereblend",)),
+    # —— decce6 的一批（Ixeris / Gnetum / Kerria / Jasione / Dypsis /
+    #    Async Logger），都出自 NRG 与「超现代优化」两个整合包
+    ConfigOwner("ixeris", "Ixeris（事件轮询优化）", KIND_PERF),
+    ConfigOwner("gnetum", "Gnetum（HUD 分批更新）", KIND_PERF),
+    ConfigOwner("asynclogger", "Async Logger（异步日志）", KIND_PERF),
+    ConfigOwner("kerria", "Kerria（纹理动画优化）", KIND_PERF,
+                aliases=("kerriaopt",)),
+    ConfigOwner("jasione", "Jasione（减少内存分配）", KIND_PERF),
+    ConfigOwner("dypsis", "Dypsis（客户端渲染优化）", KIND_PERF),
+    ConfigOwner("efficient-hashing", "EfficientHashing", KIND_PERF),
+    ConfigOwner("random-optimization", "Random Optimization", KIND_PERF),
+    ConfigOwner("mixinbooster", "Mixin Booster", KIND_PERF,
+                note="Mixin 加载加速（1.21+ NeoForge 已内置）"),
+    ConfigOwner("fastevent", "FastEvent", KIND_PERF),
+    ConfigOwner("lightspeedre", "LightSpeedRe（资源包缓存）", KIND_PERF,
+                aliases=("lightspeed",)),
+    ConfigOwner("0pack2reload", "0Pack2Reload", KIND_PERF,
+                aliases=("opack2reload",)),
+    ConfigOwner("threatengl", "ThreatenGL", KIND_PERF),
     ConfigOwner("performant", "Performant", KIND_PERF,
                 note="1.12.2 时代的老牌优化模组"),
     ConfigOwner("betterfps", "BetterFps", KIND_PERF),
@@ -213,7 +235,8 @@ GENERIC_SUFFIXES = frozenset({
     # 附属模组的尾巴：sodium-extra.json / voxy-extra.json
     "extra", "extras",
     # 版本号尾巴：particle_core_config_v1.json / betterclouds-v1.json
-    "v1", "v2", "v3", "v4",
+    # / mixinbooster_version.txt
+    "v1", "v2", "v3", "v4", "version",
 })
 
 

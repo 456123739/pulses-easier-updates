@@ -9,7 +9,9 @@ config 一直只有三档：完全匹配 / 替换重名 / 跳过重名。但**�
 整合包一更新就把作者机器上的默认值推下来，轻则画面变糊掉帧，重则直接崩，
 而玩家往往查不出是自己配置被覆盖了。
 
-新增 `Strategy.SMART_EXCLUDE = "智能剔除"`，只出现在 config 行：
+新增 `Strategy.SMART_EXCLUDE = "智能剔除"`，只出现在 config 行，
+**并且从 0.7.0 起就是 config 的默认策略**（旧版默认是「替换重名」；老玩家
+存过的策略、包内推荐值仍然优先）：
 
 * **怎么认**：config 里的文件几乎都以模组 id 命名（`sodium-options.json`、
   `DistantHorizons.toml`、`modernfix-mixins.properties`、`config/sodium/…`），
@@ -23,15 +25,18 @@ config 一直只有三档：完全匹配 / 替换重名 / 跳过重名。但**�
   「智能剔除：N 个优化/渲染类配置保持了你本地的版本」。
 * 变更列表的 config 行标出「智能剔除」，不展开也看得见。
 
-归属表在 `app/core/config_exclude.py`（76 个模组）。数据来自 Modrinth
-`optimization` 分类按下载量排序的前 200 项，逐个核对 `client_side` 与发行
-jar 里的真实 mod id、配置文件名，再按"渲染器 + 客户端优化"标准筛出：
+归属表在 `app/core/config_exclude.py`（90 个模组）。数据来源三路：
+Modrinth `optimization` 分类按下载量排序的前 200 项、作者 **decce6** 的全部
+模组、以及两个整合包（NRG 1.15.3 与「超现代优化」2.5.8）的最新版模组清单
+（用 Range 请求只取 `.mrpack` 里的 `modrinth.index.json`，不下载整包）。
+逐个核对 `client_side` 与发行 jar 里的真实 mod id、配置文件名，再按
+"渲染器 + 客户端优化"标准筛出：
 
 * **渲染器 / 光影加载器**：Sodium、Iris、Oculus、OptiFine、Embeddium、
   Rubidium、Magnesium、Xenon、Chloride、Flerovium、Canvas、VulkanMod、
-  Nothirium、Nvidium、Voxy，以及只服务渲染器的配套模组（Sodium Extra / Sodium
-  Extras / Sodium Options API / Sodium Dynamic Lights / Sodium Leaf Culling /
-  Embeddium Plus / Rubidium Extra）；
+  Nothirium、Nvidium、Voxy、FISM（Iris 阴影加速），以及只服务渲染器的配套
+  模组（Sodium Extra / Sodium Extras / Sodium Options API / Sodium Dynamic
+  Lights / Sodium Leaf Culling / Embeddium Plus / Rubidium Extra）；
 * **客户端优化**：ImmediatelyFast、Entity Culling、More Culling、Dynamic FPS、
   BadOptimizations、FerriteCore、Krypton、Lithium、ModernFix、Memory Leak Fix、
   Debugify、C2ME、Model Gap Fix、EBE / OBE / Better Block Entities、
@@ -41,7 +46,11 @@ jar 里的真实 mod id、配置文件名，再按"渲染器 + 客户端优化"�
   Smooth Boot、DashLoader、FastAnim、RenderScale、Entity View Distance、
   FastChest、FoamFix、Phosphor、Clumps、StutterFix、Video Tape、
   Better Biome Blend / Reblend、Performant、BetterFps、VanillaFix、
-  Distant Horizons。
+  Distant Horizons；以及 NRG / 超现代优化两个包里那批较新的：
+  Ixeris（事件轮询）、Gnetum（HUD 分批）、Kerria（纹理动画）、
+  Jasione（减少内存分配）、Dypsis（客户端渲染）、Async Logger、
+  EfficientHashing、Random Optimization、Mixin Booster、FastEvent、
+  LightSpeedRe、0Pack2Reload、ThreatenGL。
 
 **不收录**：纯服务端优化（ServerCore / VMP / Ksyxis…）、网络与封包、启动器与
 界面工具、纯修复类、装饰与模型材质类——它们的配置与玩家机器无关，跟着整合包
@@ -52,9 +61,12 @@ jar 里的真实 mod id、配置文件名，再按"渲染器 + 客户端优化"�
 带一个整合包目录则体检它的 `config/`——哪些配置会被保护（按模组归类）、
 哪些照常更新、`mods/` 里装到了表内哪些优化/渲染模组。加 `--json` 便于脚本化。
 
-新增 45 项测试：表本身（不重复 / 别名可反查 / 关键模组齐全）、真实配置文件
+新增 50 项测试：表本身（不重复 / 别名可反查 / 关键模组齐全）、真实配置文件
 名命中、无关模组绝不误伤、apply_rules 判定、build_plan 计划、execute_plan
-端到端、接真实 differ 的全链路、下载任务过滤、变更列表标记、体检脚本。
+端到端、接真实 differ 的全链路、下载任务过滤、变更列表标记、体检脚本，
+以及**默认值本身**（config 默认 = 智能剔除、其它默认不变、不改设置直接建计划
+就能保护、导出包仍是整包镜像）。`tests/e2e_flow.py` 也补了真机流程断言：
+用默认策略跑完整更新，玩家的 Sodium 配置原样保留、普通配置照常覆盖。
 
 ## v0.6.6（整包发布）— 失败文件直通 Aster + Modrinth 镜像优先 + options.txt 不再随包走
 

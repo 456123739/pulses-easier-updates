@@ -1016,13 +1016,14 @@ class TestKeybindMerge(_Base):
         self.assertEqual(t.get_blacklist(), ["options.txt"])
 
     def test_folder_row_ignores_merge_strategy(self):
-        from app.config import Strategy
+        from app.config import Strategy, default_strategy_for_dir
         t = self._table(["config"], set())
         t.set_strategies({"config": Strategy.MERGE_KEYS.value})
+        # 目录行没有「保留键位」→ 忽略，保持该目录的默认策略
         self.assertEqual(t.get_strategies()["config"],
-                         Strategy.REPLACE_SAME.value)
+                         default_strategy_for_dir("config").value)
         self.assertEqual(t._rows["config"].group.get(),
-                         Strategy.REPLACE_SAME)
+                         default_strategy_for_dir("config"))
 
     def test_unify_never_puts_merge_on_folders(self):
         from app.config import Strategy
