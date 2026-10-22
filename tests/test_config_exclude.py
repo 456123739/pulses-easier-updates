@@ -605,5 +605,42 @@ class TestDownloadTasks(unittest.TestCase):
                          ["config/sodium-options.json"])
 
 
+class TestAuditScript(unittest.TestCase):
+    """scripts/config_exclude_list.py：列整张表 / 体检一个整合包。"""
+
+    def _mod(self):
+        import importlib.util
+        path = _ROOT / "scripts" / "config_exclude_list.py"
+        spec = importlib.util.spec_from_file_location("ce_list", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_table_text(self):
+        text = self._mod()._table_text()
+        self.assertIn(f"{len(ce.TABLE)} 个模组", text)
+        self.assertIn("Sodium（钠）", text)
+        self.assertIn(ce.KIND_RENDER, text)
+
+    def test_audit_counts_and_groups(self):
+        tmp = tempfile.TemporaryDirectory(prefix="easier-ces-")
+        self.addCleanup(tmp.cleanup)
+        pack = Path(tmp.name)
+        for rel in ("config/sodium-options.json", "config/iris.properties",
+                    "config/modernfix-mixins.properties",
+                    "config/jei/jei.toml", "config/create-common.toml"):
+            _write(pack / rel, "x")
+        _write(pack / "mods" / "sodium-fabric-0.5.11.jar", "")
+        data = self._mod()._audit(pack)
+        self.assertEqual(data["config_files"], 5)
+        self.assertEqual(data["protected_files"], 3)
+        self.assertEqual(sorted(data["plain"]),
+                         ["config/create-common.toml", "config/jei/jei.toml"])
+        self.assertIn("Sodium（钠）", data["protected"])
+        self.assertEqual(len(data["installed"]), 1)
+        self.assertIn("sodium-fabric", data["installed"][0])
+        self.assertIn("3 个会被", self._mod()._audit_text(data))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
