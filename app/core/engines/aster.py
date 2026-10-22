@@ -59,6 +59,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from .. import mirrors
 from ..downloader import DownloadResult, DownloadTask, _verify
 
 # ---- 移植过来的常量（对应 ModNet.vb）------------------------------------
@@ -79,6 +80,42 @@ TICK = 0.02                       # 调度轮询间隔
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+
+
+def _options() -> dict:
+    """读下载配置（优先用下载器那份缓存，测试注入也走这里）。"""
+    try:
+        from ..downloader import _get_options
+        return dict(_get_options())
+    except Exception:  # noqa: BLE001
+        try:
+            from .. import database as db
+            return dict(db.get_download_options())
+        except Exception:  # noqa: BLE001
+            return {}
+
+
+def _timeouts(threads: int) -> tuple[float, float]:
+    """
+    读设置里的超时参数，返回 (socket 超时, 无数据判定间隔)。
+
+    单连接（耐心档 / threads<=1）用 single_* 那组，多线程用普通那组；
+    读不到就用 PCL 的默认值。
+    """
+    o = _options()
+
+    def num(key: str, default: float) -> float:
+        try:
+            return float(o.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    if threads and threads <= 1:
+        gap = num("single_stall_timeout", 30)
+    else:
+        gap = num("stall_timeout", 10)
+    gap = max(1.0, min(gap, 120.0))
+    return max(3.0, gap), gap
 
 _SSL = ssl.create_default_context()
 
@@ -166,7 +203,8 @@ class _Job:
         self.chunks: list[_Chunk] = []
         # 可重入：_next_spec 会在持锁时调 pick_source（同一个锁）
         self.lock = threading.RLock()
-        self.sources = [_Source(u) for u in (task.urls or [])]
+        # 镜像优先：Modrinth 官方 CDN 在国内偏慢，先试镜像，挂了自动退回
+        self.sources = [_Source(u) for u in mirrors.ordered(list(task.urls or []))]
         self.once: list[_Source] = []   # 只允许单线程的源
         self.retried = False
         self.finished = False
@@ -178,6 +216,10 @@ class _Job:
         self.fh = None                  # 预分配好的目标文件句柄
         self.file_lock = threading.Lock()
         self.last_source = 0
+        self.last_error = ""            # 最后一个源错误（失败原因里带上）
+        self.sock_timeout = CONNECT_TIMEOUT
+        self.gap_ms = SLOW_GAP_MS
+        self.retry_limit = 2          # 同一个源"毫无进展"最多试几次
 
     # -- 大小 / 分片状态 -------------------------------------------------
     @property
@@ -239,7 +281,9 @@ class _Job:
         """
         with self.lock:
             src.fail_count += 1
-            limit = min(max(int(budget), 5), 30)
+            # 同一源连续失败、且一个字节都没拿到 → 别死磕（默认 2 次）
+            limit = min(min(max(int(budget), 5), 30),
+                        max(1, int(getattr(self, "retry_limit", 2))))
             should = (
                 fatal
                 or (src.fail_count >= limit and done < 1)
@@ -323,8 +367,8 @@ def _range_start(resp) -> int:
 def _run_chunk(job: _Job, chunk: _Chunk, src: _Source, budget: int,
                byte_cb, should_abort) -> None:
     """下载一个分块。出错时按 PCL 规则处理源并把这个块放回队列。"""
-    timeout = min(max(job.connect_ms or CONNECT_TIMEOUT * 1000, 15000)
-                  * (1 + src.fail_count) / 1000.0, MAX_TIMEOUT)
+    timeout = min(max(job.sock_timeout, job.gap_ms / 1000.0)
+                  * (1 + src.fail_count), MAX_TIMEOUT)
     start = chunk.pos
     resp = None
     try:
@@ -379,6 +423,8 @@ def _run_chunk(job: _Job, chunk: _Chunk, src: _Source, budget: int,
                 if len(block) > room:
                     block = block[:room]
             job.write_at(chunk.pos, block)
+            if last_recv < 0:
+                mirrors.note_success(src.url)
             with job.lock:
                 chunk.pos += len(block)
                 src.fail_count = 0
@@ -388,6 +434,8 @@ def _run_chunk(job: _Job, chunk: _Chunk, src: _Source, budget: int,
             last_recv = _now_ms()
             if chunk.end >= 0 and chunk.pos > chunk.end:
                 break
+            if _now_ms() - last_recv > job.gap_ms * 3:
+                raise _SourceError("超时（长时间没有数据）")
         # 正常结束
         with job.lock:
             chunk.running = False
@@ -427,6 +475,9 @@ def _run_chunk(job: _Job, chunk: _Chunk, src: _Source, budget: int,
 
 def _fail(job: _Job, chunk: _Chunk, src: _Source, msg: str, fatal: bool,
           budget: int) -> None:
+    mirrors.note_failure(src.url)
+    if msg:
+        job.last_error = msg
     with job.lock:
         chunk.running = False
         chunk.fail_count += 1
@@ -583,7 +634,16 @@ def download_files(
     target_dir.mkdir(parents=True, exist_ok=True)
     budget = int(threads) if threads and threads > 0 else DEFAULT_BUDGET
 
+    sock_timeout, gap_ms = _timeouts(budget)
     jobs = [_Job(t, target_dir / t.rel_path) for t in tasks]
+    try:
+        _retry = max(1, int(_options().get("retry_same_url", 1)) + 1)
+    except Exception:  # noqa: BLE001
+        _retry = 2
+    for _j in jobs:
+        _j.sock_timeout = sock_timeout
+        _j.gap_ms = int(gap_ms * 1000)
+        _j.retry_limit = _retry
     results: dict[int, DownloadResult] = {}
     total = len(jobs)
     finished_n = {"n": 0}
@@ -705,10 +765,12 @@ def download_files(
                 if job.finished:
                     _finish(job, not job.failed_reason, job.failed_reason)
                 continue
-            # 没有可用源且没有在跑的线程 → 这个文件失败
-            if not job.has_source() and running.get(id(job), 0) == 0 \
-                    and job.size != -2:
-                job.failed_reason = job.failed_reason or "所有下载源都失败了"
+            # 没有可用源且没有在跑的线程 → 这个文件失败（连大小都没探到也算）
+            if not job.has_source() and running.get(id(job), 0) == 0:
+                if not job.failed_reason:
+                    job.failed_reason = (
+                        "所有下载源都失败了（%s）" % job.last_error
+                        if job.last_error else "所有下载源都失败了")
                 _cleanup_target(job)
                 _finish(job, False, job.failed_reason)
                 continue

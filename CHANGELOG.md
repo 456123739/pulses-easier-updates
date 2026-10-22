@@ -1,5 +1,59 @@
 # Pulses Easier 更新日志
 
+## v0.6.6（整包发布）— 失败文件直通 Aster + Modrinth 镜像优先 + options.txt 不再随包走
+
+三处都是"少做无用功"：**失败的文件不再在 RideX 里绕一圈**，
+**Modrinth 资源默认先走镜像**，**options.txt 默认不更新也不打包**。
+
+### 一、RideX 的「耐心池」整个删掉，失败文件直接交给 Aster
+
+以前 RideX 主池失败的文件会进一个"单线程耐心池"，用放宽超时再试一遍——
+等于在同一个引擎里把同一个文件重跑一次，收益低、还多一层队列转换。
+
+现在：**主池收尾后，失败的文件整批交给 Aster 引擎重下**（Aster 自带源降级、
+整文件重试、镜像优先）。`single_slots`（单线程重试槽位）这个设置随之取消。
+
+* 主池仍按 `multi_slots` 并发跑；只有失败的少数文件才会走到 Aster，尾巴很短。
+* Aster 这一轮用 `retry_same_url + 1` 作为"同一个源最多试几次"的上限，
+  不会在一个卡死的源上死磕几十次。
+* 回调语义不变：`on_file_done` 仍只在成功时触发，`on_file_failed` 只报最终失败。
+
+### 二、Modrinth 资源默认先用镜像
+
+新增 `app/core/mirrors.py`：把 `cdn.modrinth.com` 的地址派生成镜像地址，
+**排在官方地址前面**；镜像不通就自动退回官方，对上层完全透明。
+
+* 设置 → 下载 → **镜像优先**（`mirror_first`，默认开）、**镜像地址**
+  （`mirror_hosts`，默认 `https://mod.mcimirror.top`，分号分隔，可留空）。
+* **健康度**：同一个镜像连续失败 3 次，本轮不再尝试，避免每个文件都先等一次超时；
+  成功一次立刻清零。
+* 两条引擎都生效（RideX 主池、Aster 重试），所以"失败文件优先用镜像"也自然成立。
+
+### 三、options.txt 默认不更新、也不打包
+
+* **玩家端**：策略表里 `options.txt` 默认落在「已禁用」折叠区，**不参与更新**。
+  想让它跟着更新，展开后勾上即可（策略仍是「保留键位」，键位不会丢）。
+* **开发者端**：导出更新包时**永远不带** `options.txt`（即使勾选、即使关掉
+  「最小体积」也一样剔除）。包里不再分发玩家的键位/画质/音量设置。
+
+### 实现（给维护者）
+
+* `app/core/mirrors.py`（新增）：`ordered()` / `candidates()` / 健康度
+* `app/core/downloader.py`：删除 `_run_single` 与单线程池；主池结束后
+  `_hand_to_aster()` 整批交给 Aster；URL 循环改成镜像优先
+* `app/core/engines/aster.py`：源列表走镜像优先；超时/重试次数改为读设置
+  （单连接用 `single_*` 那组）；失败原因带上最后一个源错误
+* `app/config.py`：`DEFAULT_DISABLED_FILES` / `NEVER_PACK_FILES`
+* `app/ui/widgets/strategy_table.py`、`app/core/eapack.py`：默认禁用 + 永不打包
+* 测试：新增 `tests/test_mirrors.py`（10 项）；下载器/引擎/导出/策略表补了
+  7 项；单元共 **340** 项
+
+### 从旧版本升上来
+
+* 直接覆盖旧版目录即可。默认行为变化：`options.txt` 不再被更新、不再进包；
+  Modrinth 下载会先试镜像。
+* 如果你的网络直连 Modrinth 更快，把「镜像优先」关掉或清空镜像地址即可。
+
 ## v0.6.5（整包发布）— 新增 Aster 星驰下载引擎
 
 **Aster（拉丁语「星」，中文别称「星驰」）** 是第二条下载引擎，和 RideX 锐驰

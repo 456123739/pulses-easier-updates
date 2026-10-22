@@ -18,8 +18,9 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from ...config import (FILE_STRATEGY_LIST, STRATEGY_LIST, Strategy,
-                       default_strategy_for_dir, default_strategy_for_file)
+from ...config import (DEFAULT_DISABLED_FILES, FILE_STRATEGY_LIST,
+                       STRATEGY_LIST, Strategy, default_strategy_for_dir,
+                       default_strategy_for_file)
 from ...theme import Color, Font, Size
 from .strategy_group import StrategyGroup
 from .toggle_item import ToggleItem
@@ -160,6 +161,9 @@ class StrategyTable(ctk.CTkFrame):
             if name in self._rows:
                 continue
             checked = name not in self._blacklist
+            if name in DEFAULT_DISABLED_FILES:
+                # options.txt 默认不更新（进「已禁用」折叠区）
+                checked = False
             # 默认策略与玩家端一致（mods 等 → 完全匹配；config → 替换重名；
             # options.txt → 保留键位）
             if name in self._file_items:

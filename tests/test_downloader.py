@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -109,11 +110,14 @@ class TestBase(unittest.TestCase):
 class TestInit(TestBase):
     def test_defaults_present(self):
         opts = opts_now()
-        for key in ("multi_slots", "single_slots", "part_threads",
+        for key in ("multi_slots", "part_threads",
                     "max_connections", "read_poll_interval",
                     "http_status_check", "range_validate",
-                    "part_meta_enabled", "hash_while_streaming"):
+                    "part_meta_enabled", "hash_while_streaming",
+                    "engine", "mirror_first", "mirror_hosts"):
             self.assertIn(key, opts, f"缺少配置项 {key}")
+        # 耐心池已删：失败文件直接整批交给 Aster
+        self.assertNotIn("single_slots", opts)
         self.assertEqual(opts["multi_slots"], 12)
         self.assertEqual(opts["read_poll_interval"], 1.0)
         self.assertEqual(opts["http_status_check"], 1)
@@ -886,10 +890,10 @@ class TestSizeTiers(TestBase):
 # 9. 耐心重试与主池并行（没有串行尾巴）
 # ======================================================================
 class TestPatientOverlap(TestBase):
-    def test_patient_retry_overlaps_main_pool(self):
+    def test_failed_files_go_to_aster_after_main_pool(self):
         """
-        一个文件在主池里立刻失败后，耐心重试应当**马上**开始，
-        而不是等主池里所有文件都跑完（旧实现是两段串行，会形成尾巴）。
+        主池失败的文件在主池收尾后**整批**交给 Aster（镜像优先），
+        不再有 RideX 自己的单线程耐心池。
         """
         events = []
         lock = threading.Lock()
@@ -898,50 +902,45 @@ class TestPatientOverlap(TestBase):
         def fake_attempt(task, target_dir, byte_cb, should_abort, opts,
                          single_mode=False, log=None):
             idx = int(task.rel_path.split("-")[1].split(".")[0])
-            ts = time.perf_counter()
-            if single_mode:
-                with lock:
-                    events.append(("patient_start", idx, ts))
-                time.sleep(0.05)
-                with lock:
-                    events.append(("patient_end", idx, time.perf_counter()))
-                return dl._AttemptOutcome(True)
             if idx == 0:
-                # 第 0 个文件在主池里"秒失败"，立刻降级
                 time.sleep(0.02)
                 with lock:
-                    events.append(("aggr_end", idx, time.perf_counter()))
+                    events.append(("main_end", idx))
                 return dl._AttemptOutcome(False, "模拟失败")
-            time.sleep(0.40)
+            time.sleep(0.15)
             with lock:
-                events.append(("aggr_end", idx, time.perf_counter()))
+                events.append(("main_end", idx))
             return dl._AttemptOutcome(True)
+
+        def fake_aster(tasks, **kw):
+            with lock:
+                events.append(("aster", [t.rel_path for t in tasks]))
+            return [dl.DownloadResult(t, True, self.tmp / t.rel_path, "")
+                    for t in tasks]
 
         dl._attempt_file = fake_attempt
         try:
-            set_opts(multi_slots=6, single_slots=2, disk_aware_slots=0)
+            set_opts(multi_slots=6, disk_aware_slots=0)
             tasks = [dl.DownloadTask(f"f-{i}.bin", ["http://127.0.0.1/x"],
                                      sha1="", file_size=1)
                      for i in range(12)]
-            t0 = time.perf_counter()
-            results = dl.download_files(tasks, target_dir=self.tmp,
-                                        threads=None)
-            total = time.perf_counter() - t0
+            with mock.patch("app.core.engines.aster.download_files",
+                            side_effect=fake_aster):
+                results = dl.download_files(tasks, target_dir=self.tmp,
+                                            threads=None)
         finally:
             dl._attempt_file = orig
 
         self.assertEqual(len(results), 12)
-        patient_starts = [ts for kind, _i, ts in events
-                          if kind == "patient_start"]
-        aggr_ends = [ts for kind, _i, ts in events if kind == "aggr_end"]
-        self.assertEqual(len(patient_starts), 1, "降级文件没有被耐心重试")
-        last_main_done = max(aggr_ends)
-        self.assertLess(
-            min(patient_starts), last_main_done,
-            "耐心重试是在主池全部结束之后才开始的（串行尾巴又回来了）")
-        # 串行的话总耗时会 ≥ 主池全部耗时 + 耐心耗时
-        self.assertLess(total, 1.6,
-                        f"耗时 {total:.2f}s，看起来退回了串行两段")
+        self.assertTrue(all(r.ok for r in results),
+                        [r.error for r in results])
+        aster_calls = [e for e in events if e[0] == "aster"]
+        self.assertEqual(len(aster_calls), 1, "应当整批交给 Aster 一次")
+        self.assertEqual(aster_calls[0][1], ["f-0.bin"])
+        # 整批交给 Aster 发生在主池全部结束之后
+        self.assertGreater(events.index(aster_calls[0]),
+                           max(i for i, e in enumerate(events)
+                               if e[0] == "main_end"))
 
     def test_all_failed_still_reports_every_task(self):
         orig = dl._attempt_file
@@ -962,6 +961,47 @@ class TestPatientOverlap(TestBase):
             dl._attempt_file = orig
         self.assertEqual(len(results), 7)
         self.assertTrue(all(not r.ok for r in results))
+
+
+# ======================================================================
+# 耐心档：交给 Aster 引擎
+# ======================================================================
+class TestPatientEngine(TestBase):
+    def test_failed_file_goes_to_aster(self):
+        calls = []
+
+        def fake(tasks, **kw):
+            calls.append([t.rel_path for t in tasks])
+            return [dl.DownloadResult(t, False, None, "仍然失败")
+                    for t in tasks]
+
+        with mock.patch("app.core.engines.aster.download_files",
+                        side_effect=fake):
+            res = dl.download_files(
+                [self.task("mods/x.jar",
+                           [self.srv.url("missing", "x")])],
+                target_dir=self.tmp, threads=1)
+        self.assertTrue(calls, "主池失败的文件必须交给 Aster 重下")
+        self.assertEqual(calls[0], ["mods/x.jar"])
+        self.assertFalse(res[0].ok)
+
+    def test_aster_success_is_reported(self):
+        def fake(tasks, **kw):
+            t = tasks[0]
+            p = self.tmp / t.rel_path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"OK")
+            return [dl.DownloadResult(t, True, p, "")]
+
+        with mock.patch("app.core.engines.aster.download_files",
+                        side_effect=fake):
+            res = dl.download_files(
+                [self.task("mods/y.jar",
+                           [self.srv.url("missing", "y")])],
+                target_dir=self.tmp, threads=1)
+        self.assertTrue(res[0].ok, res[0].error)
+        self.assertEqual((self.tmp / "mods/y.jar").read_bytes(), b"OK")
+
 
 
 if __name__ == "__main__":

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:            # 手动触发：Actions 页面点一下，或 gh 命令
     inputs:
       version:
-        description: 版本号（用于 zip 文件名，如 0.6.5）
+        description: 版本号（用于 zip 文件名，如 0.6.6）
         required: false
-        default: "0.6.5"
+        default: "0.6.6"
   push:
     tags: ["v*"]                # 推 tag 时自动出包并上传到对应 Release
 
