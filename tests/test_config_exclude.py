@@ -103,7 +103,7 @@ class TestTable(unittest.TestCase):
         must = [
             "sodium", "iris", "oculus", "optifine", "embeddium", "rubidium",
             "magnesium", "xenon", "vulkanmod", "canvas", "nothirium",
-            "nvidium", "distanthorizons", "sodium-extra",
+            "nvidium", "distanthorizons", "voxy", "sodium-extra",
             "immediatelyfast", "entityculling", "moreculling", "dynamic-fps",
             "badoptimizations", "ferrite-core", "krypton", "lithium",
             "modernfix", "memoryleakfix", "c2me", "ebe", "particle-core",
@@ -182,6 +182,8 @@ class TestMatching(unittest.TestCase):
         "config/obe.conf": "obe",
         "config/c2me.toml": "c2me",
         "config/vulkanmod.json": "vulkanmod",
+        "config/voxy.json": "voxy",
+        "config/voxy-extra.json": "voxy",
         "config/sodium/sodium-options.json": "sodium",
     }
 

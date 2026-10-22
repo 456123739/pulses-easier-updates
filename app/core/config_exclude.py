@@ -107,6 +107,8 @@ TABLE: tuple[ConfigOwner, ...] = (
                 aliases=("embeddiumextra",)),
     ConfigOwner("distanthorizons", "Distant Horizons（远处地平线）",
                 KIND_RENDER, note="LOD 渲染，配置里全是显存/画质选项"),
+    ConfigOwner("voxy", "Voxy（LOD 渲染）", KIND_RENDER,
+                note="和 Distant Horizons 同类的远处渲染"),
     ConfigOwner("better-clouds", "Better Clouds", KIND_RENDER),
     ConfigOwner("bettergrassify", "BetterGrassify", KIND_RENDER,
                 aliases=("bettergrass",)),
@@ -208,6 +210,8 @@ GENERIC_SUFFIXES = frozenset({
     "options", "option", "config", "configs", "settings", "setting",
     "client", "common", "server", "mixins", "mixin", "tweak", "tweaks",
     "optimization", "optimizations",
+    # 附属模组的尾巴：sodium-extra.json / voxy-extra.json
+    "extra", "extras",
     # 版本号尾巴：particle_core_config_v1.json / betterclouds-v1.json
     "v1", "v2", "v3", "v4",
 })

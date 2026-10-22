@@ -23,13 +23,13 @@ config 一直只有三档：完全匹配 / 替换重名 / 跳过重名。但**�
   「智能剔除：N 个优化/渲染类配置保持了你本地的版本」。
 * 变更列表的 config 行标出「智能剔除」，不展开也看得见。
 
-归属表在 `app/core/config_exclude.py`（75 个模组）。数据来自 Modrinth
+归属表在 `app/core/config_exclude.py`（76 个模组）。数据来自 Modrinth
 `optimization` 分类按下载量排序的前 200 项，逐个核对 `client_side` 与发行
 jar 里的真实 mod id、配置文件名，再按"渲染器 + 客户端优化"标准筛出：
 
 * **渲染器 / 光影加载器**：Sodium、Iris、Oculus、OptiFine、Embeddium、
   Rubidium、Magnesium、Xenon、Chloride、Flerovium、Canvas、VulkanMod、
-  Nothirium、Nvidium，以及只服务渲染器的配套模组（Sodium Extra / Sodium
+  Nothirium、Nvidium、Voxy，以及只服务渲染器的配套模组（Sodium Extra / Sodium
   Extras / Sodium Options API / Sodium Dynamic Lights / Sodium Leaf Culling /
   Embeddium Plus / Rubidium Extra）；
 * **客户端优化**：ImmediatelyFast、Entity Culling、More Culling、Dynamic FPS、
