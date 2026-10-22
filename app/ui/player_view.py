@@ -1198,7 +1198,7 @@ class PlayerView(ctk.CTkFrame):
 
     def _smart_excluded(self, rel: str) -> bool:
         """
-        这条 config 文件在当前策略下会不会被「智能剔除」掉。
+        这条 config 文件会不会被「智能剔除」掉（**不含策略判断**，调用方负责）。
 
         判定与 updater.split_smart_excluded 保持一致：属于优化/渲染类模组，
         且**玩家本地已经有**这个文件（本地没有就照常写默认值）。
@@ -1215,24 +1215,29 @@ class PlayerView(ctk.CTkFrame):
     def _note_smart_exclude(self, strategies: dict):
         """config 选了「智能剔除」时，在日志里说清楚会保护哪些配置。"""
         try:
-            if resolve_strategy(strategies, "config") \
-                    != Strategy.SMART_EXCLUDE:
+            # 顶层目录名按实际比对结果取（Windows 上可能是 "Config"）
+            tops = [str(k) for k in strategies
+                    if str(k).strip().lower() == "config"]
+            if not any(resolve_strategy(strategies, t) == Strategy.SMART_EXCLUDE
+                       for t in tops):
                 self._smart_note_sig = ""
                 return
             rels: list[str] = []
             root = self._overrides_root
             if root is not None:
-                base = Path(root) / "config"
-                if base.is_dir():
-                    for p in base.rglob("*"):
-                        try:
+                for base in Path(root).iterdir():
+                    try:
+                        if not (base.is_dir()
+                                and base.name.lower() == "config"):
+                            continue
+                        for p in base.rglob("*"):
                             if p.is_file():
                                 rels.append(p.relative_to(root).as_posix())
-                        except (OSError, ValueError):
-                            continue
+                    except (OSError, ValueError):
+                        continue
             for item in self._merged or []:
                 r = str(item.get("path", ""))
-                if r.startswith("config/"):
+                if r.split("/", 1)[0].lower() == "config":
                     rels.append(r)
             text = config_exclude.summarize(rels)
             if not text:
