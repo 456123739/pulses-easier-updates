@@ -987,8 +987,25 @@ class TestKeybindMerge(_Base):
                          Strategy.MERGE_KEYS.value)
         self.assertEqual(len(row.group._buttons), 4)
         self.assertEqual(row.group.get(), Strategy.MERGE_KEYS)
-        # 目录行还是三档
-        self.assertEqual(len(t._rows["config"].group._buttons), 3)
+        # config 多一档「智能剔除」；其它目录还是三档
+        self.assertEqual(len(t._rows["config"].group._buttons), 4)
+
+    def test_smart_exclude_only_on_config(self):
+        """「智能剔除」只出现在 config 行，不能外溢到别的目录。"""
+        from app.config import Strategy
+        t = self._table(["config", "mods", "saves"], set())
+        cfg = t._rows["config"]
+        self.assertIn(Strategy.SMART_EXCLUDE, cfg.group._strategies)
+        for name in ("mods", "saves"):
+            self.assertNotIn(Strategy.SMART_EXCLUDE,
+                             t._rows[name].group._strategies)
+        # 写进去也要被拒（导入配置 / 包内推荐值都可能带别的目录）
+        t.set_strategies({"mods": Strategy.SMART_EXCLUDE.value})
+        self.assertNotEqual(t.get_strategies()["mods"],
+                            Strategy.SMART_EXCLUDE.value)
+        t.set_strategies({"config": Strategy.SMART_EXCLUDE.value})
+        self.assertEqual(t.get_strategies()["config"],
+                         Strategy.SMART_EXCLUDE.value)
 
     def test_options_txt_row_disabled_by_default(self):
         """玩家端默认不更新 options.txt（进「已禁用」折叠区）。"""

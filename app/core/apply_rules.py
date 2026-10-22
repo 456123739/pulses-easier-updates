@@ -19,6 +19,7 @@ apply_rules.py — 「这条变更是应用还是跳过」的唯一判定
   文件级（白名单目录里的文件、根目录散文件）
     ADDED                       → 应用（复制/下载）
     MODIFIED   + 跳过重名        → 跳过
+    MODIFIED   + 智能剔除        → 优化/渲染类模组的配置跳过，其余应用
     MODIFIED   + 其他策略        → 应用
     MODIFIED   + 保留键位        → 应用（搬运后写回本地 key_* 行）
     DELETED    + 完全匹配        → 删除（应用）
@@ -27,6 +28,7 @@ apply_rules.py — 「这条变更是应用还是跳过」的唯一判定
   文件夹级（非白名单目录整体）
     ADDED                       → 应用（整目录复制）
     MODIFIED   + 任意策略        → 应用（替换/合并，都不会删玩家文件）
+    MODIFIED   + 智能剔除        → 应用，但逐个文件剔除优化/渲染类配置
     DELETED    + 完全匹配        → 删除整目录
     DELETED    + 其他策略        → 跳过
 
@@ -36,6 +38,7 @@ apply_rules.py — 「这条变更是应用还是跳过」的唯一判定
 from pathlib import Path
 
 from ..config import CONTENT_DIR_MAP, ChangeKind, ContentType, Strategy
+from . import config_exclude
 
 
 def normalize_keys(mapping: dict | None) -> dict:
@@ -113,7 +116,12 @@ def will_skip(change, checked: dict | None, strategies: dict | None,
         return False
 
     if change.kind == ChangeKind.MODIFIED:
-        return strat == Strategy.SKIP_SAME
+        if strat == Strategy.SKIP_SAME:
+            return True
+        if strat == Strategy.SMART_EXCLUDE \
+                and config_exclude.is_protected(change.rel_path):
+            return True
+        return False
     if change.kind == ChangeKind.DELETED:
         return strat != Strategy.FULL_MATCH
     return False          # ADDED

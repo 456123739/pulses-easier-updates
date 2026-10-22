@@ -25,6 +25,7 @@ from ..config import (Strategy, default_strategy_for_dir,
                       default_strategy_for_file)
 from ..core import cache as cache_mod
 from ..core import checkpoint as cp_mod
+from ..core import config_exclude
 from ..core import database as db
 from ..core import eapack as eapack_mod
 from ..core import pending as pending_logic
@@ -880,6 +881,7 @@ class PlayerView(ctk.CTkFrame):
                 checked=checked, strategies=strategies)
             self.change_list.update_marks(checked=checked,
                                           strategies=strategies)
+            self._note_smart_exclude(strategies)
             self._take_strategy_snapshot()
             self._set_button_state(_BTN_CONFIRM)
 
@@ -1148,13 +1150,22 @@ class PlayerView(ctk.CTkFrame):
 
             if ch.is_folder_level:
                 prefix = rel.as_posix() + "/"
+                smart = strat == Strategy.SMART_EXCLUDE
                 for item in merged:
                     item_rel = item.get("path", "")
-                    if item_rel.startswith(prefix):
-                        needed.add(item_rel)
+                    if not item_rel.startswith(prefix):
+                        continue
+                    # 智能剔除：优化/渲染类配置不下载（反正不会写入）
+                    if smart and self._smart_excluded(item_rel):
+                        continue
+                    needed.add(item_rel)
             else:
                 if ch.kind.value == "modified" \
                         and strat == Strategy.SKIP_SAME:
+                    continue
+                if ch.kind.value == "modified" \
+                        and strat == Strategy.SMART_EXCLUDE \
+                        and config_exclude.is_protected(rel):
                     continue
                 needed.add(rel.as_posix())
 
@@ -1184,6 +1195,55 @@ class PlayerView(ctk.CTkFrame):
                 file_size=int(item.get("file_size", 0) or 0),
             ))
         return tasks
+
+    def _smart_excluded(self, rel: str) -> bool:
+        """
+        这条 config 文件在当前策略下会不会被「智能剔除」掉。
+
+        判定与 updater.split_smart_excluded 保持一致：属于优化/渲染类模组，
+        且**玩家本地已经有**这个文件（本地没有就照常写默认值）。
+        """
+        try:
+            if not config_exclude.is_protected(rel):
+                return False
+            if self.pack_info is None:
+                return True
+            return (Path(self.pack_info.path) / rel).is_file()
+        except OSError:
+            return False
+
+    def _note_smart_exclude(self, strategies: dict):
+        """config 选了「智能剔除」时，在日志里说清楚会保护哪些配置。"""
+        try:
+            if resolve_strategy(strategies, "config") \
+                    != Strategy.SMART_EXCLUDE:
+                self._smart_note_sig = ""
+                return
+            rels: list[str] = []
+            root = self._overrides_root
+            if root is not None:
+                base = Path(root) / "config"
+                if base.is_dir():
+                    for p in base.rglob("*"):
+                        try:
+                            if p.is_file():
+                                rels.append(p.relative_to(root).as_posix())
+                        except (OSError, ValueError):
+                            continue
+            for item in self._merged or []:
+                r = str(item.get("path", ""))
+                if r.startswith("config/"):
+                    rels.append(r)
+            text = config_exclude.summarize(rels)
+            if not text:
+                return
+            if getattr(self, "_smart_note_sig", "") == text:
+                return
+            self._smart_note_sig = text
+            self.log.log("info",
+                         f"config 使用「智能剔除」：{text} 保持你本地的版本")
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _default_strategy_for(self, kind: PackKind) -> str:
         """
@@ -1268,6 +1328,7 @@ class PlayerView(ctk.CTkFrame):
         self.change_list.load(self.diff,
                               checked=checked,
                               strategies=strategies)
+        self._note_smart_exclude(strategies)
         self._take_strategy_snapshot()
 
         self.log.log("info",
@@ -1880,7 +1941,12 @@ class PlayerView(ctk.CTkFrame):
         """补齐完成：用只含这些文件的补丁计划走同一套 execute_plan。"""
         if self.pack_info is None:
             return
-        rels = [Path(r) for r in self._record_rels if r]
+        # 补齐也要守策略：config 选了「智能剔除」时，玩家本地已有的优化/
+        # 渲染配置不再覆盖；其它策略照旧补齐
+        smart = (self.strategy_table.get_strategies().get("config")
+                 == Strategy.SMART_EXCLUDE.value)
+        rels = [Path(r) for r in self._record_rels
+                if r and not (smart and self._smart_excluded(r))]
         cache = self._record_cache_root
         pack_root = self.pack_info.path
         if not rels or cache is None:

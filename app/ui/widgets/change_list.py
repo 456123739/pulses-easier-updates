@@ -12,7 +12,8 @@ from collections import defaultdict
 
 import customtkinter as ctk
 
-from ...config import ChangeKind
+from ...config import ChangeKind, Strategy
+from ...core.apply_rules import resolve_strategy
 from ...core.apply_rules import will_skip as _rules_will_skip
 from ...core.differ import Change, DiffResult
 from ...theme import Color, Font, Size
@@ -204,8 +205,12 @@ class ChangeList(ctk.CTkFrame):
                              and _will_skip(c, self._checked,
                                             self._strategies))
 
+            smart = (self._marks_ready()
+                     and resolve_strategy(self._strategies, top)
+                     == Strategy.SMART_EXCLUDE)
             self._add_group_row(row, top, a, m, d,
-                                is_expandable, expanded, skip_count)
+                                is_expandable, expanded, skip_count,
+                                smart=smart)
             row += 1
 
             if expanded and is_expandable:
@@ -220,7 +225,7 @@ class ChangeList(ctk.CTkFrame):
     def _add_group_row(self, row: int, top: str,
                        a: int, m: int, d: int,
                        expandable: bool, expanded: bool,
-                       skip_count: int = 0):
+                       skip_count: int = 0, smart: bool = False):
         item = ctk.CTkFrame(self.scroll, fg_color=Color.TRANSPARENT,
                             height=22)
         item.grid(row=row, column=0, sticky="ew", pady=0)
@@ -269,6 +274,13 @@ class ChangeList(ctk.CTkFrame):
                 .pack(side="left", padx=2)
         if skip_count:
             ctk.CTkLabel(summary, text=f"跳过 {skip_count}",
+                         font=(Font.FAMILY, 10),
+                         text_color=Color.TEXT_MUTED,
+                         fg_color=Color.TRANSPARENT)\
+                .pack(side="left", padx=(6, 2))
+        if smart:
+            # 目录级变更没法逐条灰显，这里标明"会做智能剔除"
+            ctk.CTkLabel(summary, text="智能剔除",
                          font=(Font.FAMILY, 10),
                          text_color=Color.TEXT_MUTED,
                          fg_color=Color.TRANSPARENT)\
