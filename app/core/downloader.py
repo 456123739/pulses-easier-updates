@@ -190,7 +190,7 @@ def engine_banner() -> str:
 _DEFAULTS = {
     "engine": "ridex",
     "mirror_first": 1,
-    "mirror_hosts": "https://mod.mcimirror.top",
+    "mirror_hosts": "",
     "multi_slots": 12,
     "part_threads": 4,
     "max_connections": 128,
