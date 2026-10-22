@@ -1,5 +1,61 @@
 # Pulses Easier 更新日志
 
+## v0.7.0（整包发布）— config 第四档策略「智能剔除」
+
+（含 v0.6.6 的全部改动）
+
+config 一直只有三档：完全匹配 / 替换重名 / 跳过重名。但**优化模组和渲染器的
+配置是按玩家机器调的**——显存、GPU 特性、渲染距离、分配内存、mixin 开关。
+整合包一更新就把作者机器上的默认值推下来，轻则画面变糊掉帧，重则直接崩，
+而玩家往往查不出是自己配置被覆盖了。
+
+新增 `Strategy.SMART_EXCLUDE = "智能剔除"`，只出现在 config 行：
+
+* **怎么认**：config 里的文件几乎都以模组 id 命名（`sodium-options.json`、
+  `DistantHorizons.toml`、`modernfix-mixins.properties`、`config/sodium/…`），
+  按路径反查归属；命中"客户端优化模组 / 渲染器"表就保持玩家本地版本。
+* **只保护已有的**：本地没有这个配置（新装的模组）照常写入包里的默认值，
+  不会出现"装了 Sodium 却没有配置"。
+* **绝不删文件**：仍是合并语义，玩家自己写的 config 一个都不动。
+* **下载阶段就跳过**：被剔除的配置不再下载（反正不会写）。
+* 日志说清楚保护了谁：「config 使用「智能剔除」：Sodium（钠）、Iris Shaders
+  （光影）等 3 个模组的 4 个配置 保持你本地的版本」；应用完成后还有一行
+  「智能剔除：N 个优化/渲染类配置保持了你本地的版本」。
+* 变更列表的 config 行标出「智能剔除」，不展开也看得见。
+
+归属表在 `app/core/config_exclude.py`（76 个模组）。数据来自 Modrinth
+`optimization` 分类按下载量排序的前 200 项，逐个核对 `client_side` 与发行
+jar 里的真实 mod id、配置文件名，再按"渲染器 + 客户端优化"标准筛出：
+
+* **渲染器 / 光影加载器**：Sodium、Iris、Oculus、OptiFine、Embeddium、
+  Rubidium、Magnesium、Xenon、Chloride、Flerovium、Canvas、VulkanMod、
+  Nothirium、Nvidium、Voxy，以及只服务渲染器的配套模组（Sodium Extra / Sodium
+  Extras / Sodium Options API / Sodium Dynamic Lights / Sodium Leaf Culling /
+  Embeddium Plus / Rubidium Extra）；
+* **客户端优化**：ImmediatelyFast、Entity Culling、More Culling、Dynamic FPS、
+  BadOptimizations、FerriteCore、Krypton、Lithium、ModernFix、Memory Leak Fix、
+  Debugify、C2ME、Model Gap Fix、EBE / OBE / Better Block Entities、
+  Particle Core、ScalableLux、Starlight、LazyDFU、Fastload、ThreadTweak、
+  Cull Leaves、Fast Paintings、Better Beds、AsyncParticles、FPS Reducer、
+  Exordium、Redirected、Saturn、Pluto、Radium、Canary、GPUBooster、
+  Smooth Boot、DashLoader、FastAnim、RenderScale、Entity View Distance、
+  FastChest、FoamFix、Phosphor、Clumps、StutterFix、Video Tape、
+  Better Biome Blend / Reblend、Performant、BetterFps、VanillaFix、
+  Distant Horizons。
+
+**不收录**：纯服务端优化（ServerCore / VMP / Ksyxis…）、网络与封包、启动器与
+界面工具、纯修复类、装饰与模型材质类——它们的配置与玩家机器无关，跟着整合包
+走才是对的。表是纯数据，加一行就能扩（`key` + `aliases`），
+`tests/test_config_exclude.py` 会检查规范性。
+
+配套脚本 `python scripts/config_exclude_list.py`：不带参数列出整张表；
+带一个整合包目录则体检它的 `config/`——哪些配置会被保护（按模组归类）、
+哪些照常更新、`mods/` 里装到了表内哪些优化/渲染模组。加 `--json` 便于脚本化。
+
+新增 45 项测试：表本身（不重复 / 别名可反查 / 关键模组齐全）、真实配置文件
+名命中、无关模组绝不误伤、apply_rules 判定、build_plan 计划、execute_plan
+端到端、接真实 differ 的全链路、下载任务过滤、变更列表标记、体检脚本。
+
 ## v0.6.6（整包发布）— 失败文件直通 Aster + Modrinth 镜像优先 + options.txt 不再随包走
 
 三处都是"少做无用功"：**失败的文件不再在 RideX 里绕一圈**，

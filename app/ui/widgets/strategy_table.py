@@ -5,7 +5,8 @@ strategy_table.py — 动态策略表
 - 文件夹 📁 / 文件 📄 图标
 - 名称列宽统一，超长截断 + 悬停显示完整
 - 勾选 / 未勾选沉底折叠
-- 三连策略按钮（完全匹配 / 替换重名 / 跳过重名）
+- 策略按钮：目录三档（完全匹配 / 替换重名 / 跳过重名）
+  config 多一档「智能剔除」，根目录散文件多一档「保留键位」
 - 统一策略：受保护文件夹（默认 mods）不参与
 - 导入 / 导出配置
 - 无滚动条滚动
@@ -18,9 +19,9 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from ...config import (DEFAULT_DISABLED_FILES, FILE_STRATEGY_LIST,
-                       STRATEGY_LIST, Strategy, default_strategy_for_dir,
-                       default_strategy_for_file)
+from ...config import (DEFAULT_DISABLED_FILES, STRATEGY_LIST, Strategy,
+                       default_strategy_for_dir, default_strategy_for_file,
+                       strategy_list_for)
 from ...theme import Color, Font, Size
 from .strategy_group import StrategyGroup
 from .toggle_item import ToggleItem
@@ -228,9 +229,9 @@ class StrategyTable(ctk.CTkFrame):
                     s = Strategy(strat) if isinstance(strat, str) else strat
                 except ValueError:
                     continue
-                # 目录行没有"保留键位"这一档，收到就忽略（保持界面与计划一致）
-                allowed = (FILE_STRATEGY_LIST if name in self._file_items
-                           else STRATEGY_LIST)
+                # 每一行只认自己那几档（目录没有"保留键位"，只有 config
+                # 有"智能剔除"）：收到别的就忽略，保持界面与计划一致
+                allowed = strategy_list_for(name, name in self._file_items)
                 if s not in allowed:
                     continue
                 r.strategy = s
@@ -273,12 +274,13 @@ class StrategyTable(ctk.CTkFrame):
         body.grid_columnconfigure(0, weight=1)
         r.body = body
 
-        # 根目录散文件多一档「保留键位」；按钮窄一点，四个才放得下
-        strategies = FILE_STRATEGY_LIST if is_file else STRATEGY_LIST
+        # 根目录散文件多一档「保留键位」、config 多一档「智能剔除」；
+        # 四档时按钮窄一点才放得下
+        strategies = strategy_list_for(r.folder, is_file)
         group = StrategyGroup(
             body, value=(Strategy.FULL_MATCH if locked else r.strategy),
             strategies=strategies,
-            btn_width=(60 if is_file else 72),
+            btn_width=(60 if len(strategies) > 3 else 72),
             on_change=lambda _s, name=r.folder: self._on_strategy(name))
         group.grid(row=0, column=0, sticky="w")
         r.group = group
@@ -396,8 +398,7 @@ class StrategyTable(ctk.CTkFrame):
         next_strat = STRATEGY_LIST[(idx + 1) % len(STRATEGY_LIST)]
 
         for r in candidates:
-            allowed = (FILE_STRATEGY_LIST if r.folder in self._file_items
-                       else STRATEGY_LIST)
+            allowed = strategy_list_for(r.folder, r.folder in self._file_items)
             if next_strat not in allowed:
                 continue
             r.strategy = next_strat

@@ -43,6 +43,7 @@ class Strategy(str, Enum):
     REPLACE_SAME = "替换重名"   # 仅覆盖重名文件，不删除
     SKIP_SAME    = "跳过重名"   # 跳过已存在文件
     MERGE_KEYS   = "保留键位"   # 覆盖内容，但本地 key_* 行原样保留
+    SMART_EXCLUDE = "智能剔除"  # 覆盖内容，但优化/渲染类模组的配置保持本地版本
 
     @property
     def label(self) -> str:
@@ -52,6 +53,9 @@ class Strategy(str, Enum):
 STRATEGY_LIST = [Strategy.FULL_MATCH, Strategy.REPLACE_SAME, Strategy.SKIP_SAME]
 # 根目录散文件多一档「保留键位」
 FILE_STRATEGY_LIST = STRATEGY_LIST + [Strategy.MERGE_KEYS]
+# config 多一档「智能剔除」：优化/渲染类模组的配置保持玩家本地版本
+# （归属表见 core/config_exclude.py；这个概念只在 config 上有意义，不要外溢）
+CONFIG_STRATEGY_LIST = STRATEGY_LIST + [Strategy.SMART_EXCLUDE]
 
 # 每种内容类型的默认策略
 DEFAULT_STRATEGY = {
@@ -79,6 +83,25 @@ del _d
 def default_strategy_for_dir(top: str) -> Strategy:
     """顶层目录的默认策略；未知目录一律"替换重名"（合并覆盖，不删文件）。"""
     return DEFAULT_STRATEGY_BY_DIR.get(top, DEFAULT_STRATEGY[ContentType.OTHER])
+
+
+# 只有这些顶层目录提供「智能剔除」（配置文件的归属判定只对 config 有意义）
+SMART_EXCLUDE_DIRS = frozenset({"config"})
+
+
+def strategy_list_for(top: str, is_file: bool = False) -> list[Strategy]:
+    """
+    某一行的可选策略（界面按钮、导入校验、推荐值校验共用同一份）。
+
+    - 根目录散文件：四档（多「保留键位」）
+    - config：四档（多「智能剔除」）
+    - 其它目录：三档
+    """
+    if is_file:
+        return FILE_STRATEGY_LIST
+    if str(top).strip().lower() in SMART_EXCLUDE_DIRS:
+        return CONFIG_STRATEGY_LIST
+    return STRATEGY_LIST
 
 
 # ----------------------------------------------------------------------

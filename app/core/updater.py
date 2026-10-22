@@ -12,6 +12,9 @@ plan 生成规则：
         · 完全匹配 → 删旧目录 + 整目录复制（走 replace_dir 完全替换）
         · 替换重名 → 目录合并（同名覆盖）
         · 跳过重名 → 目录合并（同名跳过）
+        · 智能剔除 → 目录合并（同名覆盖），但属于客户端优化模组 / 渲染器
+          的配置文件**保持玩家本地版本**（本地没有的才写包里的默认值）；
+          归属表见 config_exclude.py
     - DELETED 目录 → 完全匹配 delete 整个目录；其他 skip
 
 「保留键位」（MERGE_KEYS）只用于根目录 options.txt 这类键位文件：
@@ -41,6 +44,7 @@ from pathlib import Path
 from ..config import ChangeKind, Strategy
 from ..utils.files import safe_join
 from . import checkpoint as cp_mod
+from . import config_exclude
 from . import transfer
 from .apply_rules import (
     is_checked_n,
@@ -76,6 +80,9 @@ class UpdatePlan:
     dir_files: dict[str, list[str]] = field(default_factory=dict)
     # 目录 rel → 该目录下"允许保留玩家版本"的文件（跳过重名策略）
     dir_optional: dict[str, list[str]] = field(default_factory=dict)
+    # 目录 rel → 该目录下按「智能剔除」保持本地版本、**不写入**的文件
+    # （不参与期望值登记与校验：内容本来就不该变）
+    dir_skip: dict[str, list[str]] = field(default_factory=dict)
     # 需要"搬运后写回本地键位行"的文件 rel（保留键位策略）
     merge_keys: set[str] = field(default_factory=set)
 
@@ -351,6 +358,36 @@ def fill_expectations(plan: UpdatePlan, source: PlanSource,
                 plan.expect_hash[key] = value
 
 
+def split_smart_excluded(files: list[Path], old_root: Path | None
+                         ) -> tuple[list[Path], list[str]]:
+    """
+    把某个目录下的文件分成「照常写入」和「智能剔除、保持本地版本」两堆。
+
+    只剔除**玩家本地已经有**的文件：本地没有说明是新装/新加的配置，
+    写包里的默认值是安全的（也避免了"新装的优化模组没有配置"）。
+
+    没有 old_root（老调用方/测试）时一律剔除：宁可少写，不要覆盖。
+    """
+    kept: list[Path] = []
+    skipped: list[str] = []
+    root = Path(old_root) if old_root is not None else None
+    for rel in files:
+        if not config_exclude.is_protected(rel):
+            kept.append(rel)
+            continue
+        if root is None:
+            skipped.append(rel.as_posix())
+            continue
+        try:
+            if (root / rel).is_file():
+                skipped.append(rel.as_posix())
+            else:
+                kept.append(rel)
+        except OSError:
+            kept.append(rel)
+    return kept, skipped
+
+
 def build_plan(diff, checked, strategies,
                old_root: Path | None = None,
                new_root: Path | None = None,
@@ -406,6 +443,11 @@ def build_plan(diff, checked, strategies,
         elif change.kind == ChangeKind.MODIFIED:
             if strat == Strategy.SKIP_SAME:
                 plan.skip.append(rel)
+            elif (strat == Strategy.SMART_EXCLUDE
+                    and config_exclude.is_protected(rel)):
+                # 兜底：config 本身是文件夹级比对，这里只可能来自手改策略
+                # / 包内推荐值，同样"不动玩家的配置"
+                plan.skip.append(rel)
             else:
                 plan.copy.append(rel)
                 if strat == Strategy.MERGE_KEYS:
@@ -427,6 +469,10 @@ def build_plan(diff, checked, strategies,
             if not files and not source.has_dir(rel) \
                     and _is_added(rel, diff):
                 continue
+            if strat == Strategy.SMART_EXCLUDE:
+                files, skipped = split_smart_excluded(files, old_root)
+                if skipped:
+                    plan.dir_skip[key] = skipped
             plan.dir_files[key] = [f.as_posix() for f in files]
             if strat == Strategy.SKIP_SAME and old_root is not None:
                 plan.dir_optional[key] = [
@@ -467,17 +513,29 @@ def _rmtree_quiet(p: Path):
 def _replace_dir(rel: Path, strat: Strategy, old_root: Path,
                  source: PlanSource, log: Callable[[str, str], None],
                  *, chunk_bytes: int, pace_ms: float,
+                 skip_files: set[str] | None = None,
                  should_abort=None) -> tuple[bool, TransferResult]:
     """
     目录级操作。返回 (是否成功, 最后一次搬运结果)。
 
     完全匹配：旧目录先 rename 到同目录临时名 → 逐个搬运新内容 →
               全部成功才删临时名；中途失败则删掉半个新目录并 rename 回来。
-    替换重名 / 跳过重名：目录合并，只写不删（玩家自己的文件不受影响）。
+    替换重名 / 跳过重名 / 智能剔除：目录合并，只写不删（玩家自己的文件
+              不受影响）；智能剔除额外跳过 skip_files 里列出的文件。
     """
     dst_root = old_root / rel
     files, dirs = source.walk_dir(rel)
     full = strat == Strategy.FULL_MATCH
+    skip = skip_files or set()
+    skipped = 0
+    if skip:
+        keep: list[Path] = []
+        for f in files:
+            if f.as_posix() in skip:
+                skipped += 1
+            else:
+                keep.append(f)
+        files = keep
     backup: Path | None = None
 
     if full and (dst_root.exists() or dst_root.is_symlink()):
@@ -526,8 +584,15 @@ def _replace_dir(rel: Path, strat: Strategy, old_root: Path,
     if full:
         log("info", f"替换目录 {rel.as_posix()}")
     else:
-        log("info", f"合并目录 {rel.as_posix()}"
-                    f"（{'同名覆盖' if strat == Strategy.REPLACE_SAME else '同名跳过'}）")
+        mode = {
+            Strategy.REPLACE_SAME: "同名覆盖",
+            Strategy.SKIP_SAME: "同名跳过",
+            Strategy.SMART_EXCLUDE: "同名覆盖，优化/渲染配置除外",
+        }.get(strat, "同名覆盖")
+        log("info", f"合并目录 {rel.as_posix()}（{mode}）")
+    if skipped:
+        log("info", f"智能剔除：{rel.as_posix()} 下 {skipped} 个优化/渲染类"
+                    f"配置保持你本地的版本")
     return True, last
 
 
@@ -632,6 +697,7 @@ def execute_plan(
         "moved": 0,          # 瞬时搬运（rename/硬链接）的文件数
         "bytes": 0,          # 真正复制过的字节数
         "merged": 0,         # 写回本地键位的文件数
+        "smart_skipped": 0,  # 智能剔除（保持玩家本地版本）的文件数
     }
 
     copy_list = list(dict.fromkeys(plan.copy))
@@ -673,9 +739,12 @@ def execute_plan(
             _prog(step, total_steps)
             continue
 
-        def _one(r=rel, s=strat) -> bool:
+        skip_set = set(plan.dir_skip.get(rel.as_posix(), ()))
+
+        def _one(r=rel, s=strat, sk=skip_set) -> bool:
             ok, res = _replace_dir(r, s, old_root, source, _log,
                                    chunk_bytes=chunk_bytes, pace_ms=pace_ms,
+                                   skip_files=sk,
                                    should_abort=should_abort)
             if ok:
                 if res.moved:
@@ -685,6 +754,7 @@ def execute_plan(
 
         if _retry_once(_one, _log, f"替换目录 {rel.as_posix()}"):
             report["applied"] += 1
+            report["smart_skipped"] += len(skip_set)
         else:
             report["failed"].append(
                 {"rel": rel.as_posix(), "error": "目录操作失败"})
@@ -803,6 +873,9 @@ def execute_plan(
          f"实际复制 {transfer.human_bytes(report['bytes'])}）")
     if report["merged"]:
         _log("info", f"其中 {report['merged']} 个文件保留了本地键位")
+    if report["smart_skipped"]:
+        _log("info", f"智能剔除：{report['smart_skipped']} 个优化/渲染类配置"
+                     f"保持了你本地的版本")
 
     return report
 
