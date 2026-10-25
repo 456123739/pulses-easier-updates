@@ -326,23 +326,21 @@ def main() -> int:
         print("\n── 7) 折叠面板动画 ──")
         panel = app.sidebar.more_panel
         body = panel.body
+        _pump(app, 0.5)                      # 先让内容布局出来
         natural = max(1, int(body.winfo_reqheight()))
-        samples = []
         panel._toggle()
-        t0 = time.time()
-        while time.time() - t0 < 0.4:
-            app.update()
-            try:
-                samples.append(int(body.winfo_height()))
-            except Exception:  # noqa: BLE001
-                break
-            time.sleep(0.008)
-        mid = [h for h in samples if 2 < h < natural - 2]
-        check(bool(mid), "「更多」展开是高度动画（不是瞬间弹出）",
-              f"采样 {samples[:8]}… 自然高度 {natural}")
-        check(bool(samples) and abs(samples[-1] - natural) <= 2,
-              "展开结束停在自然高度",
-              f"{samples[-1] if samples else 'n/a'} vs {natural}")
+        # 断言"动画机制"而不是"采样到时序"：CI 上 update() 可能一次吃掉 100ms+，
+        # 按时间采样会偶发抓不到中间帧（v0.8.1 的发布就因此红过一次）。
+        # 这里只要求：确实起了一条还在跑的补间 + 最终停在自然高度。
+        tween = getattr(body, "_anim_toggle", None)
+        running = bool(tween is not None
+                       and getattr(tween, "running", False))
+        _pump(app, 0.6)
+        h_end = int(body.winfo_height())
+        check(running, "「更多」展开是高度动画（不是瞬间弹出）",
+              f"tween={tween is not None} alive={running}")
+        check(abs(h_end - natural) <= 2, "展开结束停在自然高度",
+              f"{h_end} vs {natural}")
         panel._toggle()                      # 收回去，别影响后面的截图
         _pump(app, 0.3)
         return True
@@ -381,15 +379,22 @@ def main() -> int:
         wl_ok = False
         if wl is not None:
             try:
+                _pump(app, 1.5,
+                      lambda: wl.list_frame.winfo_reqheight() > 5)
+                natural = max(1, int(wl.list_frame.winfo_reqheight()))
+                if not wl._collapsed:
+                    wl._toggle()             # 先收起，保证从 0 展开
+                    _pump(app, 0.5)
                 wl._toggle()                 # 展开白名单面板
-                samples = []
-                t0 = time.time()
-                while time.time() - t0 < 0.35:
-                    app.update()
-                    samples.append(int(wl.list_frame.winfo_height()))
-                    time.sleep(0.008)
-                top = max(samples) if samples else 0
-                wl_ok = any(2 < h < top - 2 for h in samples)
+                tween = getattr(wl.list_frame, "_anim_toggle", None)
+                running = bool(tween is not None
+                               and getattr(tween, "running", False))
+                _pump(app, 0.6)
+                h_end = int(wl.list_frame.winfo_height())
+                wl_ok = running and abs(h_end - natural) <= 3
+                if not wl_ok:
+                    print(f"    （白名单：tween={tween is not None} "
+                          f"alive={running} end={h_end} natural={natural}）")
             except Exception as e:  # noqa: BLE001
                 print(f"    （白名单面板自检异常：{e}）")
         check(wl_ok, "白名单面板展开也是高度动画")
