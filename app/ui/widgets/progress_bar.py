@@ -9,8 +9,11 @@ progress_bar.py — 双层叠加进度条
 对外接口：
   set(value, animate=True)      整体进度 0~1
   set_file_progress(ratio)      文件内进度 0~1；None 隐藏上层
-  set_text(text)                设置下方小字
-  get_text() -> str
+  get_file_progress() -> float | None
+
+进度动画用**单条追赶循环**（每 16ms 向目标值追 25%）：下载过程中每个 tick
+都会调一次 `set()`，如果每次都起一条固定帧数动画，就会十几条链同时改同一个
+值 —— 表现为进度条抖动、偶尔回跳，白烧 CPU。
 """
 
 import tkinter as tk
@@ -35,6 +38,8 @@ class SmoothProgressBar(ctk.CTkFrame):
         self.pack_propagate(False)
 
         self._value = 0.0
+        self._target = 0.0
+        self._loop_id = None
         self._file_ratio: float | None = None
 
         # 自绘 Canvas：宽度 1px 占位，实际宽度由 <Configure> 事件同步
@@ -113,27 +118,56 @@ class SmoothProgressBar(ctk.CTkFrame):
     def set(self, value: float, animate: bool = True):
         """整体进度 0~1"""
         value = max(0.0, min(1.0, value))
+        self._target = value
         if not animate:
+            self._cancel_loop()
             self._value = value
             self._redraw()
             return
-        self._animate_value(self._value, value)
+        if self._loop_id is None:
+            self._start_loop()
 
-    def _animate_value(self, start: float, end: float,
-                       duration_ms: int = 200):
-        steps = max(1, duration_ms // Anim.FRAME_MS)
+    # -- 追赶动画 ------------------------------------------------------
+    def _start_loop(self):
+        try:
+            self._loop_id = self.after(Anim.FRAME_MS, self._chase)
+        except Exception:  # noqa: BLE001
+            self._loop_id = None
 
-        def _step(i: int):
-            t = i / steps
-            self._value = start + (end - start) * t
+    def _cancel_loop(self):
+        if self._loop_id is None:
+            return
+        try:
+            self.after_cancel(self._loop_id)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        self._loop_id = None
+
+    def _chase(self):
+        self._loop_id = None
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:  # noqa: BLE001
+            return
+
+        delta = self._target - self._value
+        if abs(delta) <= 0.002:
+            # 到位：直接贴合目标值（不能停在 0.998 那种"差一点"的状态）
+            self._value = self._target
             self._redraw()
-            if i < steps:
-                try:
-                    self.after(Anim.FRAME_MS, _step, i + 1)
-                except Exception:  # noqa: BLE001
-                    return
+            return
+        self._value += delta * 0.25
+        self._redraw()
+        self._start_loop()
 
-        _step(0)
+    def destroy(self):
+        """销毁时停掉动画，别让 after 回调打在已销毁的控件上。"""
+        self._cancel_loop()
+        try:
+            super().destroy()
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def set_file_progress(self, ratio: float | None):
         """文件内进度 0~1；None 隐藏上层"""

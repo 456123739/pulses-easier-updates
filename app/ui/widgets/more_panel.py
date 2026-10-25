@@ -9,6 +9,7 @@ more_panel.py — 侧边栏"更多"折叠面板
 改过"，无法验证，容易把版本搞乱；恢复方向统一为"重新拖入更新包再更新"。）
 """
 
+import threading
 from collections.abc import Callable
 
 import customtkinter as ctk
@@ -124,11 +125,44 @@ class MorePanel(ctk.CTkFrame):
         toggle_height(self.body, show, duration_ms=Anim.TOGGLE_MS)
 
     def _refresh_size(self):
+        """
+        缓存大小放到后台线程算。
+
+        `cache_size_bytes()` 要把整个缓存目录 walk 一遍（下载缓存动辄几个
+        GB、上万文件），在 UI 线程做就是"点开「更多」卡半秒"。这里先显示
+        "计算中…"，算完再回填；连点多次只认最后一次的结果。
+        """
         try:
-            from ...utils.files import human_size
-            size = cache_mod.cache_size_bytes()
-            self.size_label.configure(
-                text=f"当前缓存：{human_size(size)}" if size else "缓存为空")
+            self.size_label.configure(text="当前缓存：计算中…")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        token = getattr(self, "_size_token", 0) + 1
+        self._size_token = token
+
+        def _worker():
+            text = ""
+            try:
+                from ...utils.files import human_size
+                size = cache_mod.cache_size_bytes()
+                text = f"当前缓存：{human_size(size)}" if size else "缓存为空"
+            except Exception:  # noqa: BLE001
+                text = ""
+            try:
+                self.after(0, lambda t=text, k=token: self._apply_size(t, k))
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_size(self, text: str, token: int):
+        if token != getattr(self, "_size_token", 0):
+            return                      # 已经有更新的一次计算在路上
+        if not text:
+            return
+        try:
+            if self.size_label.winfo_exists():
+                self.size_label.configure(text=text)
         except Exception:  # noqa: BLE001, S110
             pass
 

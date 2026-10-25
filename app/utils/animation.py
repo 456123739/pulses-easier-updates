@@ -97,6 +97,7 @@ class Tween:
         self.frame_ms = max(1, int(frame_ms))
         self._after_id = None
         self._cancelled = False
+        self._finished = False
         self._t0 = time.perf_counter()
         self._tick()
 
@@ -105,7 +106,13 @@ class Tween:
     def running(self) -> bool:
         return not self._cancelled and self._after_id is not None
 
-    def cancel(self):
+    def cancel(self, notify: bool = False):
+        """
+        取消动画。
+
+        notify=True 时仍会调用一次 `on_done`：用于"取消也要收尾"的场景
+        （例如切页中途被打断，必须把旧页面收掉，否则两个页面叠在一起）。
+        """
         self._cancelled = True
         if self._after_id is not None:
             try:
@@ -113,15 +120,33 @@ class Tween:
             except Exception:  # noqa: BLE001, S110
                 pass
             self._after_id = None
+        if notify:
+            self._finish()
+
+    def _finish(self):
+        """收尾：保证 on_done 只跑一次（正常结束 / 异常 / 控件消失都走这里）。"""
+        if self._finished:
+            return
+        self._finished = True
+        self._after_id = None
+        if self.on_done is not None:
+            try:
+                self.on_done()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     # -- 内部 ----------------------------------------------------------
     def _tick(self):
-        if self._cancelled:
+        if self._cancelled or self._finished:
             return
         try:
             if not self.widget.winfo_exists():
+                # 控件没了：动画不可能再画，但调用方的"收尾"仍要跑，
+                # 否则 _switching 之类的状态会永远卡住
+                self._finish()
                 return
         except Exception:  # noqa: BLE001
+            self._finish()
             return
 
         raw = (time.perf_counter() - self._t0) * 1000.0 / self.duration_ms
@@ -129,15 +154,11 @@ class Tween:
         try:
             self.on_frame(self.ease(raw), raw)
         except Exception:  # noqa: BLE001
+            self._finish()
             return
 
         if raw >= 1.0:
-            self._after_id = None
-            if self.on_done is not None:
-                try:
-                    self.on_done()
-                except Exception:  # noqa: BLE001, S110
-                    pass
+            self._finish()
             return
 
         try:
@@ -215,6 +236,19 @@ def toggle_height(widget, show: bool,
 
     内容会变的控件（例如白名单列表）传 `refresh_natural=True`，每次都重量。
     """
+    # 上一次的展开/收起动画还在跑：先取消，否则两条补间同时改 height，
+    # 快速连点折叠按钮会看到高度来回抖
+    prev = getattr(widget, "_anim_toggle", None)
+    if prev is not None:
+        try:
+            prev.cancel()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            widget._anim_toggle = None     # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     target = natural_height(widget, refresh=refresh_natural)
     cur = 0
     try:
@@ -240,40 +274,83 @@ def toggle_height(widget, show: bool,
                 widget.grid_remove()
             except Exception:  # noqa: BLE001, S110
                 pass
+        try:
+            widget._anim_toggle = None     # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001, S110
+            pass
         if on_done is not None:
             try:
                 on_done()
             except Exception:  # noqa: BLE001, S110
                 pass
 
-    return animate_height(widget, start, end, duration_ms, on_done=_done)
+    tw = animate_height(widget, start, end, duration_ms, on_done=_done)
+    try:
+        widget._anim_toggle = tw           # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return tw
 
 
 # ----------------------------------------------------------------------
 # 颜色过渡
 # ----------------------------------------------------------------------
+def _run_slot(widget, name: str):
+    """取（或创建）widget 上的"动画槽"，同一个槽里只留一条动画。"""
+    runs = getattr(widget, "_anim_runs", None)
+    if runs is None:
+        runs = {}
+        try:
+            widget._anim_runs = runs        # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return {}
+    return runs
+
+
+def _replace(widget, name: str, make):
+    """
+    用新动画替换同名旧动画（旧的在跑的会被取消）。
+
+    之前 `animate_color` / `slide_block` / `animate_value` 都是"每次调用起
+    一条固定帧数链"，快速 hover、快速切段时会几条链同时改同一个属性，
+    颜色/位置互相打架，看起来就是闪烁或停在中间色。
+    """
+    runs = _run_slot(widget, name)
+    prev = runs.get(name)
+    if prev is not None:
+        try:
+            prev.cancel()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _clear():
+        if runs.get(name) is tw:
+            runs.pop(name, None)
+
+    tw = make(_clear)
+    runs[name] = tw
+    return tw
+
+
 def animate_color(widget, attr: str, start: str, end: str,
                   duration_ms: int = Anim.HOVER_MS,
                   on_done: Callable[[], None] | None = None):
-    """对 widget 指定颜色属性做线性过渡"""
-    steps = max(1, duration_ms // Anim.FRAME_MS)
+    """对 widget 指定颜色属性做过渡（同一属性只保留一条动画）。"""
+    def _frame(t_eased: float, _raw: float):
+        _safe_configure(widget, **{attr: lerp_color(start, end, t_eased)})
 
-    def _step(i: int):
-        t = i / steps
-        if not _safe_configure(widget, **{attr: lerp_color(start, end, t)}):
-            return
-        if i < steps:
-            try:
-                widget.after(Anim.FRAME_MS, _step, i + 1)
-            except Exception:  # noqa: BLE001
-                return
-        elif on_done:
+    def _done():
+        if on_done is not None:
             try:
                 on_done()
             except Exception:  # noqa: BLE001, S110
                 pass
 
-    _step(0)
+    def _make(clear):
+        return tween(widget, duration_ms, _frame,
+                     on_done=lambda: (clear(), _done()))
+
+    return _replace(widget, f"color:{attr}", _make)
 
 
 # ----------------------------------------------------------------------
@@ -373,29 +450,25 @@ def slide_block(block, target_x: int, _target_w: int = 0,
     except Exception:  # noqa: BLE001
         cur_x = target_x
 
-    steps = max(1, duration_ms // Anim.FRAME_MS)
-
-    def _step(i: int):
-        t = i / steps
-        x = lerp(cur_x, target_x, t)
+    def _frame(t_eased: float, _raw: float):
         try:
-            if not block.winfo_exists():
-                return
-            block.place_configure(x=int(x))
-        except Exception:  # noqa: BLE001
-            return
-        if i < steps:
-            try:
-                block.after(Anim.FRAME_MS, _step, i + 1)
-            except Exception:  # noqa: BLE001
-                return
-        elif on_done:
+            block.place_configure(x=int(round(
+                lerp(cur_x, target_x, t_eased))))
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _done():
+        if on_done is not None:
             try:
                 on_done()
             except Exception:  # noqa: BLE001, S110
                 pass
 
-    _step(0)
+    def _make(clear):
+        return tween(block, duration_ms, _frame,
+                     on_done=lambda: (clear(), _done()))
+
+    return _replace(block, "slide_x", _make)
 
 
 # ----------------------------------------------------------------------
@@ -405,25 +478,21 @@ def animate_value(widget, attr: str, start: float, end: float,
                   duration_ms: int = 200,
                   on_done: Callable[[], None] | None = None):
     """对数值属性（如进度条 value）平滑过渡"""
-    steps = max(1, duration_ms // Anim.FRAME_MS)
-
-    def _step(i: int):
-        t = i / steps
+    def _frame(t_eased: float, _raw: float):
         try:
-            if not widget.winfo_exists():
-                return
-            widget.set(lerp(start, end, t))
-        except Exception:  # noqa: BLE001
-            return
-        if i < steps:
-            try:
-                widget.after(Anim.FRAME_MS, _step, i + 1)
-            except Exception:  # noqa: BLE001
-                return
-        elif on_done:
+            widget.set(lerp(start, end, t_eased))
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _done():
+        if on_done is not None:
             try:
                 on_done()
             except Exception:  # noqa: BLE001, S110
                 pass
 
-    _step(0)
+    def _make(clear):
+        return tween(widget, duration_ms, _frame,
+                     on_done=lambda: (clear(), _done()))
+
+    return _replace(widget, f"value:{attr}", _make)

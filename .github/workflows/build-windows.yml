@@ -7,9 +7,9 @@ on:
   workflow_dispatch:            # 手动触发：Actions 页面点一下，或 gh 命令
     inputs:
       version:
-        description: 版本号（用于 zip 文件名，如 0.7.0）
+        description: 版本号（用于 zip 文件名，如 0.7.1）
         required: false
-        default: "0.7.0"
+        default: "0.7.1"
   push:
     tags: ["v*"]                # 推 tag 时自动出包并上传到对应 Release
 
@@ -35,9 +35,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
-      - name: 打包前自测（失败只告警，不阻断出包）
-        continue-on-error: true
+      # 交付版本：测试失败必须挡住出包（以前是 continue-on-error，
+      # 绿勾不代表测试通过，出现过"测试挂了照样发版"的情况）
+      - name: 单元测试（失败即阻断）
         run: python -m unittest discover -s tests -p "test_*.py"
+
+      # 真实 Tk 窗口：动画 / 文字刷新 / 列表增量 / 滚动位置
+      # （没有桌面时脚本自己跳过，不会误伤）
+      - name: 真实 GUI 冒烟（失败即阻断）
+        run: python tests/gui_smoke.py
 
       - name: PyInstaller 打包
         run: python -m PyInstaller --clean --noconfirm pulses-easier.spec

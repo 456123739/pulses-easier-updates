@@ -99,17 +99,30 @@ class DropZone(ctk.CTkFrame):
         except Exception:  # noqa: BLE001
             self._registered = False
 
-    def _update_subtitle_hint(self):
+    def _render_subtitle(self):
+        """
+        副标题 = 业务文案 +（拖拽可用时）"· 或点击选择"。
+
+        以前 `set_text()` / `set_step_hint()` 直接 `configure(text=副标题)`，
+        会把"或点击选择"这个提示永久吃掉 —— 拖过包之后玩家就再也看不到
+        "这块还能点"，而它其实一直可以点。
+        """
+        base = self._subtitle_base
         hint = "或点击选择"
-        if self._subtitle_base:
-            text = f"{self._subtitle_base} · {hint}"
-        else:
-            text = hint
+        # 点击选择一直都在（与拖拽是否注册成功无关），所以提示始终显示
+        text = f"{base} · {hint}" if base else hint
         try:
-            self.label_sub.configure(text=text)
-            self.label_sub.place(relx=0.5, rely=0.64, anchor="center")
+            if text:
+                self.label_sub.configure(text=text)
+                self.label_sub.place(relx=0.5, rely=0.64, anchor="center")
+            else:
+                self.label_sub.place_forget()
         except Exception:  # noqa: BLE001, S110
             pass
+
+    def _update_subtitle_hint(self):
+        """兼容旧名字：注册完拖拽后重画一次副标题。"""
+        self._render_subtitle()
 
     def _handle_drop(self, event):
         try:
@@ -199,27 +212,13 @@ class DropZone(ctk.CTkFrame):
                 pass
         if subtitle is not None:
             self._subtitle_base = subtitle
-            if subtitle:
-                try:
-                    self.label_sub.configure(text=subtitle)
-                    self.label_sub.place(relx=0.5, rely=0.64, anchor="center")
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            else:
-                try:
-                    self.label_sub.place_forget()
-                except Exception:  # noqa: BLE001, S110
-                    pass
+            self._render_subtitle()
 
     def set_step_hint(self, step_text: str, subtitle: str = ""):
-        """第一行加 step 标签的便捷方法"""
+        """第一行加 step 标签的便捷方法（同样保留"或点击选择"提示）。"""
         try:
             self.label_title.configure(text=step_text)
-            self._subtitle_base = subtitle
-            if subtitle:
-                self.label_sub.configure(text=subtitle)
-                self.label_sub.place(relx=0.5, rely=0.64, anchor="center")
-            else:
-                self.label_sub.place_forget()
         except Exception:  # noqa: BLE001, S110
             pass
+        self._subtitle_base = subtitle
+        self._render_subtitle()

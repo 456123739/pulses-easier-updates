@@ -125,9 +125,17 @@ class LogPanel(ctk.CTkFrame):
 
     def log(self, level: str, message: str):
         inner = self.text._textbox
+        # 只有"本来就在底部"才自动滚到底：玩家翻上去看旧日志时，
+        # 新日志不该把他拽回底部（下载中日志刷得很快，这个很烦）
+        at_bottom = True
+        try:
+            at_bottom = float(inner.yview()[1]) >= 0.999
+        except Exception:  # noqa: BLE001
+            at_bottom = True
         inner.configure(state="normal")
         inner.insert("end", message + "\n", level)
-        inner.see("end")
+        if at_bottom:
+            inner.see("end")
         inner.configure(state="disabled")
         self._trim()
 

@@ -131,22 +131,59 @@ class DatabaseDialog(ctk.CTkToplevel):
 
     # ------------------------------------------------------------------
     def _refresh(self):
+        """
+        刷新路径 / 统计。
+
+        `describe()` 会把整个库 walk 一遍（含下载缓存，动辄上万文件），
+        放在 UI 线程会让"打开数据库位置"卡住 —— 统计改到后台线程算。
+        """
         root = db.get_db_path()
         if root is None:
             self.path_label.configure(text="（尚未设置数据库）")
             self.stat_label.configure(text="")
             return
-        info = mig.describe(root)
         self.path_label.configure(text=str(root))
-        extra = ""
-        if info["cache_bytes"]:
-            extra = f"，其中缓存 {mig.human_size(info['cache_bytes'])}"
-        self.stat_label.configure(
-            text=f"{info['files']} 个文件 / {mig.human_size(info['bytes'])}"
-                 f"{extra}　·　{info['projects']} 个项目")
-        if mig.has_incomplete_marker(root):
-            self._say("注意：这个库里还有上次没做完的迁移标记",
-                      Color.WARNING)
+        try:
+            self.stat_label.configure(text="正在统计…")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        token = getattr(self, "_stat_token", 0) + 1
+        self._stat_token = token
+
+        def _worker():
+            try:
+                info = mig.describe(root)
+                warn = mig.has_incomplete_marker(root)
+            except Exception:  # noqa: BLE001
+                info, warn = None, False
+            try:
+                self.after(0, lambda i=info, w=warn, k=token:
+                           self._apply_stat(i, w, k))
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_stat(self, info, warn: bool, token: int):
+        if token != getattr(self, "_stat_token", 0) or info is None:
+            return
+        try:
+            if not self.stat_label.winfo_exists():
+                return
+            extra = ""
+            if info["cache_bytes"]:
+                extra = f"，其中缓存 {mig.human_size(info['cache_bytes'])}"
+            self.stat_label.configure(
+                text=f"{info['files']} 个文件 / "
+                     f"{mig.human_size(info['bytes'])}"
+                     f"{extra}　·　{info['projects']} 个项目")
+            if warn:
+                self._say("注意：这个库里还有上次没做完的迁移标记",
+                          Color.WARNING)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _say(self, text: str, color: str | None = None):
         try:

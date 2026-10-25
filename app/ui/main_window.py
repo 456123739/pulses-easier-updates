@@ -47,6 +47,9 @@ class MainWindow(ctk.CTk):
         #   developer → 正在制作更新包：**不允许关闭**
         self._close_guards: dict = {}
         self._switching = False
+        self._pending_identity = ""
+        self._switch_guard = None
+        self._switch_finishing = False
         self._boot_done = False
         self._warmed_up = False
 
@@ -686,18 +689,44 @@ class MainWindow(ctk.CTk):
             pass
 
     # ------------------------------------------------------------------
-    def _on_identity_changed(self, identity: str):
-        if identity == self._current or self._switching:
-            return
+    def _on_identity_changed(self, identity: str) -> bool:
+        """
+        返回 True = 接受这次切换；False = 拒绝（开关会自己回滚）。
+
+        切换动画约 250ms，期间再点另一端旧实现是**静默吞掉**：开关的高亮条
+        已经移过去了，页面却还停在原处 —— 看起来就是"界面显示开发者、内容
+        还是玩家"。现在改成：记下最后一次请求，动画结束立刻补切。
+        """
+        if identity == self._current:
+            self._sync_switch(identity)
+            return True
+        if self._switching:
+            self._pending_identity = identity
+            # 开关已经先动了；这里把它掰回当前页面，避免错位
+            self._sync_switch(self._current)
+            return False
+
         self._switching = True
+        self._pending_identity = ""
         self._current = identity
 
         self.sidebar.set_identity(identity)
+        self._sync_switch(identity)
 
         if identity == "开发者":
             self._switch(self.player_view, self.developer_view)
         else:
             self._switch(self.developer_view, self.player_view)
+        return True
+
+    def _sync_switch(self, identity: str):
+        """让侧边栏的身份开关与当前页面一致（程序切换时也要同步）。"""
+        sync = getattr(self.sidebar, "sync_identity_switch", None)
+        if callable(sync):
+            try:
+                sync(identity)
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     def _switch(self, old, new):
         """
@@ -723,7 +752,31 @@ class MainWindow(ctk.CTk):
                 except Exception:  # noqa: BLE001, S110
                     pass
 
-        def _resume():
+        self._switch_finishing = False
+
+        def _finish():
+            # 三个入口（动画正常结束 / 控件被销毁 / 兜底定时器）只能收尾一次
+            if self._switch_finishing:
+                return
+            self._switch_finishing = True
+
+            if self._switch_guard is not None:
+                try:
+                    self.after_cancel(self._switch_guard)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                self._switch_guard = None
+
+            # 兜底摆位：动画中途被打断时，旧页可能还压在下面没撤
+            try:
+                if old.winfo_exists():
+                    old.place_forget()
+                if new.winfo_exists():
+                    new.place(in_=self.page_host, relx=0, rely=0,
+                              relwidth=1.0, relheight=1.0)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
             for obj in veiled:
                 try:
                     obj.set_transition_veil(False)
@@ -736,9 +789,28 @@ class MainWindow(ctk.CTk):
                     pass
             self._switching = False
 
+            pending = self._pending_identity
+            self._pending_identity = ""
+            if pending and pending != self._current:
+                try:
+                    self.after(0,
+                               lambda p=pending: self._on_identity_changed(p))
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+        # 兜底：万一动画回调没跑（异常/控件提前销毁），也不能让
+        # _switching 永久为 True —— 那会让身份切换彻底失效。
+        # 必须在 slide_pages 之前挂上：它的"容器还没布局"分支会同步回调
+        # _finish，那时要能把这个定时器取消掉。
+        try:
+            self._switch_guard = self.after(
+                Anim.SWITCH_MS + 200, _finish)
+        except Exception:  # noqa: BLE001
+            self._switch_guard = None
+
         slide_pages(self.page_host, old, new, direction="left",
                     duration_ms=Anim.SWITCH_MS,
-                    on_done=_resume)
+                    on_done=_finish)
 
     @staticmethod
     def _find_transition_veils(view):

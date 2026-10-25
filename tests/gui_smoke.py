@@ -50,7 +50,8 @@ def check(cond, label, extra=""):
 
 
 def _missing_reason() -> str:
-    if not os.environ.get("DISPLAY"):
+    # Windows 不需要 DISPLAY（Tk 直接走 Win32）；Linux/macOS 才要 X
+    if sys.platform != "win32" and not os.environ.get("DISPLAY"):
         return "没有 DISPLAY（无显示器 / 未启动 Xvfb）"
     try:
         import tkinter  # noqa: F401
@@ -93,6 +94,9 @@ def _build_pack(tmp: Path) -> Path:
         json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
     _write(src / "overrides" / "mods" / "pack-mod.jar", "PACK MOD")
     _write(src / "overrides" / "config" / "shipped.toml", "key = \"new\"\n")
+    # 优化模组的配置：默认策略「智能剔除」下不该覆盖玩家本地那份
+    _write(src / "overrides" / "config" / "sodium-options.json",
+           '{"render_distance": 16}\n')
     _write(src / "overrides" / "资源包" / "readme.txt", "中文目录名也要正常")
 
     src_zip = tmp / "GuiSmoke-9.9.9.zip"
@@ -106,7 +110,9 @@ def _build_pack(tmp: Path) -> Path:
     eapack_mod.export_eapack(
         source_dir=src, source_zip=src_zip, out_path=out, pack=pack,
         merged_files=merge_files(pack),
-        strategies={"mods": "完全匹配", "config": "替换重名"},
+        # 不推荐 config 策略 → 玩家端走默认值（智能剔除），
+        # 这样这条冒烟也顺带验证默认值
+        strategies={"mods": "完全匹配"},
         changelog_md="# GuiSmoke 9.9.9\n\n- 冒烟测试\n")
     return out
 
@@ -127,6 +133,7 @@ def main() -> int:
     inst = tmp / "versions" / "GuiSmoke"
     _write(inst / "mods" / "old.jar", "OLD")
     _write(inst / "config" / "shipped.toml", "key = \"old\"\n")
+    _write(inst / "config" / "sodium-options.json", '{"render_distance": 8}\n')
     _write(inst / "config" / "player-only.toml", "mine = 1\n")
 
     eapack = _build_pack(tmp)
@@ -136,7 +143,14 @@ def main() -> int:
     AppBase, _dnd = main_mod._pick_app_base()
     WindowClass = type("WindowClass", (MainWindow, AppBase), {})
 
-    app = WindowClass()
+    try:
+        app = WindowClass()
+    except Exception as e:      # noqa: BLE001
+        # 没有可用桌面（CI 的 session 0 / 无头容器）：跳过，不算失败。
+        # 注意：只有"窗口根本建不起来"才走这里，后面的断言失败仍然要报错。
+        print(f"跳过真实 GUI 测试：无法创建窗口（{type(e).__name__}: {e}）")
+        return 0
+
     pv = app.player_view
     errors: list[str] = []
     t0 = time.time()
@@ -170,6 +184,19 @@ def main() -> int:
         check(pv.diff is not None, "比对完成")
         check(pv._btn_state == "confirm", "按钮进入「确认更新」",
               pv._btn_state)
+
+        strategies = pv.strategy_table.get_strategies()
+        row = pv.strategy_table._rows.get("config")
+        n_btn = len(row.group._buttons) if row and row.group else 0
+        check(strategies.get("config") == "智能剔除",
+              "config 默认策略是「智能剔除」", str(strategies.get("config")))
+        check(n_btn == 4, "config 行是四档（含智能剔除）", str(n_btn))
+        try:
+            log_text = pv.log.text._textbox.get("1.0", "end")
+        except Exception:  # noqa: BLE001
+            log_text = ""
+        check("智能剔除" in log_text,
+              "日志说明了智能剔除保护了哪些配置")
         return True
 
     def step_apply():
@@ -182,6 +209,10 @@ def main() -> int:
             return False
         check(True, "应用阶段结束（phase=idle）")
         check((inst / "mods" / "pack-mod.jar").is_file(), "包内 mod 已就位")
+        check((inst / "config" / "sodium-options.json").read_text(
+            encoding="utf-8") == '{"render_distance": 8}\n',
+            "优化模组的配置保持玩家本地版本（智能剔除，真实 GUI）",
+            (inst / "config" / "sodium-options.json").read_text(encoding="utf-8"))
         check((inst / "config" / "shipped.toml").read_text(
             encoding="utf-8") == 'key = "new"\n', "config 同名文件被覆盖")
         check((inst / "config" / "player-only.toml").is_file(),
@@ -367,7 +398,10 @@ def main() -> int:
         sw_ok = False
         try:
             sw.set("玩家")
-            app.update_idletasks()
+            # 等高亮条在新位置停稳，再量起点（否则量到的是半路位置）
+            _pump(app, 0.4, lambda: abs(int(sw._bar.winfo_x())
+                                        - sw._bar_target_x(0)) <= 1)
+            app.update()
             x0 = int(sw._bar.winfo_x())
             target = sw._bar_target_x(1)
             sw.select("开发者", notify=False)
@@ -383,8 +417,118 @@ def main() -> int:
         check(sw_ok, "身份切换按钮的高亮条是滑过去的（自绘，不用 canvas）")
         return True
 
+    def step_process():
+        """过程级检查：动画不重叠、文字会刷新、列表不重建、滚动不被抢。"""
+        print("\n── 9) 过程级检查（动画 / 文字刷新 / 列表 / 滚动）──")
+
+        # (a) 进度条：先到高位再掉头，不能被旧的动画"留在"高位
+        pv.progress.set(0.95, animate=False)
+        pv.progress.set(0.95)
+        _pump(app, 0.15)
+        pv.progress.set(0.30)
+        _pump(app, 0.5)
+        v = float(getattr(pv.progress, "_value", -1))
+        check(abs(v - 0.30) <= 0.02,
+              "进度条掉头后停在最新目标（没有旧动画残留）", f"value={v:.3f}")
+
+        # (b) 更新完成后信息卡要重读（版本/模组数会变）
+        _write(inst / "version.json", '{"version": "9.9.9-smoke"}')
+        before = pv.pack_info.mod_count
+        pv._refresh_pack_info()
+        app.update_idletasks()
+        got_ver = pv.pack_info.version
+        check(got_ver == "9.9.9-smoke",
+              "信息卡版本随磁盘变化（更新后重读，不停在旧值）", got_ver)
+        check(pv.pack_info.mod_count == before,
+              "重读模组数不抖动", f"{before} -> {pv.pack_info.mod_count}")
+
+        # (c) 待补入窗口：删一行不能把整列重建（会闪）
+        from app.ui.widgets.pending_window import PendingWindow
+        win = PendingWindow(app, mode="wait")
+        win.set_items([{"rel": "mods/a.jar"}, {"rel": "mods/b.jar"},
+                       {"rel": "mods/c.jar"}])
+        app.update_idletasks()
+        rows_before = dict(win._list_rows)
+        win.resolve("mods/b.jar", notify=False)
+        app.update_idletasks()
+        same = (win._list_rows.get("mods/a.jar") is rows_before.get("mods/a.jar")
+                and win._list_rows.get("mods/c.jar")
+                is rows_before.get("mods/c.jar"))
+        check(same, "补入一个文件时其余行不重建（列表不闪）")
+        check(win.pending_count() == 2, "待补入数量同步",
+              str(win.pending_count()))
+        win.destroy()
+        app.update_idletasks()
+
+        # (d) 日志：翻上去看旧日志时，新日志不能把人拽回底部
+        inner = pv.log.text._textbox
+        for i in range(200):
+            pv.log.log("info", f"smoke line {i}")
+        app.update()
+        inner.yview_moveto(0)
+        app.update()
+        top_before = float(inner.yview()[0])
+        pv.log.log("info", "新日志（不该抢滚动）")
+        app.update()
+        top_after = float(inner.yview()[0])
+        check(top_after <= top_before + 0.02,
+              "玩家翻上去时新日志不抢滚动位置",
+              f"{top_before:.3f} -> {top_after:.3f}")
+
+        # (e) 身份切换动画期间再点另一端：不能错位，结束后要补切
+        pv.log.clear()
+        if app._current != "玩家":
+            app._on_identity_changed("玩家")
+            _pump(app, 0.6, lambda: not app._switching)
+        ok_first = app._on_identity_changed("开发者")
+        ok_second = app._on_identity_changed("玩家")
+        check(ok_first is True, "第一次切换被接受")
+        check(ok_second is False,
+              "动画期间的第二次点击被拒绝（开关会回滚，不会错位）")
+        _pump(app, 1.2, lambda: not app._switching)
+        app.update()
+        check(app._current == "玩家", "动画结束后自动补切到最后一次点击",
+              app._current)
+        sw = app.sidebar.identity_switch
+        check(sw.get() == "玩家", "身份开关的显示与实际页面一致", sw.get())
+        return True
+
+    def step_prefs():
+        """首选项：布尔项是开关、没有可用镜像时「镜像优先」必须禁用。"""
+        print("\n── 10) 首选项（镜像优先门控 / 开关型配置）──")
+        from app.ui.widgets.preferences_dialog import open_preferences
+        dlg = open_preferences(app)
+        _pump(app, 6.0, lambda: getattr(dlg, "_mirror_ok", None) is not None)
+        app.update()
+
+        row = dlg._rows.get("mirror_first")
+        check(row is not None and getattr(row, "is_bool", False),
+              "布尔项（镜像优先）用开关显示，不是裸的 1/0")
+        if row is not None:
+            state = str(row.entry.cget("state"))
+            text = str(row.entry.cget("text"))
+            check(state == "disabled",
+                  "没有可用镜像时「镜像优先」被禁用", state)
+            check(text == "无可用镜像", "开关上写明原因", text)
+            check(str(row.var.get()) == "0", "禁用时值被强制为关",
+                  str(row.var.get()))
+
+        num = dlg._rows.get("multi_slots")
+        check(num is not None and not getattr(num, "is_bool", True),
+              "数值项（并行槽位）仍是输入框")
+
+        check(dlg._cat_buttons["download"].cget("text") == "下载",
+              "分类标题不再写死引擎名",
+              str(dlg._cat_buttons["download"].cget("text")))
+        try:
+            dlg.destroy()
+        except Exception:  # noqa: BLE001
+            pass
+        app.update_idletasks()
+        return True
+
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,
-             step_shot, step_toggles, step_switch]
+             step_shot, step_toggles, step_switch, step_process, step_prefs]
 
     def tick():
         try:

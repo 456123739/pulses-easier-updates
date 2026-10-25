@@ -59,6 +59,10 @@ class StrategyGroup(ctk.CTkFrame):
                              else Color.BORDER),
                 text_color=(Color.STRATEGY_SELECTED_TX if selected
                             else Color.TEXT_SECONDARY),
+                # 锁定（disabled）的按钮会改用它，不给就会退成主题灰，
+                # 在浅黄底上几乎看不清（mods 行的「完全匹配」）
+                text_color_disabled=(Color.STRATEGY_SELECTED_TX if selected
+                                     else Color.TEXT_SECONDARY),
                 border_width=0,
                 command=lambda s=strat: self._on_click(s))
             btn.grid(row=0, column=i, sticky="nsew", padx=0, pady=0)
@@ -111,11 +115,13 @@ class StrategyGroup(ctk.CTkFrame):
             target_tx = (Color.STRATEGY_SELECTED_TX if selected
                          else Color.TEXT_SECONDARY)
 
-            # 预先设定 hover 色（渐变过程中不影响）
+            # 预先设定 hover 色（渐变过程中不影响）+ 禁用态文字色
+            # （锁定行用的是 disabled 状态，只改 text_color 不生效）
             try:
                 btn.configure(
                     hover_color=(Color.STRATEGY_SELECTED if selected
-                                 else Color.BORDER))
+                                 else Color.BORDER),
+                    text_color_disabled=target_tx)
             except Exception:  # noqa: BLE001, S110
                 pass
 

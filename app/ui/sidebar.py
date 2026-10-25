@@ -332,6 +332,44 @@ class Sidebar(ctk.CTkFrame):
         self.identity_switch.set("玩家")
         self.identity_switch.pack(fill="x")
 
-    def _on_identity(self, value: str):
-        if self.on_identity_changed:
-            self.on_identity_changed(value)
+    def refresh_modpack_info(self):
+        """
+        重读当前整合包的信息（版本 / 模组数会随更新变化）。
+
+        只刷新卡片，不动玩家端的其它状态 —— 和 `_on_modpack_changed`
+        不同，这里不能清日志、不能改提示语。
+        """
+        path = self.app_state.current_modpack_path
+        if path is None:
+            return
+        try:
+            info = read_modpack_info(path)
+        except Exception:  # noqa: BLE001
+            return
+        self._current_info = info
+        try:
+            self.info_card.set_info(info)
+            self.info_card.set_locked(self.app_state.is_locked)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def sync_identity_switch(self, identity: str):
+        """把身份开关的显示同步到指定身份（不触发回调）。
+
+        有些地方是**程序**切身份的（例如续传时自动切回玩家端），
+        不走开关的点击路径，不同步就会"开关显示开发者、页面却是玩家"。
+        """
+        try:
+            if identity and self.identity_switch.get() != identity:
+                self.identity_switch.set(identity)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _on_identity(self, value: str) -> bool:
+        """透传主窗口的"接受/拒绝"结果（False = 让开关回滚）。"""
+        if not self.on_identity_changed:
+            return True
+        try:
+            return self.on_identity_changed(value) is not False
+        except Exception:  # noqa: BLE001
+            return True

@@ -28,8 +28,11 @@ mirrors.py — 下载镜像站表（Modrinth / CurseForge）
 自检：`python scripts/mirror_check.py` —— 对每个镜像实测延迟/速度并排序。
 """
 
+import ssl
 import threading
+import time
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 
 # ----------------------------------------------------------------------
@@ -130,6 +133,76 @@ def _active() -> list[MirrorSite]:
 def enabled() -> bool:
     on, _hosts = _settings()
     return on and bool(_active())
+
+
+#: 连通性检测用的官方文件（真实存在的 mod，Range 只取前几 KB）
+PROBE_URL = ("https://cdn.modrinth.com/data/AANobbMI/versions/g6ju16VJ/"
+             "sodium-fabric-0.9.3-beta.1%2Bmc26.3.jar")
+_PROBE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+             "AppleWebKit/537.36 (KHTML, like Gecko) "
+             "Chrome/120.0 Safari/537.36")
+
+
+def probe(timeout: float = 2.5, want: int = 2048) -> dict:
+    """
+    实测"现在到底有没有可用镜像"。
+
+    设置里的「镜像优先」不该是一个空开关：MCIM 一系停服之后，打开它只会让
+    每个文件先等一次超时。这个函数会真的去拉一小段数据，只有**至少一个镜像
+    能返回 200/206** 才算可用。
+
+    返回：
+        {"ok": bool,          # 有没有可用镜像
+         "checked": int,      # 实际测了几个
+         "reachable": [{"name","base","ms"}],
+         "error": str}
+
+    一个镜像都没配置时**不发任何请求**，直接返回 ok=False。
+    """
+    sites = _active()
+    result: dict = {"ok": False, "checked": 0, "reachable": [], "error": ""}
+    if not sites:
+        result["error"] = "没有配置任何镜像"
+        return result
+
+    try:
+        official = urllib.parse.urlsplit(PROBE_URL)
+        path = official.path + (("?" + official.query)
+                                if official.query else "")
+    except Exception:  # noqa: BLE001
+        path = "/"
+
+    ctx = ssl.create_default_context()
+    for site in sites:
+        try:
+            url = site.build(PROBE_URL, path)
+        except Exception:  # noqa: BLE001
+            continue
+        result["checked"] += 1
+        t0 = time.monotonic()
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": _PROBE_UA,
+                "Accept-Encoding": "identity",
+                "Range": f"bytes=0-{max(1, want) - 1}",
+            })
+            with urllib.request.urlopen(req, timeout=timeout,
+                                        context=ctx) as resp:
+                status = int(getattr(resp, "status", 200) or 200)
+                body = resp.read(max(1, want))
+            if status in (200, 206) and body:
+                result["reachable"].append({
+                    "name": site.name,
+                    "base": site.base or site.template,
+                    "ms": int((time.monotonic() - t0) * 1000),
+                })
+        except Exception:  # noqa: BLE001
+            continue
+
+    result["ok"] = bool(result["reachable"])
+    if not result["ok"]:
+        result["error"] = result["error"] or "所有镜像都不可用"
+    return result
 
 
 def sites(include_disabled: bool = False) -> list[MirrorSite]:

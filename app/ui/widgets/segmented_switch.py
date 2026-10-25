@@ -74,20 +74,37 @@ class SegmentedSwitch(ctk.CTkFrame):
         """外部同步状态：只改显示，不发回调。"""
         self.select(value, notify=False)
 
-    def select(self, value: str, notify: bool = True):
+    def select(self, value: str, notify: bool = True) -> bool:
+        """
+        选中某一段。
+
+        `command` 返回 **False** 表示"这次切换被拒绝"（例如页面正在做切换
+        动画）：此时把高亮条/底色**退回原来的段**，绝不出现"开关显示开发者、
+        页面还停在玩家"的错位。
+        """
         if value not in self._values:
-            return
+            return False
+        prev, prev_idx = self._value, self._index
+        if value == prev:
+            return True
+
+        if notify and self._command is not None:
+            try:
+                accepted = self._command(value)
+            except Exception:  # noqa: BLE001
+                accepted = True
+            if accepted is False:
+                self._value, self._index = prev, prev_idx
+                self._slide_bar(prev_idx)
+                self._apply_colors(prev_idx, animate=True)
+                return False
+
         idx = self._values.index(value)
-        changed = value != self._value
         self._value = value
         self._index = idx
         self._slide_bar(idx)
         self._apply_colors(idx, animate=True)
-        if notify and changed and self._command is not None:
-            try:
-                self._command(value)
-            except Exception:  # noqa: BLE001, S110
-                pass
+        return True
 
     # ------------------------------------------------------------------
     # 内部

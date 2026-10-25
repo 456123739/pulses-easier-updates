@@ -887,10 +887,17 @@ class PlayerView(ctk.CTkFrame):
 
             n = len(self._download_tasks)
             if n:
+                self.progress_wrap.grid()
+                self.progress.set(1.0, animate=False)
                 self._set_hint(
                     f"策略已更新，需下载 {n} 个文件，"
                     f"点击「确认更新」开始")
             else:
+                self.progress.set_file_progress(None)
+                try:
+                    self.progress_wrap.grid_remove()
+                except Exception:  # noqa: BLE001, S110
+                    pass
                 self._set_hint(
                     "策略已更新，无文件需要下载，点击「确认更新」应用")
             self.log.log("info", f"重新扫描完成：待下载 {n} 个文件")
@@ -1357,13 +1364,22 @@ class PlayerView(ctk.CTkFrame):
             return
 
         self._set_button_state(_BTN_CONFIRM)
-        self.progress.set(1.0, animate=True)
 
         if self._download_tasks:
+            self.progress_wrap.grid()
+            self.progress.set(1.0, animate=True)
             self._set_hint(
                 f"比对完成，需下载 {len(self._download_tasks)} 个文件，"
                 f"点击「确认更新」开始")
         else:
+            # 没有下载任务还留着进度条，会一直停在 100%，
+            # 看起来像"还在跑"或"已经完成"，容易误导
+            self.progress.set(1.0, animate=False)
+            self.progress.set_file_progress(None)
+            try:
+                self.progress_wrap.grid_remove()
+            except Exception:  # noqa: BLE001, S110
+                pass
             self._set_hint("比对完成，点击「确认更新」开始应用")
 
         self._refresh_ui_state()
@@ -1371,6 +1387,10 @@ class PlayerView(ctk.CTkFrame):
     def _on_error(self, msg: str):
         self.log.log("error", msg)
         self._set_hint("比对失败")
+        try:
+            self.progress_wrap.grid_remove()
+        except Exception:  # noqa: BLE001, S110
+            pass
         self._phase = _PHASE_IDLE
         self._set_button_state(_BTN_READY)
         self._refresh_ui_state()
@@ -2016,6 +2036,7 @@ class PlayerView(ctk.CTkFrame):
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
         self._uninstall_close_guard()
+        self._refresh_pack_info()      # 补齐也可能新增了模组，信息卡要跟着变
         self._teardown_pending_ui()
         self._set_button_state(_BTN_CONFIRM)
         self._refresh_ui_state()
@@ -2439,6 +2460,8 @@ class PlayerView(ctk.CTkFrame):
         self._phase = _PHASE_IDLE
         self.app_state.unlock()
         self._uninstall_close_guard()
+        # 整合包内容变了：侧边栏的版本/模组数要跟着变（别让玩家以为没生效）
+        self._refresh_pack_info()
         if not problems and not gave_up and not self._give_up:
             self._release_download_cache()
             # 更新彻底成功 → 复位界面：旧变更列表已经过期，按钮还能再点
@@ -2509,6 +2532,31 @@ class PlayerView(ctk.CTkFrame):
                        + ("　·　请拖入下一个更新包" if cleared else ""))
         if not cleared:
             self._set_button_state(_BTN_DISABLED)
+
+    def _refresh_pack_info(self):
+        """
+        更新之后重读整合包信息：**模组数 / 版本会变**。
+
+        以前信息卡只在"定位整合包"时读一次，更新完加了 3 个 mod，侧边栏还
+        写着旧的"N 个模组" —— 玩家会以为更新没生效。这里只刷新卡片和
+        `pack_info`，不动日志/提示语。
+        """
+        if self.pack_info is None:
+            return
+        try:
+            new = read_modpack_info(self.pack_info.path)
+        except Exception:  # noqa: BLE001
+            return
+        if new is None:
+            return
+        self.pack_info = new
+        sidebar = getattr(self, "sidebar", None)
+        refresh = getattr(sidebar, "refresh_modpack_info", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     def _set_placeholder(self, text: str):
         self._placeholder_text = text

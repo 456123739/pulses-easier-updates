@@ -88,11 +88,35 @@ class PendingWindow(ctk.CTkToplevel):
     # ==================================================================
     # 构建
     # ==================================================================
+    def _fit_size(self) -> tuple[int, int]:
+        """按屏幕可用高度收窄（小笔记本 1366x768 上 720+标题栏 会顶出屏幕）。"""
+        w, h = _WIN_W, _WIN_H
+        try:
+            sh = self.winfo_screenheight()
+            sw = self.winfo_screenwidth()
+            h = max(480, min(h, sh - 120))
+            w = max(420, min(w, sw - 80))
+        except Exception:  # noqa: BLE001
+            pass
+        return int(w), int(h)
+
     def _build(self):
         try:
             self.title("更新受阻" if self.mode == "wait"
                        else "上次更新未完成")
-            self.geometry(f"{_WIN_W}x{_WIN_H}")
+            # 位置：居中盖在父窗口上（不给坐标时由窗口管理器决定，
+            # 小屏幕上可能跑到屏幕角落甚至超出可视区）
+            w, h = self._fit_size()
+            x = y = 0
+            try:
+                parent = self.master  # type: ignore[assignment]
+                px, py = parent.winfo_rootx(), parent.winfo_rooty()
+                pw, ph = parent.winfo_width(), parent.winfo_height()
+                x = px + max(0, (pw - w) // 2)
+                y = py + max(0, (ph - h) // 2)
+            except Exception:  # noqa: BLE001
+                x = y = 0
+            self.geometry(f"{w}x{h}+{x}+{y}")
             self.minsize(_WIN_MIN_W, _WIN_MIN_H)
             self.configure(fg_color=Color.WINDOW_BG)
             self.protocol("WM_DELETE_WINDOW", self.hide_window)
@@ -385,31 +409,54 @@ class PendingWindow(ctk.CTkToplevel):
             pass
 
     def _refresh_list(self):
+        """
+        增量刷新左侧文件列表。
+
+        旧实现每次刷新都把整列按钮销毁重建：补入过程中每解决一个文件就要
+        重建一次（n 个文件 = n 次重建），看得见地闪、悬停状态丢失，文件多
+        时还 O(n²)。现在只增删/改有变化的行。
+        """
+        cur = self.current_rel()
         try:
-            for w in self.list_frame.winfo_children():
-                w.destroy()
+            # 1) 已经补上的文件：删掉对应的行
+            for rel in list(self._list_rows.keys()):
+                if rel in self._items:
+                    continue
+                btn = self._list_rows.pop(rel, None)
+                if btn is not None:
+                    try:
+                        btn.destroy()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+
+            # 2) 剩下的行：原地更新文字/颜色/行号（必要时补新行）
+            for i, rel in enumerate(self._order):
+                is_cur = (rel == cur)
+                text = ("● " if is_cur else "○ ") + Path(rel).name
+                btn = self._list_rows.get(rel)
+                if btn is None:
+                    btn = ctk.CTkButton(
+                        self.list_frame, text=text,
+                        anchor="w", font=Font.SMALL, height=26,
+                        corner_radius=6,
+                        fg_color=(Color.LOG_BG if is_cur
+                                  else Color.TRANSPARENT),
+                        hover_color=Color.BORDER,
+                        text_color=(Color.WARNING if is_cur
+                                    else Color.TEXT_SECONDARY),
+                        command=lambda r=rel: self._goto(r))
+                    btn.grid(row=i, column=0, sticky="ew", padx=2, pady=1)
+                    self._list_rows[rel] = btn
+                else:
+                    btn.configure(
+                        text=text,
+                        fg_color=(Color.LOG_BG if is_cur
+                                  else Color.TRANSPARENT),
+                        text_color=(Color.WARNING if is_cur
+                                    else Color.TEXT_SECONDARY))
+                    btn.grid_configure(row=i)
         except Exception:  # noqa: BLE001, S110
             pass
-        self._list_rows = {}
-        cur = self.current_rel()
-        for i, rel in enumerate(self._order):
-            is_cur = (rel == cur)
-            try:
-                btn = ctk.CTkButton(
-                    self.list_frame,
-                    text=("● " if is_cur else "○ ") + Path(rel).name,
-                    anchor="w", font=Font.SMALL, height=26,
-                    corner_radius=6,
-                    fg_color=(Color.LOG_BG if is_cur
-                              else Color.TRANSPARENT),
-                    hover_color=Color.BORDER,
-                    text_color=(Color.WARNING if is_cur
-                                else Color.TEXT_SECONDARY),
-                    command=lambda r=rel: self._goto(r))
-                btn.grid(row=i, column=0, sticky="ew", padx=2, pady=1)
-                self._list_rows[rel] = btn
-            except Exception:  # noqa: BLE001, S112
-                continue
 
     def _refresh_page(self):
         rel = self.current_rel()
