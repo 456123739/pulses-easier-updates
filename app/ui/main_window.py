@@ -16,7 +16,7 @@ from ..core import resume as resume_mod
 from ..core.state import AppState
 from ..theme import Anim, Color, Size
 from ..utils.animation import slide_pages
-from . import motion
+from . import motion, win11
 from .developer_view import DeveloperView
 from .player_view import PlayerView
 from .sidebar import Sidebar
@@ -30,6 +30,10 @@ _OFFSCREEN_POS = "+20000+20000"
 class MainWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
+
+        # Win11：先把 CTk 的 DPI 轮询里那段"alpha 0.15 → 改缩放 → 1"拆掉，
+        # 否则窗口会莫名其妙变成半透明（详见 win11.py 顶部注释）
+        win11.neutralize_ctk_alpha_flash()
 
         self.title("Pulses Easier")
         self._set_window_icon()
@@ -63,6 +67,11 @@ class MainWindow(ctk.CTk):
         # 默认只放玩家端
         self.player_view.place(in_=self.page_host, relx=0, rely=0,
                                relwidth=1.0, relheight=1.0)
+
+        # Win11 不透明守卫：DWM 会在失焦 / 弹窗 / 映射时重新评估材质，
+        # 只设一次不够；动画进行中的窗口会跳过（不抢 alpha）
+        self._opacity_guard = win11.OpacityGuard(
+            self, is_animating=motion.is_animating).install()
 
     # ------------------------------------------------------------------
     def _set_window_icon(self):
@@ -288,6 +297,10 @@ class MainWindow(ctk.CTk):
 
     def _destroy_now(self):
         try:
+            self._opacity_guard.stop()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
             self.destroy()
         except Exception:  # noqa: BLE001, S110
             pass
@@ -329,6 +342,10 @@ class MainWindow(ctk.CTk):
         try:
             motion.pop_in(self, rise=Anim.RISE_PX,
                           duration=Anim.WINDOW_MS)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            self._opacity_guard.apply(force=True)
         except Exception:  # noqa: BLE001, S110
             pass
 

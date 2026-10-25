@@ -579,6 +579,18 @@ def main() -> int:
               f"{_alpha(main):.2f}")
         check(main.geometry() == before, "主窗口动画结束几何不变",
               f"{before} -> {main.geometry()}")
+
+        # Win11 半透明适配（Windows 上必须生效；其它平台是 no-op）
+        from app.ui import win11
+        if sys.platform == "win32":
+            check(win11.is_patched(),
+                  "CTk 的 DPI alpha 闪切已被替换（Win11 半透明根因）")
+            check(abs(_alpha(main) - 1.0) < 0.01,
+                  "主窗口最终不透明度为 1", f"{_alpha(main):.2f}")
+            n = win11.refresh(main)
+            check(n >= 1, "不透明守卫覆盖到窗口", f"{n} 个")
+        else:
+            check(not win11.IS_WINDOWS, "非 Windows 平台自动跳过（no-op）")
         return True
 
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,

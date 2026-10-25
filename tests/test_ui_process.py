@@ -661,6 +661,175 @@ class TestMotion(unittest.TestCase):
 
 
 # ======================================================================
+# 7.9 Win11 不透明适配（伪造 ctypes.windll 检查真正下发的 DWM 属性）
+# ======================================================================
+class _FakeWin:
+    """记录 attributes 调用、带 hwnd 与子窗口的假顶层窗口。"""
+
+    def __init__(self, cls="Tk", children=None):
+        self._cls = cls
+        self._children = children or []
+        self.attrs: list[tuple[str, object]] = []
+
+    def attributes(self, name, value=None):
+        self.attrs.append((name, value))
+        if name == "-transparentcolor":
+            return ""          # 与 Tk 一致：没设置时是空串
+        return 1.0
+
+    def winfo_id(self):
+        return 1234
+
+    def winfo_class(self):
+        return self._cls
+
+    def winfo_children(self):
+        return list(self._children)
+
+    def winfo_exists(self):
+        return 1
+
+
+class TestWin11Opacity(unittest.TestCase):
+    def setUp(self):
+        import ctypes
+        import types
+        from app.ui import win11
+
+        self.win11 = win11
+        self.ctypes = ctypes
+        self._saved = (win11.IS_WINDOWS, getattr(ctypes, "windll", None))
+        win11.IS_WINDOWS = True
+        self.calls = []
+
+        outer = self
+
+        class _Dwm:
+            def DwmSetWindowAttribute(self, hwnd, attr, ptr, size):
+                val = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_int)).contents.value
+                outer.calls.append((hwnd, attr, val))
+                return 0
+
+        ctypes.windll = types.SimpleNamespace(
+            dwmapi=_Dwm(),
+            user32=types.SimpleNamespace(GetParent=lambda h: h + 1000))
+
+    def tearDown(self):
+        is_win, windll = self._saved
+        self.win11.IS_WINDOWS = is_win
+        if windll is None:
+            try:
+                del self.ctypes.windll
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            self.ctypes.windll = windll
+
+    def _attr_values(self):
+        return {a: v for _h, a, v in self.calls}
+
+    def test_dwm_attributes_issued(self):
+        self.win11.apply_opaque_attributes(42, "#1E1E1E", "#E8E8E8", "#3E3E42")
+        vals = self._attr_values()
+        self.assertEqual(vals.get(38), 1, "SYSTEMBACKDROP_TYPE 必须是 1(NONE)")
+        self.assertEqual(vals.get(1029), 0, "旧的 MICA_EFFECT 也要关")
+        self.assertEqual(vals.get(20), 1, "深色标题栏")
+        self.assertEqual(vals.get(33), 2, "圆角")
+        # 颜色是 COLORREF：0x00BBGGRR
+        self.assertEqual(vals.get(35), 0x1E1E1E)
+        self.assertEqual(vals.get(35), self.win11._color_ref("#1E1E1E"))
+
+    def test_make_opaque_forces_alpha_and_clears_transparent(self):
+        win = _FakeWin()
+        ok = self.win11.make_opaque(win)
+        self.assertTrue(ok)
+        attrs = dict(win.attrs)
+        self.assertEqual(attrs.get("-alpha"), 1.0)
+        self.assertEqual(attrs.get("-transparentcolor"), "")
+        self.assertTrue(self.calls, "应该真的下发了 DWM 属性")
+
+    def test_design_transparent_window_is_left_alone(self):
+        """启动页用 -transparentcolor 做异形：守卫不能把它变成实心块。"""
+        class _Chroma(_FakeWin):
+            def attributes(self, name, value=None):
+                if name == "-transparentcolor":
+                    return "#010203"      # 已设置 → 设计上就是透明窗口
+                self.attrs.append((name, value))
+                return 1.0
+
+        win = _Chroma()
+        self.assertFalse(self.win11.make_opaque(win))
+        self.assertEqual(win.attrs, [], "不该动它的 alpha/透明色")
+        self.assertEqual(self.calls, [], "也不该给它设 DWM 材质")
+
+    def test_refresh_counts_and_skips_animating(self):
+        child_ok = _FakeWin(cls="Toplevel")
+        child_busy = _FakeWin(cls="Toplevel")
+        root = _FakeWin(cls="Tk", children=[child_ok, child_busy])
+        n = self.win11.refresh(root, skip=lambda w: w is child_busy)
+        self.assertEqual(n, 2, "root + 一个没在动画的子窗口")
+        busy_attrs = dict(child_busy.attrs)
+        self.assertNotIn("-alpha", busy_attrs, "动画中的窗口不能被拽回 1.0")
+
+    def test_guard_skips_animating_windows(self):
+        busy = _FakeWin(cls="Toplevel")
+        root = _FakeWin(cls="Tk", children=[busy])
+        guard = self.win11.OpacityGuard(root, is_animating=lambda w: w is busy)
+        guard.apply(force=True)
+        self.assertNotIn("-alpha", dict(busy.attrs))
+        self.assertEqual(dict(root.attrs).get("-alpha"), 1.0)
+
+    def test_neutralize_replaces_ctk_check_without_alpha(self):
+        import customtkinter as ctk
+
+        calls = {"scaling": 0, "after": 0}
+        outer = self
+
+        class _Tracker:
+            window_widgets_dict = {}
+            window_dpi_scaling_dict = {}
+            loop_pause_after_new_scaling = 1500
+            update_loop_interval = 100
+            update_loop_running = True
+
+            @classmethod
+            def get_window_dpi_scaling(cls, _w):
+                return 1.5
+
+            @classmethod
+            def update_scaling_callbacks_for_window(cls, _w):
+                calls["scaling"] += 1
+
+        win = _FakeWin()
+
+        class _Win(_FakeWin):
+            def state(self):
+                return "normal"
+
+            def after(self, _ms, _fn=None, *a):
+                calls["after"] += 1
+                return "after#x"
+
+        win = _Win()
+        _Tracker.window_widgets_dict = {win: []}
+        _Tracker.window_dpi_scaling_dict = {win: 1.0}
+
+        old_tracker = getattr(ctk, "ScalingTracker", None)
+        ctk.ScalingTracker = _Tracker
+        self.win11._ctk_patched = False
+        try:
+            ok = self.win11.neutralize_ctk_alpha_flash()
+            self.assertTrue(ok)
+            _Tracker.check_dpi_scaling()
+        finally:
+            ctk.ScalingTracker = old_tracker
+            self.win11._ctk_patched = False
+
+        self.assertEqual(calls["scaling"], 1, "缩放回调应该被调用（DPI 仍生效）")
+        self.assertEqual(win.attrs, [], "替换版绝不能碰 alpha")
+
+
+# ======================================================================
 # 8. 身份切换：动画期间的点击
 # ======================================================================
 class TestIdentitySwitch(unittest.TestCase):

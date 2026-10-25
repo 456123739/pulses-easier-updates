@@ -184,6 +184,14 @@ def _slot(window) -> list:
     return runs
 
 
+def is_animating(window) -> bool:
+    """这个窗口当前有没有正在跑的动画（守卫据此决定要不要碰它的 alpha）。"""
+    runs = getattr(window, "_motion_runs", None)
+    if not runs:
+        return False
+    return any(getattr(tw, "alive", False) for tw in list(runs))
+
+
 def cancel_all(window) -> None:
     for tw in list(_slot(window)):
         try:
@@ -314,6 +322,13 @@ def pop_in(window, *, rise: int | None = None,
     def _done():
         _place(window, w, h, x, y)
         _alpha(window, 1.0)
+        # 落地时顺手把 Win11 的 Mica/亚克力关掉：DWM 会在显示瞬间重新评估材质，
+        # 不在这里补一次，动画结束后窗口可能还是半透明
+        try:
+            from . import win11
+            win11.make_opaque(window)
+        except Exception:  # noqa: BLE001, S110
+            pass
         if on_done is not None:
             on_done()
 
