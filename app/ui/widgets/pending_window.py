@@ -30,6 +30,7 @@ import customtkinter as ctk
 
 from ...core import pending as pending_logic
 from ...theme import Color, Font, Size
+from .. import motion
 from .drop_zone import DropZone
 from .tooltip import attach_tooltip
 
@@ -70,6 +71,7 @@ class PendingWindow(ctk.CTkToplevel):
         self._retrying: set[str] = set()
         self._after_ids: list[str] = []
         self._closed = False
+        self._hiding = False
 
         try:
             self._build()
@@ -689,15 +691,26 @@ class PendingWindow(ctk.CTkToplevel):
 
     def hide_window(self):
         """收起（不是放弃）：主窗口那边会留一个"打开补入窗口"的入口。"""
-        try:
-            self.withdraw()
-        except Exception:  # noqa: BLE001, S110
-            pass
-        if self.on_hide is not None:
+        if getattr(self, "_closed", False) or getattr(self, "_hiding", False):
+            return
+        self._hiding = True
+
+        def _done():
+            self._hiding = False
             try:
-                self.on_hide()
+                self.withdraw()
             except Exception:  # noqa: BLE001, S110
                 pass
+            if self.on_hide is not None:
+                try:
+                    self.on_hide()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+        try:
+            motion.pop_out(self, fall=12, scale_to=0.98, on_done=_done)
+        except Exception:  # noqa: BLE001
+            _done()
 
     def show_window(self):
         try:
@@ -707,9 +720,17 @@ class PendingWindow(ctk.CTkToplevel):
         except Exception:  # noqa: BLE001, S110
             pass
         self._show_first_unresolved()
+        try:
+            motion.pop_in(self, rise=14, duration=170, scale_from=0.975)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def destroy(self):
         self._closed = True
+        try:
+            motion.cancel_all(self)      # 退场动画还在跑就直接销毁了：停掉它
+        except Exception:  # noqa: BLE001, S110
+            pass
         for after_id in self._after_ids:
             try:
                 self.after_cancel(after_id)

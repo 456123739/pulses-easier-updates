@@ -16,7 +16,8 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from ...core import database as db
-from ...theme import Color, Font, Size
+from ...theme import Anim, Color, Font, Size
+from .. import motion
 
 
 class DatabaseWizard(ctk.CTkToplevel):
@@ -31,6 +32,12 @@ class DatabaseWizard(ctk.CTkToplevel):
         self.configure(fg_color=Color.WINDOW_BG)
         self.transient(parent)
         self.grab_set()
+
+        self._closing = False
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._close)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -98,6 +105,12 @@ class DatabaseWizard(ctk.CTkToplevel):
             command=self._on_skip)\
             .pack(side="right")
 
+        try:
+            motion.pop_in(self, rise=Anim.DIALOG_RISE_PX,
+                          duration=Anim.DIALOG_MS, scale_from=0.97)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     # ------------------------------------------------------------------
     def _on_create(self):
         folder = filedialog.askdirectory(title="选择一个空文件夹作为数据库位置")
@@ -136,7 +149,27 @@ class DatabaseWizard(ctk.CTkToplevel):
         if self.on_done:
             self.on_done(ok)
         try:
-            self.after(120, self.destroy)
+            self.after(120, self._close)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _close(self):
+        """退场动画后再销毁（重复调用安全）。"""
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        try:
+            self.grab_release()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            motion.pop_out(self, scale_to=0.97, on_done=self._destroy_now)
+        except Exception:  # noqa: BLE001
+            self._destroy_now()
+
+    def _destroy_now(self):
+        try:
+            self.destroy()
         except Exception:  # noqa: BLE001, S110
             pass
 

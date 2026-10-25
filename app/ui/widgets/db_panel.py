@@ -26,7 +26,8 @@ import customtkinter as ctk
 
 from ...core import database as db
 from ...core import dbmigrate as mig
-from ...theme import Color, Font, Size
+from ...theme import Anim, Color, Font, Size
+from .. import motion
 from .dialog import alert, confirm
 
 _PAD = 16
@@ -58,6 +59,11 @@ class DatabaseDialog(ctk.CTkToplevel):
         self.geometry("560x420")
         self.configure(fg_color=Color.WINDOW_BG)
         self.resizable(False, False)
+        self._closing = False
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._close)
+        except Exception:  # noqa: BLE001, S110
+            pass
         try:
             self.transient(parent)
             self.update_idletasks()
@@ -67,8 +73,8 @@ class DatabaseDialog(ctk.CTkToplevel):
         except Exception:  # noqa: BLE001, S110
             pass
         try:
-            from .. import motion
-            motion.slide_in_dialog(self, self.winfo_x(), self.winfo_y())
+            motion.pop_in(self, rise=Anim.DIALOG_RISE_PX,
+                          duration=Anim.DIALOG_MS, scale_from=0.97)
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -130,6 +136,22 @@ class DatabaseDialog(ctk.CTkToplevel):
         self._refresh()
 
     # ------------------------------------------------------------------
+    def _close(self):
+        """退场动画后再销毁（重复调用安全）。"""
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        try:
+            motion.pop_out(self, scale_to=0.97, on_done=self._destroy_now)
+        except Exception:  # noqa: BLE001
+            self._destroy_now()
+
+    def _destroy_now(self):
+        try:
+            self.destroy()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def _refresh(self):
         """
         刷新路径 / 统计。

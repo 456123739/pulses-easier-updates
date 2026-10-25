@@ -16,6 +16,7 @@ from ..core import resume as resume_mod
 from ..core.state import AppState
 from ..theme import Anim, Color, Size
 from ..utils.animation import slide_pages
+from . import motion
 from .developer_view import DeveloperView
 from .player_view import PlayerView
 from .sidebar import Sidebar
@@ -46,6 +47,7 @@ class MainWindow(ctk.CTk):
         #   player    → 下载/应用进行中：强警告，允许强制关闭
         #   developer → 正在制作更新包：**不允许关闭**
         self._close_guards: dict = {}
+        self._closing = False
         self._switching = False
         self._pending_identity = ""
         self._switch_guard = None
@@ -259,15 +261,15 @@ class MainWindow(ctk.CTk):
     def release_close_guard(self, owner: str):
         self._close_guards.pop(owner, None)
         try:
-            if self._close_guards:
-                self.protocol("WM_DELETE_WINDOW", self._dispatch_close)
-            else:
-                self.protocol("WM_DELETE_WINDOW", self.destroy)
+            # 一律走 _dispatch_close：即便没有守卫，也要播退场动画再关
+            self.protocol("WM_DELETE_WINDOW", self._dispatch_close)
         except Exception:  # noqa: BLE001, S110
             pass
 
     def _dispatch_close(self):
         """把关闭请求交给优先级最高的守卫；一个都没有才真的关窗。"""
+        if self._closing:
+            return
         for owner in ("developer", "player"):
             handler = self._close_guards.get(owner)
             if handler is None:
@@ -277,6 +279,14 @@ class MainWindow(ctk.CTk):
                 return
             except Exception:  # noqa: BLE001, S112
                 continue
+        # 退场：淡出 + 下沉，结束后再销毁（重复点击 X 不会重复播）
+        self._closing = True
+        try:
+            motion.pop_out(self, fall=16, on_done=self._destroy_now)
+        except Exception:  # noqa: BLE001
+            self._destroy_now()
+
+    def _destroy_now(self):
         try:
             self.destroy()
         except Exception:  # noqa: BLE001, S110
@@ -303,11 +313,22 @@ class MainWindow(ctk.CTk):
             return
         self._boot_done = True
 
+        # 先透明再显示，避免"闪一下全白再淡入"
+        try:
+            motion.prepare(self)
+        except Exception:  # noqa: BLE001, S110
+            pass
         try:
             self.deiconify()
             self.lift()
             self.attributes("-topmost", True)
             self.after(100, lambda: self.attributes("-topmost", False))
+        except Exception:  # noqa: BLE001, S110
+            pass
+        # 入场：淡入 + 从下方弹上来（带轻微过冲），450ms 内结束
+        try:
+            motion.pop_in(self, rise=Anim.RISE_PX,
+                          duration=Anim.WINDOW_MS)
         except Exception:  # noqa: BLE001, S110
             pass
 

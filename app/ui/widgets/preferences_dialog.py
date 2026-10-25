@@ -13,7 +13,8 @@ import customtkinter as ctk
 
 from ...core import database as db
 from ...core import downloader as dl_mod
-from ...theme import Color, Font, Size
+from ...theme import Anim, Color, Font, Size
+from .. import motion
 
 # 1/0 开关型配置：用开关显示"开 / 关"，不再让玩家看到裸的 "1"
 _BOOL_KEYS = frozenset({
@@ -230,6 +231,11 @@ class PreferencesDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
         self.minsize(760, 520)
+        self._closing = False
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._close)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
         try:
             self.update_idletasks()
@@ -255,6 +261,12 @@ class PreferencesDialog(ctk.CTkToplevel):
 
         self._switch_category("download")
 
+        try:
+            motion.pop_in(self, rise=Anim.DIALOG_RISE_PX,
+                          duration=Anim.DIALOG_MS, scale_from=0.97)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def _build_header(self):
         header = ctk.CTkFrame(self, fg_color=Color.CARD_BG,
                               corner_radius=0, height=52)
@@ -273,7 +285,7 @@ class PreferencesDialog(ctk.CTkToplevel):
                       fg_color=Color.TRANSPARENT,
                       hover_color=Color.BORDER,
                       text_color=Color.TEXT_SECONDARY,
-                      command=self.destroy)\
+                      command=self._close)\
             .grid(row=0, column=1, sticky="e", padx=12)
 
     def _build_sidebar(self):
@@ -333,7 +345,7 @@ class PreferencesDialog(ctk.CTkToplevel):
                       font=Font.BUTTON, corner_radius=Size.RADIUS_BUTTON,
                       fg_color=Color.LOG_BG, hover_color=Color.BORDER,
                       text_color=Color.TEXT_PRIMARY,
-                      command=self.destroy)\
+                      command=self._close)\
             .pack(side="right", padx=0, pady=12)
 
     def _switch_category(self, key: str):
@@ -562,8 +574,9 @@ class PreferencesDialog(ctk.CTkToplevel):
             except Exception:  # noqa: BLE001, S110
                 pass
 
-        self._toast("已保存", level="success")
-        self.after(400, self.destroy)
+        # 等"已保存"提示关掉再收窗口：以前是 400ms 后直接 destroy，
+        # 提示框还没看清就被父窗口一起带走了
+        self._toast("已保存", level="success", on_close=self._close)
 
     def _on_reset(self):
         cat = next((c for c in _CATEGORIES
@@ -581,10 +594,32 @@ class PreferencesDialog(ctk.CTkToplevel):
             cur = engines.normalize(defaults["engine"])
             self._engine_switch.set(dict(choices).get(cur, choices[0][1]))
 
-    def _toast(self, message: str, level: str = "warn"):
+    def _toast(self, message: str, level: str = "warn", on_close=None):
         try:
             from .dialog import alert
-            alert(self, "首选项", message, level=level)
+            alert(self, "首选项", message, level=level, on_close=on_close)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    # ------------------------------------------------------------------
+    # 关闭：退场动画后再销毁（重复调用安全）
+    # ------------------------------------------------------------------
+    def _close(self):
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        try:
+            self.grab_release()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            motion.pop_out(self, scale_to=0.97, on_done=self._destroy_now)
+        except Exception:  # noqa: BLE001
+            self._destroy_now()
+
+    def _destroy_now(self):
+        try:
+            self.destroy()
         except Exception:  # noqa: BLE001, S110
             pass
 

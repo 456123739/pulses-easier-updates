@@ -527,8 +527,63 @@ def main() -> int:
         app.update_idletasks()
         return True
 
+    def step_motion():
+        """窗口/弹窗的入场与退场动画（真实 Tk 上量 alpha 与尺寸）。"""
+        print("\n── 11) 窗口 / 弹窗动画 ──")
+        from app.ui import motion
+        check(motion.is_enabled(), "真实 GUI 下动画是开启的")
+
+        def _alpha(w):
+            try:
+                return float(w.attributes("-alpha"))
+            except Exception:  # noqa: BLE001
+                return -1.0
+
+        from app.ui.widgets.dialog import AlertDialog
+        d = AlertDialog(app, "动画自检", "入场：淡入 + 轻微放大 + 上浮")
+        app.update()
+        a0 = _alpha(d)
+        sizes = [d.geometry()]
+        t0 = time.time()
+        while time.time() - t0 < 0.45:
+            app.update()
+            time.sleep(0.016)
+            sizes.append(d.geometry())
+        a1 = _alpha(d)
+        check(a0 < 0.6, "弹窗第一帧是半透明的（淡入）", f"{a0:.2f}")
+        check(a1 >= 0.99, "弹窗结束完全不透明", f"{a1:.2f}")
+        widths = [int(s.split("x", 1)[0]) for s in sizes
+                  if "x" in s and s.split("x", 1)[0].isdigit()]
+        check(bool(widths) and min(widths) < max(widths),
+              "弹窗尺寸有放大过程（弹出感）",
+              f"{min(widths) if widths else '?'}→{max(widths) if widths else '?'}")
+
+        d._safe_destroy()
+        gone_immediately = not d.winfo_exists()
+        t0 = time.time()
+        while time.time() - t0 < 0.6 and d.winfo_exists():
+            app.update()
+            time.sleep(0.016)
+        check(not gone_immediately, "退场不是瞬间消失（有淡出）")
+        check(not d.winfo_exists(), "退场结束后窗口已销毁")
+
+        # 主窗口：同一个引擎，量一次 alpha 能到 1、几何能落回
+        main = app
+        before = main.geometry()
+        motion.pop_in(main, rise=20, duration=200)
+        t0 = time.time()
+        while time.time() - t0 < 0.5:
+            app.update()
+            time.sleep(0.016)
+        check(_alpha(main) >= 0.99, "主窗口淡入结束完全不透明",
+              f"{_alpha(main):.2f}")
+        check(main.geometry() == before, "主窗口动画结束几何不变",
+              f"{before} -> {main.geometry()}")
+        return True
+
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,
-             step_shot, step_toggles, step_switch, step_process, step_prefs]
+             step_shot, step_toggles, step_switch, step_process, step_prefs,
+             step_motion]
 
     def tick():
         try:

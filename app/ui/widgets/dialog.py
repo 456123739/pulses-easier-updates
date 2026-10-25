@@ -24,7 +24,8 @@ from tkinter import filedialog
 
 import customtkinter as ctk
 
-from ...theme import Color, Font, Size
+from ...theme import Anim, Color, Font, Size
+from .. import motion
 
 _LEVEL_COLOR = {
     "info":    Color.ACCENT,
@@ -77,6 +78,14 @@ class _BaseDialog(ctk.CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_x_click)
         self.bind("<Escape>", lambda e: self._on_x_click())
         self.after(80, self._grab_focus)
+
+        # 入场：淡入 + 从下方弹上来（PCL 同款手感）；没有真实 GUI 时直接到位
+        self._closing = False
+        try:
+            motion.pop_in(self, rise=Anim.DIALOG_RISE_PX,
+                          duration=Anim.DIALOG_MS, scale_from=0.965)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _grab_focus(self):
         try:
@@ -180,10 +189,20 @@ class _BaseDialog(ctk.CTkToplevel):
         self._safe_destroy()
 
     def _safe_destroy(self):
+        """退场：淡出 + 微缩，再真正销毁（重复调用安全）。"""
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
         try:
             self.grab_release()
         except Exception:  # noqa: BLE001, S110
             pass
+        try:
+            motion.pop_out(self, scale_to=0.97, on_done=self._destroy_now)
+        except Exception:  # noqa: BLE001
+            self._destroy_now()
+
+    def _destroy_now(self):
         try:
             self.destroy()
         except Exception:  # noqa: BLE001, S110

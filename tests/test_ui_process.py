@@ -517,6 +517,150 @@ class TestMirrorGate(unittest.TestCase):
 
 
 # ======================================================================
+# 7.8 窗口 / 弹窗的入场退场动画（motion.py）
+# ======================================================================
+class _FakeWindow:
+    """只实现 motion 需要的那几个方法；`after` 立即执行（配合假时钟）。"""
+
+    def __init__(self, geo: str = "400x300+100+200"):
+        self._geo = geo
+        self.alpha = 1.0
+        self.alive = True
+        self.cancelled: list = []
+
+    def geometry(self, spec=None):
+        if spec:
+            self._geo = spec
+        return self._geo
+
+    def attributes(self, name, value=None):
+        if name == "-alpha":
+            if value is not None:
+                self.alpha = float(value)
+            return self.alpha
+        return None
+
+    def update_idletasks(self):
+        pass
+
+    def winfo_exists(self):
+        return 1 if self.alive else 0
+
+    def after(self, _ms, fn=None, *a):
+        if callable(fn):
+            fn(*a)
+        return "after#x"
+
+    def after_cancel(self, _id):
+        self.cancelled.append(_id)
+
+
+class TestMotion(unittest.TestCase):
+    def _patched(self, enabled: bool):
+        from unittest import mock
+        from app.ui import motion
+
+        clock = {"t": 0.0}
+
+        def _now():
+            clock["t"] += 16.0          # 每次读表前进一帧
+            return clock["t"] / 1000.0
+
+        return motion, mock.patch.multiple(
+            motion, is_enabled=lambda: enabled,
+            time=mock.Mock(perf_counter=_now))
+
+    def test_ease_out_back_overshoots(self):
+        from app.ui.motion import ease_out_back
+
+        vals = [ease_out_back(i / 40) for i in range(41)]
+        self.assertGreater(max(vals), 1.0, "没有过冲就不'弹'")
+        self.assertAlmostEqual(vals[-1], 1.0, places=6)
+        self.assertLess(vals[0], 0.01)
+
+    def test_disabled_jumps_to_end(self):
+        motion, ctx = self._patched(False)
+        win = _FakeWindow()
+        done = []
+        with ctx:
+            motion.pop_in(win, rise=26, duration=260,
+                          on_done=lambda: done.append(1))
+        self.assertEqual(win.alpha, 1.0, "关掉动画必须直接可见")
+        self.assertEqual(win.geometry(), "400x300+100+200")
+        self.assertEqual(done, [1])
+
+    def test_pop_in_animates_and_lands_exactly(self):
+        motion, ctx = self._patched(True)
+        win = _FakeWindow()
+        seen_alpha = []
+        with ctx:
+            orig = win.attributes
+
+            def _attr(name, value=None):
+                out = orig(name, value)
+                if name == "-alpha" and value is not None:
+                    seen_alpha.append(round(win.alpha, 3))
+                return out
+
+            win.attributes = _attr        # type: ignore[assignment]
+            motion.pop_in(win, rise=26, duration=200)
+        self.assertGreater(len(seen_alpha), 4, "应该跑了好几帧")
+        self.assertLess(min(seen_alpha), 0.2, "第一帧要接近透明")
+        self.assertEqual(win.alpha, 1.0)
+        self.assertEqual(win.geometry(), "400x300+100+200",
+                         "结束必须精确落回目标几何")
+
+    def test_pop_in_scales_from_smaller(self):
+        motion, ctx = self._patched(True)
+        win = _FakeWindow("400x300+100+200")
+        sizes = []
+        with ctx:
+            orig = win.geometry
+
+            def _geo(spec=None):
+                out = orig(spec)
+                if spec:
+                    sizes.append(spec)
+                return out
+
+            win.geometry = _geo           # type: ignore[assignment]
+            motion.pop_in(win, duration=160, scale_from=0.9)
+        widths = [int(s.split("x", 1)[0]) for s in sizes if "x" in s]
+        self.assertTrue(widths and min(widths) < 400,
+                        f"没看到由小变大的过程：{sizes[:4]}")
+        self.assertEqual(win.geometry(), "400x300+100+200")
+
+    def test_pop_out_dims_then_calls_done_once(self):
+        motion, ctx = self._patched(True)
+        win = _FakeWindow()
+        done = []
+        with ctx:
+            tw = motion.pop_out(win, fall=16, duration=150,
+                                on_done=lambda: done.append(1))
+            motion.pop_out(win, duration=150, on_done=lambda: done.append(2))
+        self.assertEqual(win.alpha, 0.0)
+        self.assertIn(len(done), (1, 2), "每次 pop_out 各收尾一次")
+
+    def test_cancel_prevents_frames(self):
+        motion, ctx = self._patched(False)
+        win = _FakeWindow()
+        done = []
+        with ctx:
+            tw = motion.pop_in(win, on_done=lambda: done.append(1))
+        self.assertEqual(len(done), 1)
+        tw.cancel()
+        self.assertFalse(tw.alive)
+
+    def test_geometry_unavailable_is_safe(self):
+        motion, ctx = self._patched(True)
+        win = _FakeWindow("1x1+0+0")
+        done = []
+        with ctx:
+            motion.pop_in(win, on_done=lambda: done.append(1))
+        self.assertEqual(done, [1], "拿不到几何也必须收尾，不能卡住")
+
+
+# ======================================================================
 # 8. 身份切换：动画期间的点击
 # ======================================================================
 class TestIdentitySwitch(unittest.TestCase):
