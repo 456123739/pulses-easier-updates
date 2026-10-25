@@ -27,6 +27,7 @@ import customtkinter as ctk
 from ...core import database as db
 from ...theme import Anim, Color, Font, Size
 from ...utils.animation import natural_height, toggle_height
+from .. import motion
 
 try:
     from tkinterdnd2 import DND_FILES
@@ -324,6 +325,30 @@ class WhitelistPanel(ctk.CTkFrame):
         dialog.configure(fg_color=Color.WINDOW_BG)
         dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
+        try:
+            top = self.winfo_toplevel()
+            dialog.update_idletasks()
+            px = top.winfo_rootx() + (top.winfo_width() - 400) // 2
+            py = top.winfo_rooty() + (top.winfo_height() - 200) // 2
+            dialog.geometry(f"400x200+{max(0, px)}+{max(0, py)}")
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            motion.pop_in(dialog, rise=Anim.DIALOG_RISE_PX,
+                          duration=Anim.DIALOG_MS, scale_from=0.97)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        def _close():
+            try:
+                motion.pop_out(dialog, scale_to=0.97, on_done=dialog.destroy)
+            except Exception:  # noqa: BLE001
+                try:
+                    dialog.destroy()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+        dialog.protocol("WM_DELETE_WINDOW", _close)
 
         ctk.CTkLabel(
             dialog,
@@ -356,7 +381,7 @@ class WhitelistPanel(ctk.CTkFrame):
             self._items.append(norm)
             self._rebuild_rows()
             self._save()
-            dialog.destroy()
+            _close()
 
         ctk.CTkButton(
             dialog, text="添加", height=32,
@@ -372,33 +397,10 @@ class WhitelistPanel(ctk.CTkFrame):
     # 错误提示弹窗
     # ------------------------------------------------------------------
     def _toast(self, title: str, message: str):
-        """轻量错误提示弹窗"""
+        """轻量错误提示：走统一的 alert（同一套位置与出入场动画）。"""
         try:
-            dialog = ctk.CTkToplevel(self)
-            dialog.title(title)
-            dialog.geometry("360x160")
-            dialog.configure(fg_color=Color.WINDOW_BG)
-            dialog.transient(self.winfo_toplevel())
-            dialog.grab_set()
-
-            ctk.CTkLabel(dialog, text=title, font=Font.BODY_B,
-                         text_color=Color.ERROR,
-                         fg_color=Color.TRANSPARENT, anchor="w")\
-                .pack(anchor="w", padx=16, pady=(16, 4))
-
-            ctk.CTkLabel(dialog, text=message, font=Font.SMALL,
-                         text_color=Color.TEXT_PRIMARY,
-                         fg_color=Color.TRANSPARENT, anchor="w",
-                         justify="left", wraplength=320)\
-                .pack(anchor="w", padx=16, pady=(0, 12))
-
-            ctk.CTkButton(
-                dialog, text="知道了", height=32,
-                font=Font.BUTTON, corner_radius=Size.RADIUS_BUTTON,
-                fg_color=Color.ACCENT, hover_color=Color.ACCENT_HOVER,
-                text_color=Color.TEXT_ON_ACCENT,
-                command=dialog.destroy)\
-                .pack(fill="x", padx=16, pady=(0, 16))
+            from .dialog import alert
+            alert(self.winfo_toplevel(), title, message, level="error")
         except Exception:  # noqa: BLE001, S110
             pass
 
