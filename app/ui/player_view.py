@@ -147,6 +147,17 @@ def _extract_all_members(zip_path: Path, extract_dir: Path,
     manifest = manifest if isinstance(manifest, dict) else {}
     prefix = prefix or ""
     with zipfile.ZipFile(zip_path) as zf:
+        if manifest and not prefix:
+            # 自愈：调用方忘了传前缀时，从成员名里认出来。
+            # 否则清单永远匹配不上，复核会静默空转（历史 bug）。
+            try:
+                names = {str(i.filename).replace("\\", "/")
+                         for i in zf.infolist() if not i.is_dir()}
+                if names and any(n.startswith("overrides/") for n in names) \
+                        and not any(str(k) in names for k in manifest):
+                    prefix = "overrides/"
+            except Exception:  # noqa: BLE001, S110
+                pass
         for info in zf.infolist():
             name = str(info.filename).replace("\\", "/")
             if info.is_dir() or not name:

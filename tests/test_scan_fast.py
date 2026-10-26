@@ -346,3 +346,23 @@ class TestEmptyDirs(unittest.TestCase):
         self.assertIsNotNone(fast)
         self.assertEqual((fast.added, fast.modified, fast.deleted),
                          ([], [], []))
+
+
+class TestPrefixSelfHeal(unittest.TestCase):
+    """调用方忘传 prefix 时，能自己认出 overrides/，复核不会空转。"""
+
+    def test_prefix_derived_from_members(self):
+        import hashlib
+        import tempfile
+        import zipfile
+        from app.ui.player_view import _extract_all_members
+        tmp = Path(tempfile.mkdtemp(prefix="heal-"))
+        src = tmp / "p.zip"
+        with zipfile.ZipFile(src, "w") as zf:
+            zf.writestr("modrinth.index.json", "{}")
+            zf.writestr("overrides/mods/a.jar", "NEW")
+        dest = tmp / "ex"
+        dest.mkdir()
+        manifest = {"mods/a.jar": {"algo": "sha1", "value": "0" * 40}}
+        _n, bad = _extract_all_members(src, dest, manifest)   # 不传 prefix
+        self.assertEqual(bad, ["mods/a.jar"], "应自动认出 overrides/ 前缀")
