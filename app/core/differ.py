@@ -482,10 +482,20 @@ def diff_packs_parallel(
             continue
 
         if name in wl_top:
+            def _sub(done: int, total: int, _i=i) -> None:
+                # 把"这个目录里已比对的文件数"折算成整体进度，避免进度条
+                # 在几百个 mod 的哈希阶段一动不动（看起来像卡死）
+                if progress:
+                    try:
+                        progress(_i + (done / max(1, total)),
+                                 max(1, total_dirs), "merge")
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+
             added, modified, deleted = _diff_whitelist_dir(
                 old_dir, new_dir, name,
                 index_by_top, index_deep_dirs.get(name, set()),
-                threads)
+                threads, progress=_sub if progress else None)
             result.added.extend(added)
             result.modified.extend(modified)
             result.deleted.extend(deleted)
@@ -710,6 +720,7 @@ def diff_from_manifest(
         if to_compare:
             counter = {"n": 0}
             lock = threading.Lock()
+            _total_compare = len(to_compare)
 
             def _one(item):
                 full_rel, path, target_h, algo = item
@@ -728,6 +739,12 @@ def diff_from_manifest(
                     if local_h != target_h:
                         result.modified.append(
                             Change(Path(full_rel), ChangeKind.MODIFIED))
+                    if progress and d % 16 == 0:
+                        try:
+                            progress(i + (d / max(1, _total_compare)),
+                                     max(1, total), "merge")
+                        except Exception:  # noqa: BLE001, S110
+                            pass
         _p(i + 1)
 
     # 根目录散文件：compare_root 里是"先解压出来的那部分"，体量很小

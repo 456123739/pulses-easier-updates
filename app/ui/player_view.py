@@ -139,53 +139,44 @@ def _zip_names(zip_path: Path) -> list[str]:
 
 def _manifest_mismatches(content_root: Path,
                          manifest: dict,
-                         budget_bytes: int = 512 * 1024 * 1024) -> list[str]:
+                         sample: int = 128) -> list[str]:
     """
     用实际解压出来的文件复核清单：哈希对不上就说明清单陈旧/被改过。
 
     清单级比对完全依赖这份哈希，一旦它和包内容不一致，结果是**静默**的
     （该更新的不更新、该装的漏装），所以必须在应用前抓出来。
+
+    复核是"抽检"而不是"整包重读"：2000 个文件里抽 128 个，足以发现
+    系统性错误（导出算错 / 包被重打）；单个文件被改坏由应用后的
+    verify_after_update 兜底。抽检数量可按 `sample` 调整（0=全量）。
     """
     bad: list[str] = []
     if not isinstance(manifest, dict) or not manifest:
         return bad
 
-    items = [it for it in manifest.items() if isinstance(it[1], dict)]
-    # 大包别为了复核再整包读一遍：预算内全量复核，超出部分等距抽样。
-    # 系统性错误（导出算错 / 包被重打）抽样也能抓到；单个文件被改坏，
-    # 由应用后的 verify_after_update 兜底。
-    stride = 1
-    try:
-        total = 0
-        for rel, _e in items:
-            p = content_root / str(rel).replace("\\", "/")
-            if p.is_file():
-                total += p.stat().st_size
-        if budget_bytes > 0 and total > budget_bytes and items:
-            stride = max(1, int(len(items) * budget_bytes / total))
-    except Exception:  # noqa: BLE001
-        stride = 1
+    items = [(str(rel), ent) for rel, ent in manifest.items()
+             if isinstance(ent, dict)]
+    if sample > 0 and len(items) > sample:
+        # 等距抽样：整包范围内均匀取，避免只看到开头一小段
+        step = len(items) / float(sample)
+        items = [items[int(i * step)] for i in range(sample)]
 
-    for idx, (rel, entry) in enumerate(items):
+    for rel, entry in items:
         if len(bad) >= 20:
             break
-        if stride > 1 and idx % stride:
-            continue
-        if not isinstance(entry, dict):
-            continue
         algo = str(entry.get("algo", "") or "")
         value = str(entry.get("value", "") or "")
         if not algo or not value:
             continue
         try:
-            path = content_root / str(rel).replace("\\", "/")
+            path = content_root / rel.replace("\\", "/")
         except Exception:  # noqa: BLE001
             continue
         if not path.is_file():
             continue
         actual = _hash_file_quiet(path, algo)
         if actual and actual != value:
-            bad.append(str(rel))
+            bad.append(rel)
     return bad
 
 
@@ -197,9 +188,11 @@ def _hash_file_quiet(path: Path, algo: str) -> str:
         return ""
 
 
-def _extract_root_members(zip_path: Path, dest: Path, prefix: str) -> int:
+def _extract_root_members(zip_path: Path, dest: Path, prefix: str
+                          ) -> tuple[int, list[str]]:
     """只解压内容根下的散文件（通常只有几个小的），返回解压个数。"""
     count = 0
+    failed: list[str] = []
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
@@ -219,9 +212,9 @@ def _extract_root_members(zip_path: Path, dest: Path, prefix: str) -> int:
                 with zf.open(info) as src, open(target, "wb") as out:
                     shutil.copyfileobj(src, out)
                 count += 1
-            except Exception:  # noqa: BLE001, S110
-                pass
-    return count
+            except Exception:  # noqa: BLE001
+                failed.append(rest)
+    return count, failed
 
 
 def bind_keyboard_activate(button, command) -> None:
@@ -244,20 +237,22 @@ def bind_keyboard_activate(button, command) -> None:
             pass
         return "break"
 
-    targets = [button, getattr(button, "_text_label", None),
-               getattr(button, "_canvas", None)]
-    for target in targets:
+    # CTkButton.bind() 会把回调**转发**给内部 canvas 与 label，
+    # 所以只在按钮这一层绑一次即可；再给子控件绑一遍会变成一次按键触发两次。
+    for seq in ("<Return>", "<KP_Enter>", "<space>"):
+        try:
+            button.bind(seq, _fire, add="+")
+        except Exception:  # noqa: BLE001, S110
+            pass
+    # 真正能接焦点的是内部的两个 tk 控件（CTkButton 本身不支持 takefocus）
+    for target in (getattr(button, "_text_label", None),
+                   getattr(button, "_canvas", None)):
         if target is None:
             continue
         try:
             target.configure(takefocus=1)
         except Exception:  # noqa: BLE001, S110
             pass
-        for seq in ("<Return>", "<KP_Enter>", "<space>"):
-            try:
-                target.bind(seq, _fire, add="+")
-            except Exception:  # noqa: BLE001, S110
-                pass
 
 
 class PlayerView(ctk.CTkFrame):
@@ -295,6 +290,8 @@ class PlayerView(ctk.CTkFrame):
         self._ui_queue: queue.Queue = queue.Queue()
         self._ui_timer = None
         self._manifest_mismatch: list[str] = []
+        self._needs_rescan = False
+        self._scan_used_fast = False
         self._forced_fs_scan = False
         self._phase_started_at: float = 0.0
         self._abort_flag: bool = False
@@ -604,15 +601,20 @@ class PlayerView(ctk.CTkFrame):
         bad = list(getattr(self, "_manifest_mismatch", []) or [])
         if not bad:
             return
+        # 立即置位（不管现在处于哪个阶段）：后续的比对/重扫都必须走文件系统
+        self._manifest_mismatch = []
+        self._forced_fs_scan = True
         preview = "、".join(bad[:3]) + (" 等" if len(bad) > 3 else "")
         self.log.log("warn",
                      f"更新包里的哈希清单与实际文件不一致（包可能被手工改过）："
                      f"{preview}")
-        if self._phase != _PHASE_IDLE or self.diff is None:
+        if self._phase == _PHASE_IDLE and self.diff is not None:
+            self.log.log("info", "改用逐文件校验重新比对…")
+            self._start_scan()
             return
-        self._forced_fs_scan = True
-        self.log.log("info", "改用逐文件校验重新比对…")
-        self._start_scan()
+        # 扫描还在跑：记下来，等它结束时补一次（否则这条告警就白打了）
+        if getattr(self, "_scan_used_fast", False):
+            self._needs_rescan = True
 
     def _drain_ui_queue(self):
         while True:
@@ -626,6 +628,10 @@ class PlayerView(ctk.CTkFrame):
                 fn(*args)
             except Exception:  # noqa: BLE001, S110
                 pass
+        if self._ui_queue.empty():
+            # 没活了就停，别每 30ms 空转唤醒一次（曾经会一直转到进程退出）
+            self._ui_timer = None
+            return
         try:
             self._ui_timer = self.after(30, self._drain_ui_queue)
         except Exception:  # noqa: BLE001
@@ -1239,9 +1245,14 @@ class PlayerView(ctk.CTkFrame):
         # ── 先解压根目录散文件（很小），让比对能覆盖 options.txt 一类 ──
         content_root = (extract_dir / prefix) if prefix else extract_dir
         try:
-            _extract_root_members(update_zip, content_root, prefix)
+            _root_count, _root_failed = _extract_root_members(
+                update_zip, content_root, prefix)
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"解压更新包失败：{e}")
+        if _root_failed:
+            self.ui_post(self.log.log, "warn",
+                         "更新包根目录有文件解不出来：" + "、".join(
+                             _root_failed[:3]))
 
         # ── 其余文件后台解压：比对不等它，应用/下载前再等 ──
         self._extract_done = threading.Event()
@@ -1251,7 +1262,9 @@ class PlayerView(ctk.CTkFrame):
             try:
                 with zipfile.ZipFile(update_zip, "r") as zf:
                     zf.extractall(extract_dir)
-                if manifest_files:
+                # 已经判定清单不可信、正在走逐文件比对时就不必再复核了
+                if manifest_files and not getattr(self, "_forced_fs_scan",
+                                                  False):
                     bad = _manifest_mismatches(content_root, manifest_files)
                     if bad:
                         self._manifest_mismatch = bad
@@ -1276,6 +1289,7 @@ class PlayerView(ctk.CTkFrame):
             _zip_names(update_zip))
         fast_diff = (bool(manifest_files) and standard
                      and not getattr(self, "_forced_fs_scan", False))
+        self._scan_used_fast = fast_diff
 
         if not fast_diff:
             # 包没带哈希清单（或结构不标准）：只能等解压完再逐文件比
@@ -1367,26 +1381,23 @@ class PlayerView(ctk.CTkFrame):
                 if h2:
                     index_hashes[f.path] = h2
 
-        # 消费更新包自带的哈希清单（include_hashes / precompute_overrides）：
-        #   files  → 补上 overrides 文件的期望哈希，省掉"读解压后的文件"
-        #   folders→ 顶层目录的期望内容哈希，比较时只需算本地一侧
+        # 消费更新包自带的哈希清单（include_hashes / precompute_overrides）。
+        #
+        # 重要：**不要把 ea_hashes.files 并进 index_hashes**。
+        # 那份清单一旦陈旧（包被手工改过 / 导出时读文件失败），
+        # 逐文件比对会拿"陈旧的目标哈希"去比本地文件，得出"没变化"，
+        # 于是静默漏更新 —— 而且重扫也救不回来（重扫用的还是这张表）。
+        # 清单只在"清单级比对"里作为新包一侧使用；走文件系统比对时
+        # 必须两侧各自现算。
         folder_hashes: dict[str, str] = {}
-        try:
-            recorded = eapack_mod.read_hashes(update_zip)
-            if isinstance(recorded, dict):
-                for rel, entry in (recorded.get("files") or {}).items():
-                    if not isinstance(entry, dict):
-                        continue
-                    algo = str(entry.get("algo", "") or "")
-                    value = str(entry.get("value", "") or "")
-                    if algo and value and rel not in index_hashes:
-                        index_hashes[rel] = {algo: value}
-                fh = recorded.get("folders")
+        if fast_diff:
+            try:
+                fh = (recorded.get("folders") or {})
                 if isinstance(fh, dict):
                     folder_hashes = {str(k): str(v) for k, v in fh.items()
                                      if isinstance(v, str) and v}
-        except Exception:  # noqa: BLE001, S110
-            pass
+            except Exception:  # noqa: BLE001, S110
+                pass
 
         self._index_hashes = index_hashes
         compare_root = self._overrides_root
@@ -1396,7 +1407,7 @@ class PlayerView(ctk.CTkFrame):
             if total <= 0:
                 total = 1
             ratio = done / total
-            label = f"比对  {done}/{total}"
+            label = f"比对  {int(done)}/{int(total)}"
             self.ui_post( self._update_scan_progress, ratio, label)
 
         # 比对线程数走首选项（compare.hash_threads），不再硬编码
@@ -1757,6 +1768,14 @@ class PlayerView(ctk.CTkFrame):
             self._set_hint("比对完成，点击「确认更新」开始应用")
 
         self._refresh_ui_state()
+
+        if getattr(self, "_needs_rescan", False) \
+                and getattr(self, "_scan_used_fast", False):
+            self._needs_rescan = False
+            self.log.log("info", "改用逐文件校验重新比对…")
+            # 这一轮快路径的结论不可信：直接重扫（_forced_fs_scan 已经是 True）
+            self._start_scan()
+            return
 
     def _on_error(self, msg: str):
         self.log.log("error", msg)
@@ -3196,17 +3215,22 @@ class PlayerView(ctk.CTkFrame):
     # ------------------------------------------------------------------
     def _show_changelog(self):
         if not self._changelog_md:
+            self.log.log("info", "这个更新包没有更新日志")
             return
         from ..core.markdown_renderer import (
             open_preview_window,
             plain_text_html,
             wrap_html,
         )
-        if self._changelog_html:
-            full = wrap_html(self._changelog_html, light=True)
-            open_preview_window(full)
-            return
-        open_preview_window(plain_text_html(self._changelog_md))
+        try:
+            if self._changelog_html:
+                full = wrap_html(self._changelog_html, light=True)
+                open_preview_window(full)
+                return
+            open_preview_window(plain_text_html(self._changelog_md))
+        except Exception as e:  # noqa: BLE001
+            # 没有可用浏览器 / 临时文件写不出来时，至少告诉用户一声
+            self.log.log("warn", f"打不开更新日志预览：{e}")
 
     # ------------------------------------------------------------------
     def _on_log_clear(self):

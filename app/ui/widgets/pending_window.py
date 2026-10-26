@@ -123,7 +123,6 @@ class PendingWindow(ctk.CTkToplevel):
             self.configure(fg_color=Color.WINDOW_BG)
             self.protocol("WM_DELETE_WINDOW", self.hide_window)
             self.bind("<Escape>", lambda _e: self.hide_window())
-            self.bind("<Escape>", lambda _e: self.hide_window())
             try:
                 self.transient(self.master)  # type: ignore[arg-type]
             except Exception:  # noqa: BLE001, S110

@@ -286,3 +286,30 @@ class TestPathSafety(unittest.TestCase):
             self.assertFalse(is_safe_rel_path(bad), bad)
         for ok in ("mods/conifer.jar", "config/com10.toml", "a/b/c.txt"):
             self.assertTrue(is_safe_rel_path(ok), ok)
+
+
+class TestEmptyDirs(unittest.TestCase):
+    """空目录不参与同步（两条路径一致，且不影响游戏读取）。"""
+
+    def test_empty_dirs_are_ignored_both_paths(self):
+        import tempfile
+        from app.core.differ import diff_from_manifest, diff_packs_parallel
+        tmp = Path(tempfile.mkdtemp(prefix="emptydir-"))
+        inst = tmp / "inst"
+        new = tmp / "new"
+        _write(inst / "mods" / "a.jar", "X")
+        (inst / "mods" / "emptydir").mkdir(parents=True)
+        _write(new / "mods" / "a.jar", "X")
+        (new / "mods" / "newempty").mkdir(parents=True)
+
+        fs = diff_packs_parallel(inst, new, whitelist=["mods"])
+        self.assertEqual((fs.added, fs.modified, fs.deleted), ([], [], []))
+
+        recorded = {"mods/a.jar": {"algo": "sha1",
+                                   "value": __import__("hashlib").sha1(
+                                       b"X").hexdigest()}}
+        fast = diff_from_manifest(inst, recorded, whitelist=["mods"],
+                                  pack_tops={"mods"})
+        self.assertIsNotNone(fast)
+        self.assertEqual((fast.added, fast.modified, fast.deleted),
+                         ([], [], []))
