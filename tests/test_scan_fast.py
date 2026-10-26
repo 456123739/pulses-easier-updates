@@ -287,7 +287,8 @@ class TestPathSafety(unittest.TestCase):
                       Change(Path("mods/ok.jar"), ChangeKind.ADDED)]
         plan = build_plan(diff, {"mods": True, "..": True},
                           {"mods": "完全匹配"})
-        safe = {str(p) for p in plan.copy}
+        # Windows 上 str(Path) 是反斜杠，统一用 posix 形式比较
+        safe = {p.as_posix() for p in plan.copy}
         self.assertNotIn("../victim/x.txt", safe)
         self.assertNotIn("mods/../../evil.jar", safe)
         self.assertIn("mods/ok.jar", safe)
