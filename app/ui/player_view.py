@@ -138,7 +138,8 @@ def _zip_names(zip_path: Path) -> list[str]:
 
 
 def _manifest_mismatches(content_root: Path,
-                         manifest: dict) -> list[str]:
+                         manifest: dict,
+                         budget_bytes: int = 512 * 1024 * 1024) -> list[str]:
     """
     用实际解压出来的文件复核清单：哈希对不上就说明清单陈旧/被改过。
 
@@ -148,9 +149,28 @@ def _manifest_mismatches(content_root: Path,
     bad: list[str] = []
     if not isinstance(manifest, dict) or not manifest:
         return bad
-    for rel, entry in manifest.items():
+
+    items = [it for it in manifest.items() if isinstance(it[1], dict)]
+    # 大包别为了复核再整包读一遍：预算内全量复核，超出部分等距抽样。
+    # 系统性错误（导出算错 / 包被重打）抽样也能抓到；单个文件被改坏，
+    # 由应用后的 verify_after_update 兜底。
+    stride = 1
+    try:
+        total = 0
+        for rel, _e in items:
+            p = content_root / str(rel).replace("\\", "/")
+            if p.is_file():
+                total += p.stat().st_size
+        if budget_bytes > 0 and total > budget_bytes and items:
+            stride = max(1, int(len(items) * budget_bytes / total))
+    except Exception:  # noqa: BLE001
+        stride = 1
+
+    for idx, (rel, entry) in enumerate(items):
         if len(bad) >= 20:
             break
+        if stride > 1 and idx % stride:
+            continue
         if not isinstance(entry, dict):
             continue
         algo = str(entry.get("algo", "") or "")
@@ -826,6 +846,8 @@ class PlayerView(ctk.CTkFrame):
 
         # 换包：旧包算出来的 diff/任务/解压目录全部作废
         self._cleanup_temp_dir()
+        self._forced_fs_scan = False
+        self._manifest_mismatch = []
         self.diff = None
         self.plan = None
         self._merged = []
