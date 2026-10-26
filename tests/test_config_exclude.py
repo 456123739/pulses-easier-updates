@@ -557,7 +557,9 @@ class TestStrategyList(unittest.TestCase):
         self.assertEqual(strategy_list_for("config"),
                          CONFIG_STRATEGY_LIST)
         self.assertEqual(len(CONFIG_STRATEGY_LIST), 4)
-        self.assertIs(CONFIG_STRATEGY_LIST[-1], Strategy.SMART_EXCLUDE)
+        # 「智能剔除」既是默认值，也排在第一格（最常用的一档先看到）
+        self.assertIs(CONFIG_STRATEGY_LIST[0], Strategy.SMART_EXCLUDE)
+        self.assertEqual(CONFIG_STRATEGY_LIST[1:], STRATEGY_LIST)
 
     def test_other_dirs_keep_three(self):
         for top in ("mods", "saves", "resourcepacks", "custom"):

@@ -99,6 +99,10 @@ def build_hash_manifest(
 
     files: dict[str, dict] = {}
     covered_tops: set[str] = set()
+    # 白名单写的是子路径（mods/sub、config/foo…）时，这个顶层的文件清单是
+    # **不完整**的：顶层没列出来的文件不代表"包里没有"。
+    # 记下来，玩家端看到 partial_tops 就退回"解压后逐文件比"，避免误删。
+    partial_tops: set[str] = set()
 
     # 1) 白名单路径 → 文件级哈希
     for rel in wl:
@@ -110,6 +114,8 @@ def build_hash_manifest(
         if not target.exists():
             continue
         covered_tops.add(top)
+        if "/" in rel:
+            partial_tops.add(top)
 
         if target.is_file():
             _add_file_entry(target, rel, files, index_hashes)
@@ -144,6 +150,7 @@ def build_hash_manifest(
         "files": files,
         "folders": folders,
         "whitelist": wl,
+        "partial_tops": sorted(partial_tops),
     }
 
 

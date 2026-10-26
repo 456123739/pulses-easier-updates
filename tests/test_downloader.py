@@ -1032,9 +1032,11 @@ class TestSlowPolicy(TestBase):
                          f"慢速但持续出数据的文件不该被降级：{logs}")
 
     def test_stalled_file_goes_to_slow_lane_then_aster(self):
-        # 第一个源永远不发数据（卡死）→ 应进慢速车道；慢速车道同样卡死 →
-        # 交给 Aster（它的超时也短）→ 最终失败但每个任务都有一条结果。
-        set_opts(stall_timeout=1, single_stall_timeout=1,
+        # 第一个源永远不发数据（卡死）。关键：stall_timeout(3) > read_poll(1)，
+        # 读超时不能把连接判死（旧实现 2.4s 就失败），要一直等到
+        # "连续 3s 一个字节都没有"才降级到慢速车道。
+        set_opts(stall_timeout=3, read_poll_interval=1.0,
+                 single_stall_timeout=1,
                  retry_same_url=0, per_url_timeout=0,
                  multi_slots=2, multi_slots_min=1, auto_slots=0,
                  part_threads=1)
@@ -1043,10 +1045,16 @@ class TestSlowPolicy(TestBase):
         logs = []
         t0 = time.time()
         res = self.run_dl([t], threads=2, log=lambda lv, m: logs.append(m))
+        elapsed = time.time() - t0
         self.assertEqual(len(res), 1)
         self.assertFalse(res[0].ok)
-        self.assertLess(time.time() - t0, 40, "卡死文件不应该拖太久")
-        self.assertTrue(any("卡死" in m for m in logs), logs)
+        self.assertGreaterEqual(elapsed, 3.0,
+                                f"还没到 stall_timeout 就下了结论：{elapsed:.1f}s")
+        self.assertLess(elapsed, 30, "卡死文件不应该拖太久")
+        self.assertTrue(any("卡死" in m for m in logs),
+                        f"应该判定卡死并转慢速车道：{logs}")
+        self.assertFalse(any("读取中断" in m for m in logs),
+                         f"读超时不该被当成连接中断：{logs}")
 
 
 class TestDynamicSlots(TestBase):

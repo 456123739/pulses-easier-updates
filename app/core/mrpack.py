@@ -20,6 +20,13 @@ OVERRIDES_DIR = "overrides"
 CHANGELOG_FILENAME = "changelog.md"
 
 
+_WIN_RESERVED = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+})
+
+
 def is_safe_rel_path(p: str) -> bool:
     """
     相对路径安全检查：拒绝绝对路径、`..`、空段、盘符。
@@ -33,7 +40,18 @@ def is_safe_rel_path(p: str) -> bool:
     parts = p.split("/")
     if any(part in ("", ".", "..") for part in parts):
         return False
-    return ":" not in parts[0]
+    if ":" in parts[0]:
+        return False
+    # Windows 保留设备名：CON.txt / NUL / COM1.jar … 在 Win32 上是设备而不是文件，
+    # 落盘会失败或写到设备上（目标平台就是 Windows，必须拦）
+    for part in parts:
+        stem = part.split(".", 1)[0].rstrip(" ").upper()
+        if stem in _WIN_RESERVED:
+            return False
+        if stem.startswith(("COM", "LPT")) and stem[3:].isdigit() \
+                and 1 <= int(stem[3:]) <= 9:
+            return False
+    return True
 
 # 更新包根目录里的元数据文件名：它们**不是**更新内容。
 # 玩家端在"包内没有 overrides/ 目录"的老格式回退分支里必须排除它们，

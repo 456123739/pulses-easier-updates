@@ -234,6 +234,7 @@ class PreferencesDialog(ctk.CTkToplevel):
         self._closing = False
         try:
             self.protocol("WM_DELETE_WINDOW", self._close)
+            self.bind("<Escape>", lambda _e: self._close())
         except Exception:  # noqa: BLE001, S110
             pass
 

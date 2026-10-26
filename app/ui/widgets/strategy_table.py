@@ -340,15 +340,17 @@ class StrategyTable(ctk.CTkFrame):
         next_row = self._layout_section(
             "disabled", disabled, next_row,
             lambda n: f"已禁用（{n}）",
-            self._collapsed, self._toggle_collapsed)
+            self._collapsed, self._toggle_collapsed, hide_body=True)
 
         self._layout_section(
             "unchanged", unchanged, next_row,
             lambda n: f"无需更新（{n}）",
-            self._unchanged_collapsed, self._toggle_unchanged)
+            self._unchanged_collapsed, self._toggle_unchanged,
+            hide_body=False)
 
     def _layout_section(self, key: str, rows: list[_Row], next_row: int,
-                        label_of, collapsed: bool, on_toggle) -> int:
+                        label_of, collapsed: bool, on_toggle,
+                        hide_body: bool = True) -> int:
         """渲染一个折叠区（已禁用 / 无需更新），返回下一行的行号。"""
         header = self._section_header(key)
         header_frame, label, arrow = header
@@ -374,7 +376,11 @@ class StrategyTable(ctk.CTkFrame):
             r.frame.grid(row=next_row, column=0, sticky="ew", pady=3)
             r.frame.grid()
             if r.body is not None:
-                r.body.grid_remove()
+                if hide_body:
+                    # 「已禁用」行没必要选策略（本来就不会应用）
+                    r.body.grid_remove()
+                else:
+                    r.body.grid()
             next_row += 1
         return next_row
 

@@ -145,6 +145,7 @@ class ChangeList(ctk.CTkFrame):
         self._checked = dict(checked) if checked else {}
         self._strategies = dict(strategies) if strategies else {}
         self._expanded = set()
+        self._idle_collapsed = True      # 新一次比对：折叠区回到收起态
         self._rebuild()
 
     def update_marks(self, checked: dict | None = None,
@@ -215,6 +216,9 @@ class ChangeList(ctk.CTkFrame):
             else:
                 active.append(entry)
 
+        # 便于测试/排错：这一屏里有多少组被折叠进「不更新」
+        self._idle_stat = (len(idle), sum(len(e[1]) for e in idle))
+
         row = 0
         for entry in active:
             row = self._render_group(row, entry)
@@ -224,8 +228,7 @@ class ChangeList(ctk.CTkFrame):
             row = self._add_idle_header(row, len(idle), total_items)
             if not self._idle_collapsed:
                 for entry in idle:
-                    row = self._render_group(row, entry,
-                                             force_collapsed=True)
+                    row = self._render_group(row, entry)
         return
 
     def _render_group(self, row: int, entry: tuple,

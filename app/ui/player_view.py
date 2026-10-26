@@ -12,6 +12,7 @@ player_view.py — 玩家界面
 """
 
 import shutil
+import queue
 import threading
 import zipfile
 from collections import deque
@@ -40,6 +41,7 @@ from ..core.downloader import DownloadTask
 from ..core.mrpack import (
     index_top_folders,
     is_reserved_root_name,
+    is_safe_rel_path,
     locate_content_root,
     merge_files,
     parse_mrpack,
@@ -125,6 +127,56 @@ def _zip_layout(zip_path: Path) -> tuple[str, bool, list[str]]:
     return prefix, standard, sorted(dirs)
 
 
+def _zip_names(zip_path: Path) -> list[str]:
+    """zip 里所有文件条目（已统一成 / 分隔）。"""
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            return [n.replace("\\", "/") for n in zf.namelist()
+                    if n and not n.endswith("/")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _manifest_mismatches(content_root: Path,
+                         manifest: dict) -> list[str]:
+    """
+    用实际解压出来的文件复核清单：哈希对不上就说明清单陈旧/被改过。
+
+    清单级比对完全依赖这份哈希，一旦它和包内容不一致，结果是**静默**的
+    （该更新的不更新、该装的漏装），所以必须在应用前抓出来。
+    """
+    bad: list[str] = []
+    if not isinstance(manifest, dict) or not manifest:
+        return bad
+    for rel, entry in manifest.items():
+        if len(bad) >= 20:
+            break
+        if not isinstance(entry, dict):
+            continue
+        algo = str(entry.get("algo", "") or "")
+        value = str(entry.get("value", "") or "")
+        if not algo or not value:
+            continue
+        try:
+            path = content_root / str(rel).replace("\\", "/")
+        except Exception:  # noqa: BLE001
+            continue
+        if not path.is_file():
+            continue
+        actual = _hash_file_quiet(path, algo)
+        if actual and actual != value:
+            bad.append(str(rel))
+    return bad
+
+
+def _hash_file_quiet(path: Path, algo: str) -> str:
+    try:
+        from ..core.differ import _hash_file as _hf
+        return _hf(path, algo)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _extract_root_members(zip_path: Path, dest: Path, prefix: str) -> int:
     """只解压内容根下的散文件（通常只有几个小的），返回解压个数。"""
     count = 0
@@ -150,6 +202,42 @@ def _extract_root_members(zip_path: Path, dest: Path, prefix: str) -> int:
             except Exception:  # noqa: BLE001, S110
                 pass
     return count
+
+
+def bind_keyboard_activate(button, command) -> None:
+    """
+    让 CTkButton 能被键盘触发（回车 / 小键盘回车 / 空格）。
+
+    CTkButton 是"自绘的 Frame + Canvas"，焦点会落到它内部的 Label 上，
+    默认既不参与 Tab 遍历，也不响应回车/空格 —— 键盘用户完全点不到
+    "开始更新"这种主按钮。
+    """
+    def _fire(_event=None):
+        try:
+            if str(button.cget("state")) == "disabled":
+                return "break"
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            command()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        return "break"
+
+    targets = [button, getattr(button, "_text_label", None),
+               getattr(button, "_canvas", None)]
+    for target in targets:
+        if target is None:
+            continue
+        try:
+            target.configure(takefocus=1)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        for seq in ("<Return>", "<KP_Enter>", "<space>"):
+            try:
+                target.bind(seq, _fire, add="+")
+            except Exception:  # noqa: BLE001, S110
+                pass
 
 
 class PlayerView(ctk.CTkFrame):
@@ -183,6 +271,11 @@ class PlayerView(ctk.CTkFrame):
         self._completed_files: list[str] = []
         self._btn_state: str = _BTN_DISABLED
         self._phase: str = _PHASE_IDLE
+        # 线程 → UI 的安全通道（Tk 的 after 不是线程安全的）
+        self._ui_queue: queue.Queue = queue.Queue()
+        self._ui_timer = None
+        self._manifest_mismatch: list[str] = []
+        self._forced_fs_scan = False
         self._phase_started_at: float = 0.0
         self._abort_flag: bool = False
         self._download_thread: threading.Thread | None = None
@@ -295,6 +388,8 @@ class PlayerView(ctk.CTkFrame):
         self.main_btn.grid(row=2, column=0, sticky="ew",
                            pady=(Size.GAP, 0))
         self.main_btn.grid_remove()
+        # 键盘可达：Tab 到主按钮后回车/空格就能开始更新
+        bind_keyboard_activate(self.main_btn, self._on_main_click)
 
     def _build_right(self):
         self.right = ctk.CTkFrame(self, fg_color=Color.WORKSPACE_BG,
@@ -416,6 +511,11 @@ class PlayerView(ctk.CTkFrame):
     def _set_button_state(self, state: str):
         self._btn_state = state
         try:
+            # 下载阶段会把主按钮临时改成"取消下载"，这里统一恢复默认命令
+            self.main_btn.configure(command=self._on_main_click)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
             if state == _BTN_DISABLED:
                 self.main_btn.configure(
                     text="开始更新", state="disabled",
@@ -454,6 +554,62 @@ class PlayerView(ctk.CTkFrame):
                     text_color=Color.TEXT_SECONDARY)
         except Exception:  # noqa: BLE001, S110
             pass
+
+    # ------------------------------------------------------------------
+    # 线程 → UI：安全投递
+    # ------------------------------------------------------------------
+    def ui_post(self, fn, *args):
+        """
+        把回调送回 UI 线程。
+
+        Tk 的 `after` **不是线程安全的**：主线程不在 mainloop 里时
+        （单测用 update() 驱动、或窗口正在销毁）会让工作线程抛
+        "main thread is not in main loop"，然后整条流程悄悄断掉。
+        这里先走 after(0)（正常情况零延迟），失败就入队，由主线程补发。
+        """
+        try:
+            self.after(0, fn, *args)
+            return
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            self._ui_queue.put((fn, args))
+            if self._ui_timer is None:
+                self._ui_timer = self.after(30, self._drain_ui_queue)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _on_manifest_mismatch(self):
+        """解压后发现"清单 vs 实际文件"对不上：改用逐文件比对重扫一次。"""
+        bad = list(getattr(self, "_manifest_mismatch", []) or [])
+        if not bad:
+            return
+        preview = "、".join(bad[:3]) + (" 等" if len(bad) > 3 else "")
+        self.log.log("warn",
+                     f"更新包里的哈希清单与实际文件不一致（包可能被手工改过）："
+                     f"{preview}")
+        if self._phase != _PHASE_IDLE or self.diff is None:
+            return
+        self._forced_fs_scan = True
+        self.log.log("info", "改用逐文件校验重新比对…")
+        self._start_scan()
+
+    def _drain_ui_queue(self):
+        while True:
+            try:
+                fn, args = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            except Exception:  # noqa: BLE001
+                break
+            try:
+                fn(*args)
+            except Exception:  # noqa: BLE001, S110
+                pass
+        try:
+            self._ui_timer = self.after(30, self._drain_ui_queue)
+        except Exception:  # noqa: BLE001
+            self._ui_timer = None
 
     def _set_hint(self, text: str, color: str | None = None):
         try:
@@ -758,7 +914,7 @@ class PlayerView(ctk.CTkFrame):
                 ok, html = render_markdown_sync(md, options=None)
             except Exception as e:  # noqa: BLE001
                 ok, html = False, f"渲染失败：{e}"
-            self.after(0, lambda o=ok, h=html, t=token:
+            self.ui_post( lambda o=ok, h=html, t=token:
                        self._on_changelog_rendered(o, h, t))
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -992,10 +1148,10 @@ class PlayerView(ctk.CTkFrame):
         def worker():
             try:
                 self._scan_worker()
-                self.after(0, self._on_scan_done)
+                self.ui_post( self._on_scan_done)
             except Exception as e:  # noqa: BLE001
                 msg = str(e)
-                self.after(0, lambda m=msg:
+                self.ui_post( lambda m=msg:
                            self._on_error(f"比对失败：{m}"))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1006,14 +1162,14 @@ class PlayerView(ctk.CTkFrame):
         if ev is None or ev.is_set():
             return True
         try:
-            self.after(0, self.log.log, "info", "正在解压更新包，稍等…")
+            self.ui_post( self.log.log, "info", "正在解压更新包，稍等…")
         except Exception:  # noqa: BLE001, S110
             pass
         ok = ev.wait(timeout)
         errs = getattr(self, "_extract_error", None) or []
         if errs:
             try:
-                self.after(0, self.log.log, "error",
+                self.ui_post( self.log.log, "error",
                            f"解压更新包失败：{errs[0]}")
             except Exception:  # noqa: BLE001, S110
                 pass
@@ -1053,7 +1209,7 @@ class PlayerView(ctk.CTkFrame):
             raise RuntimeError("无法创建临时工作目录")
         extract_dir = Path(self._temp_dir.name)
 
-        self.after(0, self._set_hint, "正在读更新包…")
+        self.ui_post( self._set_hint, "正在读更新包…")
 
         # ── 布局：内容根前缀（"overrides/" 还是根）、顶层目录名 ──
         prefix, standard, zip_tops = _zip_layout(update_zip)
@@ -1073,6 +1229,15 @@ class PlayerView(ctk.CTkFrame):
             try:
                 with zipfile.ZipFile(update_zip, "r") as zf:
                     zf.extractall(extract_dir)
+                if manifest_files:
+                    bad = _manifest_mismatches(content_root, manifest_files)
+                    if bad:
+                        self._manifest_mismatch = bad
+                        self.ui_post(self._on_manifest_mismatch)
+            except NotADirectoryError as e:  # noqa: BLE001
+                self._extract_error.append(
+                    "更新包结构异常（同名文件与目录冲突）："
+                    f"{getattr(e, 'filename', '') or e}")
             except Exception as e:  # noqa: BLE001
                 self._extract_error.append(str(e))
             finally:
@@ -1084,11 +1249,15 @@ class PlayerView(ctk.CTkFrame):
         recorded = eapack_mod.read_hashes(update_zip) or {}
         manifest_files = recorded.get("files") or {}
         folder_hashes = recorded.get("folders") or {}
-        fast_diff = bool(manifest_files) and standard
+        pack_files = {n[len(prefix):] for n in _zip_names(update_zip)
+                      if prefix and n.startswith(prefix)} if prefix else set(
+            _zip_names(update_zip))
+        fast_diff = (bool(manifest_files) and standard
+                     and not getattr(self, "_forced_fs_scan", False))
 
         if not fast_diff:
             # 包没带哈希清单（或结构不标准）：只能等解压完再逐文件比
-            self.after(0, self._set_hint, "正在解压更新包…")
+            self.ui_post( self._set_hint, "正在解压更新包…")
             self._extract_done.wait()
             if self._extract_error:
                 raise RuntimeError(f"解压更新包失败：{self._extract_error[0]}")
@@ -1108,7 +1277,7 @@ class PlayerView(ctk.CTkFrame):
             mapping.update({f: self._default_strategy_for_top(f, True,
                                                             pack_kind)
                             for f in file_items})
-            self.after(0, lambda m=mapping, fs=folders, fi=file_items:
+            self.ui_post( lambda m=mapping, fs=folders, fi=file_items:
                        self._apply_strategies(m, fs, fi))
         else:
             merged = merge_files(pack)
@@ -1122,7 +1291,7 @@ class PlayerView(ctk.CTkFrame):
             mapping.update({f: self._default_strategy_for_top(f, True,
                                                             pack_kind)
                             for f in file_items})
-            self.after(0, lambda m=mapping, fs=folders, fi=file_items:
+            self.ui_post( lambda m=mapping, fs=folders, fi=file_items:
                        self._apply_strategies(m, fs, fi))
 
         self._merged = merged
@@ -1130,10 +1299,10 @@ class PlayerView(ctk.CTkFrame):
         if fast_diff:
             self._overrides_root = content_root
             self._overrides_fallback = False
-            self.after(0, self._set_hint,
+            self.ui_post( self._set_hint,
                        "正在比对（解压同时进行）…")
         else:
-            self.after(0, self._set_hint, "正在比对…")
+            self.ui_post( self._set_hint, "正在比对…")
 
         user_wl: list[str] = []
         try:
@@ -1199,14 +1368,14 @@ class PlayerView(ctk.CTkFrame):
 
         self._index_hashes = index_hashes
         compare_root = self._overrides_root
-        self.after(0, lambda: self.progress.set(0.0, animate=False))
+        self.ui_post( lambda: self.progress.set(0.0, animate=False))
 
         def _progress(done: int, total: int, phase: str):
             if total <= 0:
                 total = 1
             ratio = done / total
             label = f"比对  {done}/{total}"
-            self.after(0, self._update_scan_progress, ratio, label)
+            self.ui_post( self._update_scan_progress, ratio, label)
 
         # 比对线程数走首选项（compare.hash_threads），不再硬编码
         try:
@@ -1226,14 +1395,16 @@ class PlayerView(ctk.CTkFrame):
                 whitelist=final_wl,
                 compare_root=compare_root,
                 pack_tops=set(zip_tops) | index_tops,
+                partial_tops=set(recorded.get("partial_tops") or []),
+                pack_files=pack_files,
                 threads=hash_threads, progress=_progress)
             if diff is None:
-                self.after(0, self._set_hint, "正在解压更新包（清单不完整）…")
+                self.ui_post( self._set_hint, "正在解压更新包（清单不完整）…")
 
         if diff is None:
             # 兜底/老包：等解压完成，按文件系统逐文件比
             if not self._extract_done.is_set():
-                self.after(0, self._set_hint, "正在解压更新包…")
+                self.ui_post( self._set_hint, "正在解压更新包…")
             self._extract_done.wait()
             if self._extract_error:
                 raise RuntimeError(f"解压更新包失败：{self._extract_error[0]}")
@@ -1244,7 +1415,7 @@ class PlayerView(ctk.CTkFrame):
                 self._overrides_fallback = fb
             except Exception:  # noqa: BLE001, S110
                 pass
-            self.after(0, self._set_hint, "正在比对…")
+            self.ui_post( self._set_hint, "正在比对…")
             diff = diff_packs_parallel(
                 pack_info.path, compare_root,
                 whitelist=final_wl,
@@ -1386,19 +1557,18 @@ class PlayerView(ctk.CTkFrame):
                        for t in tops):
                 self._smart_note_sig = ""
                 return
+            # 用**比对结果**判断（不是磁盘上的解压文件）：
+            # 快路径下比对先完成、解压还在后台，读磁盘会漏掉还没解出来的配置
             rels: list[str] = []
-            root = self._overrides_root
-            if root is not None:
-                for base in Path(root).iterdir():
+            diff = self.diff
+            if diff is not None:
+                for ch in list(diff.added) + list(diff.modified):
                     try:
-                        if not (base.is_dir()
-                                and base.name.lower() == "config"):
-                            continue
-                        for p in base.rglob("*"):
-                            if p.is_file():
-                                rels.append(p.relative_to(root).as_posix())
-                    except (OSError, ValueError):
+                        r = ch.rel_path.as_posix()
+                    except Exception:  # noqa: BLE001
                         continue
+                    if r.split("/", 1)[0].lower() == "config":
+                        rels.append(r)
             for item in self._merged or []:
                 r = str(item.get("path", ""))
                 if r.split("/", 1)[0].lower() == "config":
@@ -1617,6 +1787,7 @@ class PlayerView(ctk.CTkFrame):
 
         self._phase = _PHASE_DOWNLOAD
         self._abort_flag = False
+        self._show_cancel_button()
         # 下载阶段就锁定：否则"处理中"还能拖入新包/清空整合包，
         # 而下载线程仍持有旧目录（会用错的包执行更新）
         self.app_state.lock()
@@ -1672,35 +1843,35 @@ class PlayerView(ctk.CTkFrame):
         self._pending_auto_opened = False
 
         def _on_started(task: DownloadTask):
-            self.after(0, self._handle_file_started, task.rel_path)
+            self.ui_post( self._handle_file_started, task.rel_path)
 
         def _on_done(task: DownloadTask):
             # on_file_done 只在成功时触发 → 这里就能准确回填"已完成"，
             # 中止关闭时写出的 resume 统计不会再偏低
             self._mark_completed(task.rel_path)
-            self.after(0, self._handle_file_done, task.rel_path)
+            self.ui_post( self._handle_file_done, task.rel_path)
 
         def _on_failed(task: DownloadTask, error: str):
-            self.after(0, self._handle_file_failed, task.rel_path,
+            self.ui_post( self._handle_file_failed, task.rel_path,
                        task.urls, error)
 
         def _prog(done: int, total: int, name: str):
-            self.after(0, lambda d=done, t=total:
+            self.ui_post( lambda d=done, t=total:
                        self._update_download_progress(d, t))
 
         def _bytes(rel: str, received: int, total_bytes: int):
-            self.after(0, lambda r=rel, rc=received, tb=total_bytes:
+            self.ui_post( lambda r=rel, rc=received, tb=total_bytes:
                        self._on_byte_progress(r, rc, tb))
 
         def _log(level: str, msg: str):
-            self.after(0, self.log.log, level, msg)
+            self.ui_post( self.log.log, level, msg)
 
         def _should_abort() -> bool:
             return self._abort_flag
 
         def worker():
             if not self._wait_extracted():
-                self.after(0, lambda: self._on_error(
+                self.ui_post( lambda: self._on_error(
                     "解压更新包失败，无法继续下载"))
                 return
             results = self._engine_module().download_files(
@@ -1719,7 +1890,7 @@ class PlayerView(ctk.CTkFrame):
             for r in results:
                 if r.ok:
                     self._mark_completed(r.task.rel_path)
-            self.after(0, lambda r=results: self._on_download_done(r))
+            self.ui_post( lambda r=results: self._on_download_done(r))
 
         self._download_thread = threading.Thread(target=worker, daemon=True)
         self._download_thread.start()
@@ -2048,7 +2219,7 @@ class PlayerView(ctk.CTkFrame):
                     msg = (res[0].error if res else "") or "仍然连不上"
             except Exception as e:  # noqa: BLE001
                 ok, msg = False, str(e)
-            self.after(0, lambda o=ok, m=msg:
+            self.ui_post( lambda o=ok, m=msg:
                        self._on_retry_done(rel, o, m, report))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -2172,7 +2343,7 @@ class PlayerView(ctk.CTkFrame):
         self.log.log("info", f"开始补齐 {len(rels)} 个文件…")
 
         def _log(level: str, msg: str):
-            self.after(0, self.log.log, level, msg)
+            self.ui_post( self.log.log, level, msg)
 
         source = PlanSource([SourceLayer(cache, consume=False)])
         options = self._transfer_options()
@@ -2189,11 +2360,11 @@ class PlayerView(ctk.CTkFrame):
                     plan, pack_root, deep=bool(options.get("deep_verify")),
                     stats=vstats)
                 cp_mod.mark_applied(pack_root)
-                self.after(0, lambda r=report, f=failed:
+                self.ui_post( lambda r=report, f=failed:
                            self._on_complete_done(r, f))
             except Exception as e:  # noqa: BLE001
                 msg = str(e)
-                self.after(0, lambda m=msg: self._on_complete_error(m))
+                self.ui_post( lambda m=msg: self._on_complete_error(m))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2407,6 +2578,11 @@ class PlayerView(ctk.CTkFrame):
         cache = self._pending_cache_root()
         if task is None or cache is None:
             return False
+        # 防御：rel_path 来自更新包/凭证，可能带 `..` 或绝对路径。
+        # 不校验的话，恶意包可以让"补入"把文件写到缓存目录之外。
+        if not is_safe_rel_path(str(rel_path)):
+            self.log.log("error", f"投入失败：非法路径 {rel_path}")
+            return False
 
         target = cache / rel_path
         try:
@@ -2525,6 +2701,35 @@ class PlayerView(ctk.CTkFrame):
             return None
         return PlanSource(layers)
 
+    def _show_cancel_button(self):
+        """
+        下载阶段的唯一出口：主按钮变成「取消下载」。
+
+        以前这里是一个禁用的「处理中…」——源卡住时玩家只能去点窗口关闭按钮，
+        再在弹窗里选「中止下载」，非常绕。
+        """
+        if self._phase != _PHASE_DOWNLOAD:
+            return
+        try:
+            self.main_btn.configure(
+                text="取消下载", state="normal",
+                fg_color=Color.LOG_BG, hover_color=Color.BORDER,
+                text_color=Color.TEXT_PRIMARY,
+                command=self._cancel_download)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _cancel_download(self):
+        if self._phase != _PHASE_DOWNLOAD or self._abort_flag:
+            return
+        self._abort_flag = True
+        self.log.log("warn", "正在取消下载…")
+        self._set_hint("正在取消下载…")
+        try:
+            self.main_btn.configure(text="取消中…", state="disabled")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def _start_apply(self):
         # 并发保护：同一时刻只允许一个 execute_plan 在写整合包
         if self._phase == _PHASE_APPLY:
@@ -2558,17 +2763,17 @@ class PlayerView(ctk.CTkFrame):
         self._set_hint("正在应用更新…")
 
         def _log(level: str, msg: str) -> None:
-            self.after(0, self.log.log, level, msg)
+            self.ui_post( self.log.log, level, msg)
 
         def _progress(done: int, total: int) -> None:
-            self.after(0, self._set_progress, done, total)
+            self.ui_post( self._set_progress, done, total)
 
         def worker():
             # 生成计划、搬运、校验全部在后台线程：主线程一步都不能卡。
             # （旧实现会在 UI 线程上先把整包复制成 _merged 副本，
             #   1GB 的包能把窗口冻住十几秒。）
             if not self._wait_extracted():
-                self.after(0, lambda: self._on_apply_error(
+                self.ui_post( lambda: self._on_apply_error(
                     "解压更新包失败，无法应用"))
                 return
             try:
@@ -2591,11 +2796,11 @@ class PlayerView(ctk.CTkFrame):
                 # 校验也跑完了才写 applied：如果进程死在上面这两步之间，
                 # 检查点会停在 verify，下次启动能发现"上次收尾没做完"
                 cp_mod.mark_applied(old_root)
-                self.after(0, lambda r=report, f=failed:
+                self.ui_post( lambda r=report, f=failed:
                            self._on_apply_done(r, f))
             except Exception as e:  # noqa: BLE001
                 msg = str(e)
-                self.after(0, lambda m=msg: self._on_apply_error(m))
+                self.ui_post( lambda m=msg: self._on_apply_error(m))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2872,20 +3077,20 @@ class PlayerView(ctk.CTkFrame):
                     resume_mod.cleanup_stale_parts(self._cache_root)
                 else:
                     try:
-                        self.after(0, self.log.log, "warn",
+                        self.ui_post( self.log.log, "warn",
                                    "下载线程未在 5 秒内结束，"
                                    "已跳过残留分片清理")
                     except Exception:  # noqa: BLE001, S110
                         pass
                 self._write_resume()
-            self.after(0, self._force_destroy)
+            self.ui_post( self._force_destroy)
 
         threading.Thread(target=_wait_and_close, daemon=True).start()
 
     def _handle_close_apply(self, ok: bool):
         if not ok:
             return
-        self.after(0, self._force_destroy)
+        self.ui_post( self._force_destroy)
 
     def _force_destroy(self):
         # 退出前清掉解压副本，避免留下 GB 级残留

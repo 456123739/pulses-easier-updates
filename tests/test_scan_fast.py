@@ -153,6 +153,39 @@ class TestManifestDiff(unittest.TestCase):
         self.assertIsNone(fast)
 
 
+class TestChangeListIdleFolding(unittest.TestCase):
+    """变更列表：整组都会被跳过的折叠进「不更新」。"""
+
+    def _list(self):
+        from app.ui.widgets.change_list import ChangeList
+        return ChangeList(None)
+
+    def test_fully_skipped_group_is_folded(self):
+        from app.core.differ import Change, DiffResult
+        from app.config import ChangeKind
+        diff = DiffResult()
+        diff.added = [Change(Path("saves/a.dat"), ChangeKind.ADDED),
+                      Change(Path("saves/b.dat"), ChangeKind.ADDED)]
+        diff.modified = [Change(Path("config/x.toml"),
+                                ChangeKind.MODIFIED)]
+        cl = self._list()
+        cl.load(diff, checked={"saves": False, "config": True},
+                strategies={"saves": "替换重名", "config": "替换重名"})
+        self.assertEqual(cl._idle_stat, (1, 2),
+                         "未勾选的整组应该折叠进「不更新」")
+        self.assertTrue(cl._idle_collapsed, "默认折叠")
+
+    def test_nothing_folded_when_all_groups_apply(self):
+        from app.core.differ import Change, DiffResult
+        from app.config import ChangeKind
+        diff = DiffResult()
+        diff.modified = [Change(Path("config/x.toml"), ChangeKind.MODIFIED)]
+        cl = self._list()
+        cl.load(diff, checked={"config": True},
+                strategies={"config": "替换重名"})
+        self.assertEqual(cl._idle_stat, (0, 0))
+
+
 class TestChangeCountsFolding(unittest.TestCase):
     """策略表：扫描后没有差异的行折叠进「无需更新」。"""
 
@@ -183,3 +216,73 @@ class TestChangeCountsFolding(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestManifestSafety(unittest.TestCase):
+    """清单不可信时的兜底（审查发现的三类问题）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="easier-safe-")
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_partial_whitelist_refuses_fast_diff(self):
+        """白名单写的是子路径（mods/sub）→ 顶层清单不完整 → 必须退回老路径。"""
+        inst = self.tmp / "inst"
+        _write(inst / "mods" / "a.jar", "SAME")
+        manifest = {"mods/sub/b.jar": {"algo": "sha1", "value": "x"}}
+        fast = diff_from_manifest(
+            inst, manifest, whitelist=["mods"],
+            pack_tops={"mods"}, partial_tops={"mods"})
+        self.assertIsNone(fast, "部分覆盖的清单不能用来判删除")
+
+    def test_manifest_must_cover_every_whitelisted_file_in_pack(self):
+        """包里有的白名单文件，清单没记 → 清单不完整 → 退回老路径。"""
+        inst = self.tmp / "inst"
+        _write(inst / "mods" / "a.jar", "OLD")
+        manifest = {"mods/a.jar": {"algo": "sha1", "value": "deadbeef"}}
+        fast = diff_from_manifest(
+            inst, manifest, whitelist=["mods"], pack_tops={"mods"},
+            pack_files={"mods/a.jar", "mods/kept.jar"})
+        self.assertIsNone(fast, "漏记的文件会让它永远装不上，必须回退")
+
+    def test_manifest_mismatch_detected_after_extract(self):
+        from app.ui.player_view import _manifest_mismatches
+        root = self.tmp / "root"
+        _write(root / "mods" / "a.jar", "NEW")
+        good = "c1b7a0bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        bad = _manifest_mismatches(
+            root, {"mods/a.jar": {"algo": "sha1", "value": "0" * 40}})
+        self.assertEqual(bad, ["mods/a.jar"])
+        import hashlib
+        real = hashlib.sha1(b"NEW").hexdigest()
+        self.assertEqual(
+            _manifest_mismatches(
+                root, {"mods/a.jar": {"algo": "sha1", "value": real}}),
+            [])
+
+
+class TestPathSafety(unittest.TestCase):
+    def test_plan_skips_escaping_paths(self):
+        from app.core.differ import Change, DiffResult
+        from app.core.updater import build_plan
+        from app.config import ChangeKind
+        diff = DiffResult()
+        diff.added = [Change(Path("../victim/x.txt"), ChangeKind.ADDED),
+                      Change(Path("mods/../../evil.jar"), ChangeKind.ADDED),
+                      Change(Path("mods/ok.jar"), ChangeKind.ADDED)]
+        plan = build_plan(diff, {"mods": True, "..": True},
+                          {"mods": "完全匹配"})
+        safe = {str(p) for p in plan.copy}
+        self.assertNotIn("../victim/x.txt", safe)
+        self.assertNotIn("mods/../../evil.jar", safe)
+        self.assertIn("mods/ok.jar", safe)
+
+    def test_windows_reserved_names_rejected(self):
+        from app.core.mrpack import is_safe_rel_path
+        for bad in ("CON", "mods/NUL.txt", "COM1.jar", "lpt9/x", "AUX"):
+            self.assertFalse(is_safe_rel_path(bad), bad)
+        for ok in ("mods/conifer.jar", "config/com10.toml", "a/b/c.txt"):
+            self.assertTrue(is_safe_rel_path(ok), ok)

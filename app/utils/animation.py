@@ -424,7 +424,9 @@ def toggle_height(widget, show: bool,
     prev = getattr(widget, "_anim_toggle", None)
     if prev is not None:
         try:
-            prev.cancel()
+            # notify=True 很关键：上一次动画藏起来的子控件要靠它的
+            # on_done 才能恢复。以前默认 False，快速连点会把面板永久变空。
+            prev.cancel(notify=True)
         except Exception:  # noqa: BLE001, S110
             pass
         try:

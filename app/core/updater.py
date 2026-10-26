@@ -46,6 +46,7 @@ from ..utils.files import safe_join
 from . import checkpoint as cp_mod
 from . import config_exclude
 from . import transfer
+from .mrpack import is_safe_rel_path
 from .apply_rules import (
     is_checked_n,
     normalize_keys,
@@ -413,6 +414,12 @@ def build_plan(diff, checked, strategies,
         rel = change.rel_path
         parts = rel.parts
         top = parts[0] if parts else ""
+
+        # 防御：任何"逃出整合包"的路径一律不执行（更新包是第三方内容，
+        # index / ea_hashes / 凭证都可能被伪造）
+        if not is_safe_rel_path(rel.as_posix()):
+            plan.skip.append(rel)
+            continue
 
         if not is_checked_n(checked_n, top):
             plan.skip.append(rel)

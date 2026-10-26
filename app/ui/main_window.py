@@ -736,6 +736,9 @@ class MainWindow(ctk.CTk):
         还是玩家"。现在改成：记下最后一次请求，动画结束立刻补切。
         """
         if identity == self._current:
+            # 已经在这个身份上：把之前排队的切换作废，
+            # 否则动画结束时又会切回上一次点的那边（"吞掉最后一次点击"）
+            self._pending_identity = ""
             self._sync_switch(identity)
             return True
         if self._switching:
@@ -832,14 +835,18 @@ class MainWindow(ctk.CTk):
         except Exception:  # noqa: BLE001
             self._switch_guard = None
 
-        # 首选：把旧页截成一张图滑走（页面上的控件一个都不动 → 不会拉丝）
+        # 首选：把旧页截成一张图滑走（页面上的控件一个都不动 → 不会拉丝）。
+        # 但如果此刻有弹窗/模态压在页面上，截图会把别人的像素一起烤进去，
+        # 那样滑动的就是"一张带着别人窗口的图" —— 这种情况退回盖色板。
         fast_ok = False
-        try:
-            fast_ok = snapshot_slide(self.page_host, old, new,
-                                     duration_ms=Anim.SWITCH_MS,
-                                     on_done=_finish)
-        except Exception:  # noqa: BLE001, S110
-            fast_ok = False
+        if not self._has_overlay_window():
+            try:
+                self.lift()
+                fast_ok = snapshot_slide(self.page_host, old, new,
+                                         duration_ms=Anim.SWITCH_MS,
+                                         on_done=_finish)
+            except Exception:  # noqa: BLE001, S110
+                fast_ok = False
         if fast_ok:
             return
 
@@ -862,6 +869,29 @@ class MainWindow(ctk.CTk):
         slide_pages(self.page_host, old, new, direction="left",
                     duration_ms=Anim.SWITCH_MS,
                     on_done=_finish)
+
+    def _has_overlay_window(self) -> bool:
+        """页面上是否有弹窗/模态挡着（有就不适合用截屏做换页动画）。"""
+        try:
+            if self.grab_current() is not None:
+                return True
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            for w in self.winfo_children():
+                if w.winfo_class() == "Toplevel" and w.winfo_ismapped():
+                    return True
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            for w in self.winfo_toplevel().winfo_children():
+                if w is self:
+                    continue
+                if w.winfo_class() == "Toplevel" and w.winfo_ismapped():
+                    return True
+        except Exception:  # noqa: BLE001, S110
+            pass
+        return False
 
     @staticmethod
     def _find_transition_veils(view):

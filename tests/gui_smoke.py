@@ -590,6 +590,19 @@ def main() -> int:
         shown = [w for w in kids if w.winfo_ismapped()]
         check(len(shown) == len(kids), "展开结束后子控件全部恢复",
               f"{len(shown)}/{len(kids)}")
+
+        # 动画中途再点一次（打断）→ 子控件不能永久消失
+        panel._toggle()                       # 收起（从展开状态）
+        app.update()
+        app.after(40, panel._toggle)          # 动画中途再点开
+        _pump(app, 1.0)
+        if panel._collapsed:
+            panel._toggle()
+        _pump(app, 1.0, lambda: getattr(body, "_anim_toggle", None) is None)
+        shown = [w for w in kids if w.winfo_ismapped()]
+        check(len(shown) == len(kids),
+              "折叠动画被打断后子控件仍然能回来",
+              f"{len(shown)}/{len(kids)}")
         return True
 
     def step_motion():

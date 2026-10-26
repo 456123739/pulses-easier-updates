@@ -1070,6 +1070,35 @@ def _set_socket_timeout(resp, timeout: float) -> bool:
         return False
 
 
+def _rearm_after_timeout(resp) -> bool:
+    """
+    读超时之后，让这个响应还能继续读。
+
+    CPython 的 `socket.SocketIO` 在一次超时后会置 `_timeout_occurred`，
+    之后每次 read 都直接抛 `OSError("cannot read from timed out object")` ——
+    如果把它当成"连接断了"，就会把"慢/抖动"误判成"失败"，
+    真正的"卡死 15s"判定根本没机会执行。这里把标记清掉再继续等。
+    """
+    try:
+        raw = resp.fp.raw  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        if getattr(raw, "_timeout_occurred", False):
+            raw._timeout_occurred = False   # type: ignore[attr-defined]
+            return True
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return False
+
+
+def _looks_like_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text
+
+
 def _get_socket(resp):
     try:
         return resp.fp.raw._sock  # type: ignore[attr-defined]
@@ -1404,11 +1433,17 @@ def _stream_to_file(resp, f, progress: _FileProgress | None, part_id: int,
 
         try:
             chunk = resp.read1(to_read)
-        except TimeoutError:
-            # 到点还没数据 → 回到循环顶部重新评估（不再用 select 预判）
-            continue
-        except (urlerr.URLError, OSError) as e:
-            raise _AbortError(f"{url} → 读取中断：{e}", stalled=True)
+        except (TimeoutError, OSError) as e:
+            if _looks_like_timeout(e) and _rearm_after_timeout(resp):
+                # 只是"这一秒没数据"：回到循环顶部，让 stall_timeout 说了算
+                continue
+            if _looks_like_timeout(e):
+                # 连接已经不可用（清不掉超时标记）：按"卡死"处理，
+                # 让上层把文件降级到慢速车道重开连接，而不是直接判失败
+                raise _AbortError(f"{url} → 读取超时：{e}", stalled=True,
+                                  fast_stalled=fast_stall)
+            raise _AbortError(f"{url} → 读取中断：{e}", stalled=True,
+                              fast_stalled=fast_stall)
 
         if not chunk:
             drained = True

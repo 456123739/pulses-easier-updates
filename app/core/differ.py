@@ -176,12 +176,33 @@ def _pick_hash(hashes: dict | None) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _list_entries(folder: Path | None
+def _list_entries(folder: Path | None, recursive: bool = False
                   ) -> tuple[dict[str, Path], dict[str, Path]]:
-    """列出文件夹直接子项：({文件名: 路径}, {子目录名: 路径})"""
+    """
+    列出文件夹里的文件与子目录。
+
+    recursive=False：只列直接子项，键是名字；
+    recursive=True ：递归列出所有文件，键是相对路径（a/b.jar）。
+    """
     files: dict[str, Path] = {}
     dirs: dict[str, Path] = {}
     if folder is None or not folder.is_dir():
+        return files, dirs
+    if recursive:
+        try:
+            for dirpath, dirnames, filenames in os.walk(folder):
+                dirnames[:] = [d for d in dirnames if not is_local_only_dir(d)]
+                for name in filenames:
+                    if is_local_only_name(name):
+                        continue
+                    p = Path(dirpath) / name
+                    try:
+                        rel = p.relative_to(folder).as_posix()
+                    except OSError:
+                        continue
+                    files[rel] = p
+        except OSError:
+            return files, dirs
         return files, dirs
     try:
         for entry in folder.iterdir():
@@ -252,24 +273,20 @@ def _diff_whitelist_dir(
     modified: list[Change] = []
     deleted: list[Change] = []
 
-    old_files, old_dirs = _list_entries(old_dir)
-    new_files, new_dirs = _list_entries(new_dir)
+    # 白名单目录一律**递归到文件级**：和清单比对的粒度保持一致，
+    # 否则同一份包"有 ea_hashes / 没有 ea_hashes"会得到两种变更粒度
+    #（子目录整体 vs 单文件），「跳过重名」的语义也会跟着变。
+    old_files, _old_dirs = _list_entries(old_dir, recursive=True)
+    new_files, _new_dirs = _list_entries(new_dir, recursive=True)
 
     prefix = top_name + "/"
+    # 递归比较后，index 里**任意深度**的文件都要算进"新包这一侧"
+    # （以前只收直接子文件，深层 index 文件会被当成"包里没有"而误删本地副本）
     index_direct: dict[str, dict] = {}
     for rel, hashes in index_by_top.get(top_name, {}).items():
         if not rel.startswith(prefix):
             continue
-        sub = rel[len(prefix):]
-        if "/" in sub:
-            continue
-        index_direct[sub] = hashes
-
-    index_dirs: set[str] = set()
-    for d in index_deep_dirs:
-        first = d.split("/", 1)[0]
-        if first:
-            index_dirs.add(first)
+        index_direct[rel[len(prefix):]] = hashes
 
     new_file_names = set(new_files.keys()) | set(index_direct.keys())
     old_file_names = set(old_files.keys())
@@ -341,34 +358,11 @@ def _diff_whitelist_dir(
                     except Exception:  # noqa: BLE001, S110
                         pass
 
-                if local_h and local_h != target_h:
+                if not local_h or local_h != target_h:
+                    # local_h 为空 = 本地文件读不出来（被占用/没权限）。
+                    # 以前这里会静默判"一致"，那个文件就永远停在旧版本。
                     modified.append(
                         Change(Path(full_rel), ChangeKind.MODIFIED))
-
-    effective_new_dirs = set(new_dirs.keys()) | index_dirs
-    all_subdirs = set(old_dirs) | effective_new_dirs
-
-    for sub in sorted(all_subdirs):
-        old_sub = old_dirs.get(sub)
-        new_sub = new_dirs.get(sub)
-        full_rel = top_name + "/" + sub
-
-        if sub in index_dirs and new_sub is None:
-            if old_sub is None:
-                added.append(Change(Path(full_rel), ChangeKind.ADDED,
-                                    is_folder_level=True))
-            continue
-
-        if new_sub and not old_sub:
-            added.append(Change(Path(full_rel), ChangeKind.ADDED,
-                                is_folder_level=True))
-        elif old_sub and not new_sub:
-            deleted.append(Change(Path(full_rel), ChangeKind.DELETED,
-                                  is_folder_level=True))
-        else:
-            if folders_differ(old_sub, new_sub):
-                modified.append(Change(Path(full_rel), ChangeKind.MODIFIED,
-                                       is_folder_level=True))
 
     return added, modified, deleted
 
@@ -575,6 +569,8 @@ def diff_from_manifest(
     whitelist: list[str] | None = None,
     compare_root: Path | None = None,
     pack_tops: set[str] | None = None,
+    partial_tops: set[str] | None = None,
+    pack_files: set[str] | None = None,
     threads: int = 16,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> DiffResult | None:
@@ -620,6 +616,28 @@ def diff_from_manifest(
     tops = set(per_top) | set(index_by_top) | set(f_hashes)
     if pack_tops:
         tops |= set(pack_tops)
+
+    # 白名单只覆盖了某个顶层的**子路径**时，那个顶层的清单不完整 ——
+    # 不能据此判"删除"。直接交给调用方退回老路径（宁可慢，不能删错）。
+    partial = {str(t) for t in (partial_tops or set()) if t}
+    partial |= {p.split("/", 1)[0] for p in wl if "/" in p}
+    if partial & (tops | set(per_top)):
+        return None
+
+    # 覆盖率校验：包里确实存在的白名单文件，清单必须都记了。
+    # 少记一个 → 那个文件会被当成"新包没有"（误删）或"没变化"（漏更新）。
+    if pack_files:
+        covered = set(per_top) | set(index_by_top)
+        for rel in pack_files:
+            rel_s = str(rel).replace("\\", "/").strip("/")
+            if not rel_s or "/" not in rel_s:
+                continue
+            top = rel_s.split("/", 1)[0]
+            if top not in wl_top:
+                continue
+            if rel_s not in index_by_top.get(top, {}) and \
+                    rel_s[len(top) + 1:] not in per_top.get(top, {}):
+                return None
     for top in tops:
         if top in wl_top:
             continue
@@ -707,11 +725,6 @@ def diff_from_manifest(
                     with lock:
                         counter["n"] += 1
                         d = counter["n"]
-                    if progress and d % 20 == 0:
-                        try:
-                            progress(d, len(to_compare), "merge")
-                        except Exception:  # noqa: BLE001, S110
-                            pass
                     if local_h != target_h:
                         result.modified.append(
                             Change(Path(full_rel), ChangeKind.MODIFIED))

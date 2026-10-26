@@ -55,7 +55,9 @@ STRATEGY_LIST = [Strategy.FULL_MATCH, Strategy.REPLACE_SAME, Strategy.SKIP_SAME]
 FILE_STRATEGY_LIST = STRATEGY_LIST + [Strategy.MERGE_KEYS]
 # config 多一档「智能剔除」：优化/渲染类模组的配置保持玩家本地版本
 # （归属表见 core/config_exclude.py；这个概念只在 config 上有意义，不要外溢）
-CONFIG_STRATEGY_LIST = STRATEGY_LIST + [Strategy.SMART_EXCLUDE]
+# config 行把「智能剔除」放在最前面：它是默认值，也是这个目录最常用的选择，
+# 让最常用的那一档出现在视线第一格（其余目录仍是三档，顺序不变）
+CONFIG_STRATEGY_LIST = [Strategy.SMART_EXCLUDE] + STRATEGY_LIST
 
 # 每种内容类型的默认策略
 #   config 默认「智能剔除」：优化/渲染类模组的配置按玩家机器调，更新时保持
