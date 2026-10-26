@@ -128,63 +128,53 @@ def _zip_layout(zip_path: Path
     return prefix, standard, sorted(dirs), names
 
 
-def _manifest_mismatches(content_root: Path,
-                         manifest: dict,
-                         sample: int = 128,
-                         max_bytes: int = 64 * 1024 * 1024) -> list[str]:
+def _extract_all_members(zip_path: Path, extract_dir: Path,
+                         manifest: dict | None = None
+                         ) -> tuple[int, list[str]]:
     """
-    用实际解压出来的文件复核清单：哈希对不上就说明清单陈旧/被改过。
+    解压整个更新包，**在同一次读取里**按清单复核哈希。
 
-    清单级比对完全依赖这份哈希，一旦它和包内容不一致，结果是**静默**的
-    （该更新的不更新、该装的漏装），所以必须在应用前抓出来。
-
-    复核是"抽检"而不是"整包重读"：2000 个文件里抽 128 个，足以发现
-    系统性错误（导出算错 / 包被重打）；单个文件被改坏由应用后的
-    verify_after_update 兜底。抽检数量可按 `sample` 调整（0=全量）。
+    以前的做法是"先 extractall、再按清单抽查 128 个文件"：抽查会漏
+    （单条陈旧项可能不在样本里），全量复核又要再读一遍整包。
+    现在边解压边算哈希：零额外 IO，而且是**全量**复核。
+    返回 (解压文件数, 与清单不一致的条目)。
     """
+    from ..core.differ import _new_hasher
+
     bad: list[str] = []
-    if not isinstance(manifest, dict) or not manifest:
-        return bad
-
-    items = [(str(rel), ent) for rel, ent in manifest.items()
-             if isinstance(ent, dict)]
-    if sample > 0 and len(items) > sample:
-        # 等距抽样：整包范围内均匀取，避免只看到开头一小段
-        step = len(items) / float(sample)
-        items = [items[int(i * step)] for i in range(sample)]
-
-    read_bytes = 0
-    for rel, entry in items:
-        if len(bad) >= 20:
-            break
-        if read_bytes > max_bytes:
-            break
-        algo = str(entry.get("algo", "") or "")
-        value = str(entry.get("value", "") or "")
-        if not algo or not value:
-            continue
-        try:
-            path = content_root / rel.replace("\\", "/")
-        except Exception:  # noqa: BLE001
-            continue
-        if not path.is_file():
-            continue
-        try:
-            read_bytes += path.stat().st_size
-        except OSError:
-            continue
-        actual = _hash_file_quiet(path, algo)
-        if actual and actual != value:
-            bad.append(rel)
-    return bad
-
-
-def _hash_file_quiet(path: Path, algo: str) -> str:
-    try:
-        from ..core.differ import _hash_file as _hf
-        return _hf(path, algo)
-    except Exception:  # noqa: BLE001
-        return ""
+    count = 0
+    manifest = manifest if isinstance(manifest, dict) else {}
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            name = str(info.filename).replace("\\", "/")
+            if info.is_dir() or not name:
+                continue
+            rel = name.lstrip("/")
+            if not is_safe_rel_path(rel):
+                continue                  # 穿越/保留名：不落盘
+            target = extract_dir / rel
+            entry = manifest.get(rel)
+            algo = str(entry.get("algo", "")) if isinstance(entry, dict) else ""
+            expect = str(entry.get("value", "")) if isinstance(entry, dict) else ""
+            hasher = None
+            if algo and expect:
+                try:
+                    hasher = _new_hasher(algo)
+                except Exception:  # noqa: BLE001
+                    hasher = None
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                while True:
+                    chunk = src.read(1 << 16)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    if hasher is not None:
+                        hasher.update(chunk)
+            count += 1
+            if hasher is not None and hasher.hexdigest() != expect:
+                bad.append(rel)
+    return count, bad
 
 
 def _extract_root_members(zip_path: Path, dest: Path, prefix: str
@@ -288,6 +278,7 @@ class PlayerView(ctk.CTkFrame):
         # 线程 → UI 的安全通道（Tk 的 after 不是线程安全的）
         self._ui_queue: queue.Queue = queue.Queue()
         self._ui_timer = None
+        self._ui_lock = threading.Lock()
         self._manifest_mismatch: list[str] = []
         self._needs_rescan = False
         self._scan_used_fast = False
@@ -589,9 +580,10 @@ class PlayerView(ctk.CTkFrame):
         except Exception:  # noqa: BLE001, S110
             pass
         try:
-            self._ui_queue.put((fn, args))
-            if self._ui_timer is None:
-                self._ui_timer = self.after(30, self._drain_ui_queue)
+            with self._ui_lock:
+                self._ui_queue.put((fn, args))
+                if self._ui_timer is None:
+                    self._ui_timer = self.after(30, self._drain_ui_queue)
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -627,10 +619,11 @@ class PlayerView(ctk.CTkFrame):
                 fn(*args)
             except Exception:  # noqa: BLE001, S110
                 pass
-        if self._ui_queue.empty():
-            # 没活了就停，别每 30ms 空转唤醒一次（曾经会一直转到进程退出）
-            self._ui_timer = None
-            return
+        with self._ui_lock:
+            if self._ui_queue.empty():
+                # 没活了就停，别每 30ms 空转唤醒一次（曾一直转到进程退出）
+                self._ui_timer = None
+                return
         try:
             self._ui_timer = self.after(30, self._drain_ui_queue)
         except Exception:  # noqa: BLE001
@@ -1273,17 +1266,20 @@ class PlayerView(ctk.CTkFrame):
             self._extract_error = []
             self._extract_zip = update_zip
 
+        pack, err = parse_mrpack(update_zip)
+        recorded = eapack_mod.read_hashes(update_zip) or {}
+        manifest_files = recorded.get("files") or {}
+        folder_hashes = recorded.get("folders") or {}
+
         def _extract_all():
             try:
-                with zipfile.ZipFile(update_zip, "r") as zf:
-                    zf.extractall(extract_dir)
-                # 已经判定清单不可信、正在走逐文件比对时就不必再复核了
-                if manifest_files and not getattr(self, "_forced_fs_scan",
-                                                  False):
-                    bad = _manifest_mismatches(content_root, manifest_files)
-                    if bad:
-                        self._manifest_mismatch = bad
-                        self.ui_post(self._on_manifest_mismatch)
+                _n, _bad = _extract_all_members(
+                    update_zip, extract_dir,
+                    manifest_files
+                    if not getattr(self, "_forced_fs_scan", False) else None)
+                if _bad:
+                    self._manifest_mismatch = _bad
+                    self.ui_post(self._on_manifest_mismatch)
             except NotADirectoryError as e:  # noqa: BLE001
                 self._extract_error.append(
                     "更新包结构异常（同名文件与目录冲突）："
@@ -1296,10 +1292,6 @@ class PlayerView(ctk.CTkFrame):
         if not reuse:
             threading.Thread(target=_extract_all, daemon=True).start()
 
-        pack, err = parse_mrpack(update_zip)
-        recorded = eapack_mod.read_hashes(update_zip) or {}
-        manifest_files = recorded.get("files") or {}
-        folder_hashes = recorded.get("folders") or {}
         pack_files = ({n[len(prefix):] for n in zip_names
                        if n.startswith(prefix)} if prefix
                       else set(zip_names))
@@ -1470,6 +1462,8 @@ class PlayerView(ctk.CTkFrame):
                 whitelist=final_wl,
                 index_hashes=index_hashes,
                 threads=hash_threads, progress=_progress,
+                # 目录哈希只是"这个目录变没变"的布尔判据，不参与逐文件
+                # 目标哈希（R-1 的毒化在文件层），重扫时照样可以传
                 folder_hashes=folder_hashes)
         self.diff = diff
 
@@ -1746,10 +1740,16 @@ class PlayerView(ctk.CTkFrame):
         self._note_smart_exclude(strategies)
         self._take_strategy_snapshot()
 
+        _will_rescan = (getattr(self, "_needs_rescan", False)
+                        and getattr(self, "_scan_used_fast", False))
         self.log.log("info",
-                     f"比对完成：+{len(self.diff.added)} "
-                     f"~{len(self.diff.modified)} "
-                     f"-{len(self.diff.deleted)}")
+                     (f"清单比对完成（+{len(self.diff.added)} "
+                      f"~{len(self.diff.modified)} "
+                      f"-{len(self.diff.deleted)}），正在复核…")
+                     if _will_rescan else
+                     (f"比对完成：+{len(self.diff.added)} "
+                      f"~{len(self.diff.modified)} "
+                      f"-{len(self.diff.deleted)}"))
 
         if self._resume_after_scan:
             self._resume_after_scan = False
@@ -1794,6 +1794,7 @@ class PlayerView(ctk.CTkFrame):
             return
 
     def _on_error(self, msg: str):
+        self._needs_rescan = False
         self.log.log("error", msg)
         self._set_hint("比对失败")
         try:
@@ -1844,7 +1845,6 @@ class PlayerView(ctk.CTkFrame):
 
         self._phase = _PHASE_DOWNLOAD
         self._abort_flag = False
-        self._show_cancel_button()
         # 下载阶段就锁定：否则"处理中"还能拖入新包/清空整合包，
         # 而下载线程仍持有旧目录（会用错的包执行更新）
         self.app_state.lock()
@@ -1853,6 +1853,9 @@ class PlayerView(ctk.CTkFrame):
         started = time()
         self._phase_started_at = started
         self._set_button_state(_BTN_BUSY)
+        # 必须在 BUSY 之后：BUSY 会把主按钮设成"处理中…"并把 command
+        # 复位成 _on_main_click；下载阶段这里再改成「取消下载」
+        self._show_cancel_button()
         self.progress.set_file_progress(0.0)
         self.progress.set(0.0, animate=False)
 

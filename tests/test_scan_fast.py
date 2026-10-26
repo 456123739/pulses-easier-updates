@@ -248,20 +248,32 @@ class TestManifestSafety(unittest.TestCase):
             pack_files={"mods/a.jar", "mods/kept.jar"})
         self.assertIsNone(fast, "漏记的文件会让它永远装不上，必须回退")
 
-    def test_manifest_mismatch_detected_after_extract(self):
-        from app.ui.player_view import _manifest_mismatches
-        root = self.tmp / "root"
-        _write(root / "mods" / "a.jar", "NEW")
-        good = "c1b7a0bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        bad = _manifest_mismatches(
-            root, {"mods/a.jar": {"algo": "sha1", "value": "0" * 40}})
-        self.assertEqual(bad, ["mods/a.jar"])
+    def test_manifest_mismatch_detected_while_extracting(self):
+        """解压的同时按清单复核（零额外 IO），陈旧哈希必须被抓出来。"""
         import hashlib
+        import zipfile
+        from app.ui.player_view import _extract_all_members
+        src = self.tmp / "z.zip"
+        with zipfile.ZipFile(src, "w") as zf:
+            zf.writestr("mods/a.jar", "NEW")
+            zf.writestr("mods/b.jar", "SAME")
+        dest = self.tmp / "ex"
+        dest.mkdir()
+
         real = hashlib.sha1(b"NEW").hexdigest()
-        self.assertEqual(
-            _manifest_mismatches(
-                root, {"mods/a.jar": {"algo": "sha1", "value": real}}),
-            [])
+        stale = "0" * 40
+        manifest = {"mods/a.jar": {"algo": "sha1", "value": stale},
+                    "mods/b.jar": {"algo": "sha1",
+                                   "value": hashlib.sha1(b"SAME").hexdigest()}}
+        count, bad = _extract_all_members(src, dest, manifest)
+        self.assertEqual(count, 2)
+        self.assertEqual(bad, ["mods/a.jar"])
+        self.assertEqual((dest / "mods" / "a.jar").read_text(), "NEW")
+
+        # 哈希都对时不该报
+        manifest["mods/a.jar"]["value"] = real
+        _cnt, bad2 = _extract_all_members(src, dest, manifest)
+        self.assertEqual(bad2, [])
 
 
 class TestPathSafety(unittest.TestCase):

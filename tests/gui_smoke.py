@@ -605,6 +605,53 @@ def main() -> int:
               f"{len(shown)}/{len(kids)}")
         return True
 
+    def step_cancel():
+        """下载阶段主按钮必须能取消（真实 _start_download_and_apply 顺序）。"""
+        print("\n── 13) 下载中可以取消 ──")
+        from app.core.downloader import DownloadResult, DownloadTask
+
+        cache = tmp / "dl_cache"
+        cache.mkdir(exist_ok=True)
+        pv._download_tasks = [DownloadTask(
+            rel_path="mods/slow.jar", urls=["http://127.0.0.1:9/slow.jar"],
+            sha1="", sha256="", file_size=10)]
+        pv._cache_root = cache
+        pv._phase = "idle"
+
+        engine = pv._engine_module()
+        orig = engine.download_files
+
+        def fake_dl(tasks, **kw):
+            aborted = kw.get("should_abort") or (lambda: True)
+            t0 = time.time()
+            while not aborted() and time.time() - t0 < 5:
+                time.sleep(0.02)
+            return [DownloadResult(t, False, None, "用户中止",
+                                   aborted=True) for t in tasks]
+
+        engine.download_files = fake_dl
+        try:
+            pv._start_download_and_apply()
+            _pump(app, 0.4)
+            text = str(pv.main_btn.cget("text"))
+            state = str(pv.main_btn.cget("state"))
+            wired = (getattr(pv.main_btn, "_command", None)
+                     == pv._cancel_download)
+            check(text == "取消下载", "下载中主按钮是「取消下载」", text)
+            check(state == "normal", "取消按钮可以点", state)
+            check(wired, "按钮绑定的是取消动作")
+
+            pv._cancel_download()
+            check(pv._abort_flag is True, "点击后置起了中止标志")
+            _pump(app, 3.0, lambda: pv._phase == "idle")
+            check(pv._phase == "idle", "取消后回到空闲状态", pv._phase)
+            _pump(app, 1.5, lambda: str(pv.main_btn.cget("state")) != "disabled")
+            check(str(pv.main_btn.cget("state")) != "disabled",
+                  "取消后按钮恢复可点", str(pv.main_btn.cget("state")))
+        finally:
+            engine.download_files = orig
+        return True
+
     def step_motion():
         """窗口/弹窗的入场与退场动画（真实 Tk 上量 alpha 与尺寸）。"""
         print("\n── 11) 窗口 / 弹窗动画 ──")
@@ -673,7 +720,7 @@ def main() -> int:
 
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,
              step_shot, step_toggles, step_switch, step_process, step_prefs,
-             step_motion, step_anim_root]
+             step_motion, step_anim_root, step_cancel]
 
     def tick():
         try:
