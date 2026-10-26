@@ -544,6 +544,211 @@ def diff_packs_parallel(
     return result
 
 
+
+# ----------------------------------------------------------------------
+# 清单级比对（不需要新包已解压）
+# ----------------------------------------------------------------------
+def _walk_rel_files(root: Path) -> dict[str, Path]:
+    """递归列出本地文件（相对路径 → 绝对路径），跳过本地专属文件。"""
+    out: dict[str, Path] = {}
+    if not root.is_dir():
+        return out
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not is_local_only_dir(d)]
+        for name in filenames:
+            if is_local_only_name(name):
+                continue
+            p = Path(dirpath) / name
+            try:
+                rel = p.relative_to(root).as_posix()
+            except OSError:
+                continue
+            out[rel] = p
+    return out
+
+
+def diff_from_manifest(
+    old_root: Path,
+    manifest_files: dict[str, dict],
+    index_hashes: dict[str, dict] | None = None,
+    folder_hashes: dict[str, str] | None = None,
+    whitelist: list[str] | None = None,
+    compare_root: Path | None = None,
+    pack_tops: set[str] | None = None,
+    threads: int = 16,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> DiffResult | None:
+    """
+    只用**更新包自带的哈希清单**比对，不必等解压完成。
+
+    清单来自 `.eapack` 里的 `ea_hashes.json`（导出时算好的每个文件哈希）：
+      · `manifest_files`：白名单目录下的文件 → 逐文件比哈希（不用读新包文件）
+      · `folder_hashes` ：非白名单顶层目录的内容哈希 → 只算本地一侧
+      · `index_hashes`  ：modrinth.index.json 声明的下载文件
+
+    `compare_root` 是"已经解压出来的那部分"（只需根目录散文件，很快），
+    用来处理根目录文件；目录部分完全走清单。
+
+    返回 None 表示"清单不足以判断"（例如某个既有目录没有记录哈希），
+    调用方应退回"等解压完成再逐文件比"的老路径 —— 宁可慢，不能错。
+    """
+    old_root = Path(old_root)
+    wl = list(whitelist) if whitelist else list(DEFAULT_WHITELIST)
+    wl_top = {p.split("/", 1)[0] for p in wl if p}
+    idx = index_hashes or {}
+    f_hashes = {str(k): str(v) for k, v in (folder_hashes or {}).items()
+                if isinstance(v, str) and v}
+    index_by_top, _index_deep, index_root_files = _split_index_by_top(idx)
+
+    # 清单按顶层目录归档（白名单目录是文件级，其它目录用 folder_hashes）
+    per_top: dict[str, dict[str, tuple[str, str]]] = {}
+    for rel, entry in (manifest_files or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        algo = str(entry.get("algo", "") or "")
+        value = str(entry.get("value", "") or "")
+        if not algo or not value:
+            continue
+        rel_s = str(rel).replace("\\", "/").strip("/")
+        if not rel_s or "/" not in rel_s:
+            continue                     # 根目录文件单独处理
+        top, sub = rel_s.split("/", 1)
+        per_top.setdefault(top, {})[sub] = (algo, value)
+
+    # 顶层目录 = 包里的目录（调用方给的）+ 白名单文件清单 + index 清单
+    # + 非白名单目录哈希清单
+    tops = set(per_top) | set(index_by_top) | set(f_hashes)
+    if pack_tops:
+        tops |= set(pack_tops)
+    for top in tops:
+        if top in wl_top:
+            continue
+        # 非白名单目录：既没有记录哈希、包里又确实有这个目录 → 判不了
+        if top not in f_hashes and (top in (pack_tops or set())
+                                    or (old_root / top).is_dir()):
+            return None
+
+    result = DiffResult()
+    names = sorted(tops)
+    total = max(1, len(names))
+
+    def _p(done: int):
+        if progress:
+            try:
+                progress(done, total, "merge")
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    for i, top in enumerate(names):
+        local_top = old_root / top
+        has_local = local_top.is_dir()
+        entries = per_top.get(top, {})
+        idx_entries = index_by_top.get(top, {})
+
+        if top not in wl_top:
+            # 非白名单：整目录级（和文件系统比对一致）
+            recorded = f_hashes.get(top, "")
+            if not has_local:
+                result.added.append(Change(Path(top), ChangeKind.ADDED,
+                                           is_folder_level=True))
+            elif recorded:
+                if folder_hash(local_top) != recorded:
+                    result.modified.append(
+                        Change(Path(top), ChangeKind.MODIFIED,
+                               is_folder_level=True))
+            else:
+                return None
+            _p(i + 1)
+            continue
+
+        # 白名单目录：逐文件（递归比，粒度比"子目录整体"更细也更准）
+        new_map: dict[str, tuple[str, str]] = dict(entries)
+        for full, hs in idx_entries.items():
+            sub = full[len(top) + 1:]
+            if sub and sub not in new_map:
+                algo_h, hash_v = _pick_hash(hs)
+                if hash_v:
+                    new_map[sub] = (algo_h or "sha1", hash_v)
+
+        if not has_local and not new_map:
+            _p(i + 1)
+            continue
+
+        local_map = _walk_rel_files(local_top)
+        to_compare: list[tuple[str, Path, str, str]] = []
+        for sub in sorted(new_map):
+            algo, value = new_map[sub]
+            local = local_map.get(sub)
+            if local is None:
+                result.added.append(
+                    Change(Path(top) / sub, ChangeKind.ADDED))
+            else:
+                to_compare.append((f"{top}/{sub}", local, value, algo))
+
+        for sub in sorted(set(local_map) - set(new_map)):
+            result.deleted.append(
+                Change(Path(top) / sub, ChangeKind.DELETED))
+
+        if to_compare:
+            counter = {"n": 0}
+            lock = threading.Lock()
+
+            def _one(item):
+                full_rel, path, target_h, algo = item
+                return full_rel, _hash_file(path, algo), target_h
+
+            with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+                futures = [pool.submit(_one, it) for it in to_compare]
+                for fut in futures:
+                    try:
+                        full_rel, local_h, target_h = fut.result()
+                    except Exception:  # noqa: BLE001, S112
+                        continue
+                    with lock:
+                        counter["n"] += 1
+                        d = counter["n"]
+                    if progress and d % 20 == 0:
+                        try:
+                            progress(d, len(to_compare), "merge")
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+                    if local_h != target_h:
+                        result.modified.append(
+                            Change(Path(full_rel), ChangeKind.MODIFIED))
+        _p(i + 1)
+
+    # 根目录散文件：compare_root 里是"先解压出来的那部分"，体量很小
+    if compare_root is not None:
+        root_old = old_root
+        old_files = {rel.name for rel in _root_files(root_old)}
+        for rel in _root_files(Path(compare_root)):
+            name = rel.name
+            target_h: str | None = None
+            algo = "sha1"
+            idx_entry = index_root_files.get(name)
+            if idx_entry is not None:
+                algo_h, hash_v = _pick_hash(idx_entry)
+                if hash_v:
+                    target_h, algo = hash_v, (algo_h or "sha1")
+            if target_h is None:
+                ent = (manifest_files or {}).get(name)
+                if isinstance(ent, dict) and ent.get("value"):
+                    target_h = str(ent["value"])
+                    algo = str(ent.get("algo") or "sha1")
+            if target_h is None:
+                target_h = _hash_file(Path(compare_root) / rel, "sha1")
+                algo = "sha1"
+            if name not in old_files:
+                result.added.append(Change(rel, ChangeKind.ADDED))
+                continue
+            local_h = _hash_file(root_old / name, algo)
+            if not target_h or not local_h or local_h != target_h:
+                result.modified.append(Change(rel, ChangeKind.MODIFIED))
+        # 根目录散文件**不做删除判定**：与文件系统比对保持一致
+        # （包没带的根文件一律保留，避免误删玩家自己的文件）
+
+    return result
+
 def diff_packs(old_root: Path, new_root: Path,
                whitelist: list[str] | None = None,
                index_hashes: dict[str, dict] | None = None,

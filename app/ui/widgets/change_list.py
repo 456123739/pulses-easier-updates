@@ -90,6 +90,7 @@ class ChangeList(ctk.CTkFrame):
         self._checked: dict[str, bool] = {}
         self._strategies: dict[str, str] = {}
         self._expanded: set[str] = set()
+        self._idle_collapsed = True
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -188,7 +189,10 @@ class ChangeList(ctk.CTkFrame):
         for ch in diff.deleted:
             groups[ch.rel_path.parts[0] if ch.rel_path.parts else ""].append(ch)
 
-        row = 0
+        # 先把"整组都会被跳过"的分出来：它们折叠到「不更新」里，
+        # 不然一屏全是灰条目，用户会以为还有一堆要处理
+        active: list[tuple] = []
+        idle: list[tuple] = []
         for top in sorted(groups):
             changes = groups[top]
             a = sum(1 for c in changes if c.kind == ChangeKind.ADDED)
@@ -204,19 +208,65 @@ class ChangeList(ctk.CTkFrame):
                              if self._marks_ready()
                              and _will_skip(c, self._checked,
                                             self._strategies))
+            entry = (top, changes, a, m, d, is_expandable, expanded,
+                     skip_count)
+            if self._marks_ready() and skip_count >= len(changes):
+                idle.append(entry)
+            else:
+                active.append(entry)
 
-            smart = (self._marks_ready()
-                     and resolve_strategy(self._strategies, top)
-                     == Strategy.SMART_EXCLUDE)
-            self._add_group_row(row, top, a, m, d,
-                                is_expandable, expanded, skip_count,
-                                smart=smart)
-            row += 1
+        row = 0
+        for entry in active:
+            row = self._render_group(row, entry)
 
-            if expanded and is_expandable:
-                for ch in changes:
-                    self._add_sub_row(row, ch)
-                    row += 1
+        if idle:
+            total_items = sum(len(e[1]) for e in idle)
+            row = self._add_idle_header(row, len(idle), total_items)
+            if not self._idle_collapsed:
+                for entry in idle:
+                    row = self._render_group(row, entry,
+                                             force_collapsed=True)
+        return
+
+    def _render_group(self, row: int, entry: tuple,
+                      force_collapsed: bool = False) -> int:
+        (top, changes, a, m, d, is_expandable, expanded,
+         skip_count) = entry
+        expanded = expanded and not force_collapsed
+        smart = (self._marks_ready()
+                 and resolve_strategy(self._strategies, top)
+                 == Strategy.SMART_EXCLUDE)
+        self._add_group_row(row, top, a, m, d,
+                            is_expandable, expanded, skip_count,
+                            smart=smart)
+        row += 1
+        if expanded and is_expandable:
+            for ch in changes:
+                self._add_sub_row(row, ch)
+                row += 1
+        return row
+
+    def _add_idle_header(self, row: int, n_groups: int, n_items: int) -> int:
+        """「不更新（N 组 · M 项）」折叠标题：点一下展开看具体条目。"""
+        item = ctk.CTkFrame(self.scroll, fg_color=Color.TRANSPARENT)
+        item.grid(row=row, column=0, sticky="ew", pady=(6, 0))
+        item.grid_columnconfigure(1, weight=1)
+
+        arrow = ctk.CTkLabel(
+            item, text="▶" if self._idle_collapsed else "▼",
+            font=(Font.FAMILY, 10), text_color=Color.TEXT_MUTED,
+            fg_color=Color.TRANSPARENT, width=12, anchor="w")
+        arrow.grid(row=0, column=0, sticky="w", padx=(2, 0))
+
+        label = ctk.CTkLabel(
+            item, text=f"不更新（{n_groups} 组 · {n_items} 项）",
+            font=Font.SMALL, text_color=Color.TEXT_MUTED,
+            fg_color=Color.TRANSPARENT, anchor="w")
+        label.grid(row=0, column=1, sticky="w", padx=(2, 0))
+
+        for w in (item, arrow, label):
+            w.bind("<Button-1>", lambda _e: self._toggle_idle())
+        return row + 1
 
     def _marks_ready(self) -> bool:
         return bool(self._checked) or bool(self._strategies)
@@ -333,6 +383,10 @@ class ChangeList(ctk.CTkFrame):
                          text_color=Color.TEXT_MUTED,
                          fg_color=Color.TRANSPARENT, anchor="e")\
                 .grid(row=0, column=2, sticky="e", padx=(0, 6))
+
+    def _toggle_idle(self):
+        self._idle_collapsed = not self._idle_collapsed
+        self._rebuild()
 
     def _toggle_group(self, top: str):
         if top in self._expanded:

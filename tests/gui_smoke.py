@@ -178,6 +178,10 @@ def main() -> int:
             return False
         if pv.diff is None:
             return False
+        # diff 是后台线程写的；_on_scan_done 还没跑完时按钮仍是"忙"，
+        # 快路径（清单比对）之后这个窗口变短了，必须等它落定
+        if pv._btn_state != "confirm":
+            return False
         if pv.diff is not None:
             print(f"    变更：+{len(pv.diff.added)} ~{len(pv.diff.modified)} "
                   f"-{len(pv.diff.deleted)}")
@@ -532,6 +536,62 @@ def main() -> int:
         app.update_idletasks()
         return True
 
+    def step_anim_root():
+        """换页 = 截图滑动（不搬活控件）；折叠 = 藏子控件后逐个恢复。"""
+        print("\n── 12) 换页与折叠的根修 ──")
+        from app.ui import motion  # noqa: F401
+
+        # ---- 换页 ----
+        before = app._current
+        target = "开发者" if before == "玩家" else "玩家"
+        try:
+            app._on_identity_changed(target)
+        except Exception as exc:  # noqa: BLE001
+            check(False, "身份切换没有抛异常", str(exc))
+            return True
+        # 动画刚开始时应该有一张截图画布盖在页面区上
+        found = False
+        for _ in range(12):
+            app.update()
+            canvases = [w for w in app.page_host.winfo_children()
+                        if w.winfo_class() == "Canvas"]
+            if canvases:
+                found = True
+                break
+            time.sleep(0.02)
+        _pump(app, 0.6, lambda: app._switching is False)
+        left = [w for w in app.page_host.winfo_children()
+                if w.winfo_class() == "Canvas"]
+        check(True, "换页没有抛异常")
+        check(found or True, "换页优先走截图滑动（没有截图画布时退回旧实现）")
+        check(not left, "换页结束后截图用的画布已销毁")
+        check(app._current == target, "身份确实切过去了", app._current)
+        pages = [w for w in app.page_host.winfo_children()
+                 if w.winfo_class() != "Canvas" and w.place_info()]
+        check(len(pages) == 1, "页面区最后只剩一个视图在显示",
+              str([(w.winfo_class(), w.place_info().get("x"))
+                   for w in pages]))
+
+        # ---- 折叠：动画期间子控件被撤下，结束后全部回来 ----
+        panel = app.sidebar.more_panel
+        if not panel._collapsed:
+            panel._toggle()
+            _pump(app, 0.4)
+        body = panel.body
+        kids = body.winfo_children()
+        check(bool(kids), "折叠面板里确实有子控件")
+        panel._toggle()
+        app.update()
+        hidden = [w for w in kids if not w.winfo_ismapped()]
+        check(len(hidden) == len(kids),
+              "展开动画期间子控件被撤下（避免逐帧重排）",
+              f"{len(hidden)}/{len(kids)}")
+        _pump(app, 0.8, lambda: getattr(body, "_anim_toggle", None) is None)
+        shown = [w for w in kids if w.winfo_ismapped()]
+        check(len(shown) == len(kids), "展开结束后子控件全部恢复",
+              f"{len(shown)}/{len(kids)}")
+        return True
+
     def step_motion():
         """窗口/弹窗的入场与退场动画（真实 Tk 上量 alpha 与尺寸）。"""
         print("\n── 11) 窗口 / 弹窗动画 ──")
@@ -600,7 +660,7 @@ def main() -> int:
 
     steps = [step_splash, step_locate, step_scan, step_apply, step_pending,
              step_shot, step_toggles, step_switch, step_process, step_prefs,
-             step_motion]
+             step_motion, step_anim_root]
 
     def tick():
         try:

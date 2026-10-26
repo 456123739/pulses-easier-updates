@@ -55,26 +55,29 @@ DEFAULT_DOWNLOAD_OPTIONS = {
     "mirror_first": 1,
     # 临时追加的镜像前缀（分号分隔）；内置镜像表见 app/core/mirrors.py
     "mirror_hosts": "",
-    # 两级槽位池
-    "multi_slots": 16,
+    # 并发池：4 起步，按总速度自动扩到 multi_slots 上限
+    "multi_slots": 8,
+    "multi_slots_min": 4,
+    "auto_slots": 1,
+    "auto_slots_interval": 2.5,
     # 文件内分片
     "part_threads": 4,
     "max_connections": 128,
     # 超时与看门狗
     "connect_timeout": 10,
     "read_idle_timeout": 20,
-    "per_url_timeout": 90,
-    "stall_timeout": 10,
-    # 低速判定
-    "min_speed_bps": 10240,
+    "per_url_timeout": 0,        # 0=不限（只按"卡死"判定）
+    "stall_timeout": 15,
+    # 低速判定：0 = 不按速度踢文件（慢 ≠ 卡死）
+    "min_speed_bps": 0,
     "speed_window": 5.0,
     # 重试
     "retry_same_url": 1,
     "retry_backoff_ms": 500,
     # 单线程模式放宽参数
-    "single_url_timeout": 180,
-    "single_stall_timeout": 30,
-    "single_min_speed_bps": 1024,
+    "single_url_timeout": 0,
+    "single_stall_timeout": 40,
+    "single_min_speed_bps": 0,
     # 兼容旧配置
     "file_threads": 16,
     "downgrade_after": 2,
@@ -149,10 +152,11 @@ DOWNLOAD_OPTION_META = [
      "临时追加的镜像前缀（分号分隔），只在「镜像优先」打开时生效。",
      ("内置镜像表在 app/core/mirrors.py，可用 python scripts/mirror_check.py "
       "实测哪家快；这里填的前缀会排在表前面，例如 https://cdn.example.com。")),
-    ("multi_slots", "并行下载槽位",
-     "同时并行下载几个文件。每个槽位跑一个文件（大文件会自动分片）。",
-     ("默认 16：现代宽带上并行拉多个文件明显更快。"
-      "网络经常卡、或想省内存，可以降到 4~8。")),
+    ("multi_slots", "并行下载槽位（上限）",
+     ("同时并行下载几个文件。默认从 4 个起步，"
+      "只要总速度还在涨就自动往上加，加到上限或带宽吃满为止。"),
+     ("默认上限 8。网络经常卡、或想省内存，可以降到 4。"
+      "填 0/1 会退化成单文件串行。")),
     ("part_threads", "单文件分片线程数",
      "对大于 4 MB 的文件，拆成几段同时下载。",
      ("默认 4；网络不稳定时调到 2 更稳，"

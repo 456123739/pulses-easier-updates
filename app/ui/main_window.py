@@ -15,7 +15,7 @@ from ..core import database as db
 from ..core import resume as resume_mod
 from ..core.state import AppState
 from ..theme import Anim, Color, Size
-from ..utils.animation import slide_pages
+from ..utils.animation import slide_pages, snapshot_slide
 from . import motion, win11
 from .developer_view import DeveloperView
 from .player_view import PlayerView
@@ -773,22 +773,8 @@ class MainWindow(ctk.CTk):
         滑动期间把两个视图里的**文本控件**（更新日志编辑区、日志区）盖上
         一块纯色板：Tk 移动 Text 控件会"拉丝"，盖住之后滑动的只是色板。
         """
-        suspended = []
-        veiled = []
-        for view in (old, new):
-            for obj in self._find_transition_veils(view):
-                try:
-                    obj.set_transition_veil(True)
-                    veiled.append(obj)
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            editor = self._find_markdown_editor(view)
-            if editor is not None and hasattr(editor, "_suspend_render"):
-                try:
-                    editor._suspend_render()
-                    suspended.append(editor)
-                except Exception:  # noqa: BLE001, S110
-                    pass
+        suspended: list = []
+        veiled: list = []
 
         self._switch_finishing = False
 
@@ -845,6 +831,33 @@ class MainWindow(ctk.CTk):
                 Anim.SWITCH_MS + 200, _finish)
         except Exception:  # noqa: BLE001
             self._switch_guard = None
+
+        # 首选：把旧页截成一张图滑走（页面上的控件一个都不动 → 不会拉丝）
+        fast_ok = False
+        try:
+            fast_ok = snapshot_slide(self.page_host, old, new,
+                                     duration_ms=Anim.SWITCH_MS,
+                                     on_done=_finish)
+        except Exception:  # noqa: BLE001, S110
+            fast_ok = False
+        if fast_ok:
+            return
+
+        # 截图不可用：退回"盖色板 + 搬页面"（会尽力遮住会拉丝的控件）
+        for view in (old, new):
+            for obj in self._find_transition_veils(view):
+                try:
+                    obj.set_transition_veil(True)
+                    veiled.append(obj)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            editor = self._find_markdown_editor(view)
+            if editor is not None and hasattr(editor, "_suspend_render"):
+                try:
+                    editor._suspend_render()
+                    suspended.append(editor)
+                except Exception:  # noqa: BLE001, S110
+                    pass
 
         slide_pages(self.page_host, old, new, direction="left",
                     duration_ms=Anim.SWITCH_MS,

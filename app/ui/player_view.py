@@ -34,7 +34,8 @@ from ..core import resume as resume_mod
 from ..core import transfer
 from ..core.apply_rules import is_checked as _rule_is_checked
 from ..core.apply_rules import resolve_strategy
-from ..core.differ import DiffResult, diff_packs_parallel
+from ..core.differ import (DiffResult, diff_from_manifest,
+                           diff_packs_parallel)
 from ..core.downloader import DownloadTask
 from ..core.mrpack import (
     index_top_folders,
@@ -86,6 +87,69 @@ _PHASE_SCAN = "scan"
 _PHASE_DOWNLOAD = "download"
 _PHASE_APPLY = "apply"
 _PHASE_MANUAL = "manual"      # 等待用户手动补入失败文件
+
+
+# ----------------------------------------------------------------------
+# 更新包布局（不解压就能知道内容根在哪）
+# ----------------------------------------------------------------------
+_META_NAMES = {
+    "modrinth.index.json", "ea_settings.json", "ea_manifest.json",
+    "ea_hashes.json", "changelog.md", "CHANGELOG.md", "README.md",
+}
+
+
+def _zip_layout(zip_path: Path) -> tuple[str, bool, list[str]]:
+    """
+    返回 (内容根前缀, 是否标准 .eapack 布局, 内容根下的顶层目录名)。
+
+    标准布局 = 所有内容都在 `overrides/` 下，包级元数据散在 zip 根。
+    这样不必先全部解压就能知道"内容根"在哪，可以立刻开始比对。
+    """
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = [n.replace("\\", "/") for n in zf.namelist()
+                     if n and not n.endswith("/")]
+    except Exception:  # noqa: BLE001
+        return "", False, []
+    tops = {n.split("/", 1)[0] for n in names}
+    standard = bool(tops) and "overrides" in tops and all(
+        t == "overrides" or t in _META_NAMES for t in tops)
+    prefix = "overrides/" if standard else ""
+    dirs: set[str] = set()
+    for n in names:
+        rest = n[len(prefix):] if prefix and n.startswith(prefix) else (
+            "" if prefix else n)
+        if not rest or "/" not in rest:
+            continue
+        dirs.add(rest.split("/", 1)[0])
+    return prefix, standard, sorted(dirs)
+
+
+def _extract_root_members(zip_path: Path, dest: Path, prefix: str) -> int:
+    """只解压内容根下的散文件（通常只有几个小的），返回解压个数。"""
+    count = 0
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename.replace("\\", "/")
+            if prefix:
+                if not name.startswith(prefix):
+                    continue
+                rest = name[len(prefix):]
+            else:
+                rest = name
+            if not rest or "/" in rest:
+                continue
+            target = dest / rest
+            try:
+                with zf.open(info) as src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
+                count += 1
+            except Exception:  # noqa: BLE001, S110
+                pass
+    return count
 
 
 class PlayerView(ctk.CTkFrame):
@@ -936,6 +1000,26 @@ class PlayerView(ctk.CTkFrame):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _wait_extracted(self, timeout: float = 900.0) -> bool:
+        """等后台解压结束（下载/应用前必须等，比对阶段不用）。"""
+        ev = getattr(self, "_extract_done", None)
+        if ev is None or ev.is_set():
+            return True
+        try:
+            self.after(0, self.log.log, "info", "正在解压更新包，稍等…")
+        except Exception:  # noqa: BLE001, S110
+            pass
+        ok = ev.wait(timeout)
+        errs = getattr(self, "_extract_error", None) or []
+        if errs:
+            try:
+                self.after(0, self.log.log, "error",
+                           f"解压更新包失败：{errs[0]}")
+            except Exception:  # noqa: BLE001, S110
+                pass
+            return False
+        return ok
+
     def _recover_apply_leftovers(self):
         """就地自检（幂等、便宜）：回滚没做完的目录替换、删搬运临时文件。"""
         if self.pack_info is None:
@@ -969,23 +1053,56 @@ class PlayerView(ctk.CTkFrame):
             raise RuntimeError("无法创建临时工作目录")
         extract_dir = Path(self._temp_dir.name)
 
-        self.after(0, self._set_hint, "正在解压更新包…")
-        with zipfile.ZipFile(update_zip, "r") as zf:
-            zf.extractall(extract_dir)
+        self.after(0, self._set_hint, "正在读更新包…")
 
-        content_root, is_fallback = locate_content_root(extract_dir)
-        self._overrides_root = content_root
-        # 老格式/裸 ZIP：内容根 = 解压根目录，包自身的元数据文件必须被排除
-        # （否则会被当成更新内容写进玩家整合包根目录）
-        self._overrides_fallback = is_fallback
+        # ── 布局：内容根前缀（"overrides/" 还是根）、顶层目录名 ──
+        prefix, standard, zip_tops = _zip_layout(update_zip)
+
+        # ── 先解压根目录散文件（很小），让比对能覆盖 options.txt 一类 ──
+        content_root = (extract_dir / prefix) if prefix else extract_dir
+        try:
+            _extract_root_members(update_zip, content_root, prefix)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"解压更新包失败：{e}")
+
+        # ── 其余文件后台解压：比对不等它，应用/下载前再等 ──
+        self._extract_done = threading.Event()
+        self._extract_error: list[str] = []
+
+        def _extract_all():
+            try:
+                with zipfile.ZipFile(update_zip, "r") as zf:
+                    zf.extractall(extract_dir)
+            except Exception as e:  # noqa: BLE001
+                self._extract_error.append(str(e))
+            finally:
+                self._extract_done.set()
+
+        threading.Thread(target=_extract_all, daemon=True).start()
 
         pack, err = parse_mrpack(update_zip)
+        recorded = eapack_mod.read_hashes(update_zip) or {}
+        manifest_files = recorded.get("files") or {}
+        folder_hashes = recorded.get("folders") or {}
+        fast_diff = bool(manifest_files) and standard
+
+        if not fast_diff:
+            # 包没带哈希清单（或结构不标准）：只能等解压完再逐文件比
+            self.after(0, self._set_hint, "正在解压更新包…")
+            self._extract_done.wait()
+            if self._extract_error:
+                raise RuntimeError(f"解压更新包失败：{self._extract_error[0]}")
+            content_root, is_fallback = locate_content_root(extract_dir)
+            prefix = ""
+            self._overrides_root = content_root
+            self._overrides_fallback = is_fallback
+
         merged: list[dict] = []
         index_tops: set[str] = set()
         if err or pack is None:
-            self._new_root = self._overrides_root
-            folders = self._top_folders(self._overrides_root)
-            file_items = self._root_file_items(self._overrides_root)
+            self._new_root = content_root
+            folders = list(zip_tops)
+            file_items = self._root_file_items(content_root)
             mapping = {f: self._default_strategy_for_top(f, False, pack_kind)
                        for f in folders}
             mapping.update({f: self._default_strategy_for_top(f, True,
@@ -997,8 +1114,9 @@ class PlayerView(ctk.CTkFrame):
             merged = merge_files(pack)
             index_tops = index_top_folders(pack)
             self._new_root = extract_dir
-            folders = sorted(set(top_level_folders(merged)) | index_tops)
-            file_items = self._root_file_items(self._overrides_root)
+            folders = sorted(set(top_level_folders(merged)) | index_tops
+                             | set(zip_tops))
+            file_items = self._root_file_items(content_root)
             mapping = {f: self._default_strategy_for_top(f, False, pack_kind)
                        for f in folders}
             mapping.update({f: self._default_strategy_for_top(f, True,
@@ -1008,6 +1126,14 @@ class PlayerView(ctk.CTkFrame):
                        self._apply_strategies(m, fs, fi))
 
         self._merged = merged
+
+        if fast_diff:
+            self._overrides_root = content_root
+            self._overrides_fallback = False
+            self.after(0, self._set_hint,
+                       "正在比对（解压同时进行）…")
+        else:
+            self.after(0, self._set_hint, "正在比对…")
 
         user_wl: list[str] = []
         try:
@@ -1090,13 +1216,44 @@ class PlayerView(ctk.CTkFrame):
             hash_threads = 16
         hash_threads = max(1, min(64, hash_threads))
 
-        diff = diff_packs_parallel(
-            pack_info.path, compare_root,
-            whitelist=final_wl,
-            index_hashes=index_hashes,
-            threads=hash_threads, progress=_progress,
-            folder_hashes=folder_hashes)
+        diff = None
+        if fast_diff:
+            # 快路径：清单已含所有文件哈希 → 立刻比对，不用等解压
+            diff = diff_from_manifest(
+                pack_info.path, manifest_files,
+                index_hashes=index_hashes,
+                folder_hashes=folder_hashes,
+                whitelist=final_wl,
+                compare_root=compare_root,
+                pack_tops=set(zip_tops) | index_tops,
+                threads=hash_threads, progress=_progress)
+            if diff is None:
+                self.after(0, self._set_hint, "正在解压更新包（清单不完整）…")
+
+        if diff is None:
+            # 兜底/老包：等解压完成，按文件系统逐文件比
+            if not self._extract_done.is_set():
+                self.after(0, self._set_hint, "正在解压更新包…")
+            self._extract_done.wait()
+            if self._extract_error:
+                raise RuntimeError(f"解压更新包失败：{self._extract_error[0]}")
+            try:
+                content_root2, fb = locate_content_root(extract_dir)
+                compare_root = content_root2
+                self._overrides_root = content_root2
+                self._overrides_fallback = fb
+            except Exception:  # noqa: BLE001, S110
+                pass
+            self.after(0, self._set_hint, "正在比对…")
+            diff = diff_packs_parallel(
+                pack_info.path, compare_root,
+                whitelist=final_wl,
+                index_hashes=index_hashes,
+                threads=hash_threads, progress=_progress,
+                folder_hashes=folder_hashes)
         self.diff = diff
+
+
 
     @staticmethod
     def _top_folders(root: Path) -> list[str]:
@@ -1317,6 +1474,11 @@ class PlayerView(ctk.CTkFrame):
                 mapping[f] = self._default_strategy_for_top(f, is_file)
 
         all_items = list(folders) + sorted(file_items)
+        # 新包 / 新一次比对：先清掉上一次的"无需更新"判定
+        try:
+            self.strategy_table.set_change_counts({})
+        except Exception:  # noqa: BLE001, S110
+            pass
         self.strategy_table.set_folders(all_items, file_items=file_items)
         self.strategy_table.set_strategies(mapping)
         # 基线 = 默认值 + 包内推荐值（未叠加玩家手改），用于判断"是否自定义过"
@@ -1324,6 +1486,20 @@ class PlayerView(ctk.CTkFrame):
             name: strat for name, strat in
             self.strategy_table.get_strategies().items()}
         self._refresh_ui_state()
+
+    @staticmethod
+    def _diff_counts(diff) -> dict[str, int]:
+        """按顶层条目统计差异数量（用于折叠「无需更新」）。"""
+        counts: dict[str, int] = {}
+        if diff is None:
+            return counts
+        for ch in list(diff.added) + list(diff.modified) + list(diff.deleted):
+            parts = getattr(ch, "rel_path", None)
+            if not parts or not parts.parts:
+                continue
+            top = parts.parts[0]
+            counts[top] = counts.get(top, 0) + 1
+        return counts
 
     def _on_scan_done(self):
         self._phase = _PHASE_IDLE
@@ -1342,6 +1518,12 @@ class PlayerView(ctk.CTkFrame):
         self.change_list.load(self.diff,
                               checked=checked,
                               strategies=strategies)
+        # 这次一点差异都没有的条目 → 折叠进「无需更新」，不再占着列表
+        try:
+            self.strategy_table.set_change_counts(
+                self._diff_counts(self.diff))
+        except Exception:  # noqa: BLE001, S110
+            pass
         self._note_smart_exclude(strategies)
         self._take_strategy_snapshot()
 
@@ -1517,6 +1699,10 @@ class PlayerView(ctk.CTkFrame):
             return self._abort_flag
 
         def worker():
+            if not self._wait_extracted():
+                self.after(0, lambda: self._on_error(
+                    "解压更新包失败，无法继续下载"))
+                return
             results = self._engine_module().download_files(
                 self._download_tasks,
                 target_dir=cache_root,
@@ -2381,6 +2567,10 @@ class PlayerView(ctk.CTkFrame):
             # 生成计划、搬运、校验全部在后台线程：主线程一步都不能卡。
             # （旧实现会在 UI 线程上先把整包复制成 _merged 副本，
             #   1GB 的包能把窗口冻住十几秒。）
+            if not self._wait_extracted():
+                self.after(0, lambda: self._on_apply_error(
+                    "解压更新包失败，无法应用"))
+                return
             try:
                 plan = build_plan(self.diff, checked, strategies,
                                   old_root=old_root, source=source,

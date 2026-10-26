@@ -118,7 +118,7 @@ class TestInit(TestBase):
             self.assertIn(key, opts, f"缺少配置项 {key}")
         # 耐心池已删：失败文件直接整批交给 Aster
         self.assertNotIn("single_slots", opts)
-        self.assertEqual(opts["multi_slots"], 12)
+        self.assertEqual(opts["multi_slots"], 8)
         self.assertEqual(opts["read_poll_interval"], 1.0)
         self.assertEqual(opts["http_status_check"], 1)
 
@@ -1006,3 +1006,107 @@ class TestPatientEngine(TestBase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ======================================================================
+# 慢速 / 卡死 / 动态并发（v0.9.0）
+# ======================================================================
+class TestSlowPolicy(TestBase):
+    """用户要求：慢 ≠ 卡死；只有"一个字节都没有"才降级到慢速车道。"""
+
+    def test_slow_but_progressing_file_is_not_kicked(self):
+        # /slow 每 0.4s 才发 256B（≈0.6KB/s，远低于任何"快"的标准），
+        # 但它**一直在出数据** → 必须留在并发池里跑完，不能被踢
+        size = 1536
+        data = payload("slowcase", size)
+        t = self.task("mods/slow.jar",
+                      [self.srv.url("slow", "slowcase", size)], data=data)
+        set_opts(stall_timeout=1, min_speed_bps=0, retry_same_url=0,
+                 part_threads=1, multi_slots=2, multi_slots_min=1,
+                 auto_slots=0, read_idle_timeout=5)
+        logs = []
+        res = self.run_dl([t], threads=2, log=lambda lv, m: logs.append(m))
+        self.assertTrue(res[0].ok, res[0].error)
+        self.assert_content("mods/slow.jar", data)
+        self.assertFalse(any("卡死" in m or "慢速车道" in m for m in logs),
+                         f"慢速但持续出数据的文件不该被降级：{logs}")
+
+    def test_stalled_file_goes_to_slow_lane_then_aster(self):
+        # 第一个源永远不发数据（卡死）→ 应进慢速车道；慢速车道同样卡死 →
+        # 交给 Aster（它的超时也短）→ 最终失败但每个任务都有一条结果。
+        set_opts(stall_timeout=1, single_stall_timeout=1,
+                 retry_same_url=0, per_url_timeout=0,
+                 multi_slots=2, multi_slots_min=1, auto_slots=0,
+                 part_threads=1)
+        t = self.task("mods/stuck.jar",
+                      [self.srv.url("stall", "stuck", 4096)])
+        logs = []
+        t0 = time.time()
+        res = self.run_dl([t], threads=2, log=lambda lv, m: logs.append(m))
+        self.assertEqual(len(res), 1)
+        self.assertFalse(res[0].ok)
+        self.assertLess(time.time() - t0, 40, "卡死文件不应该拖太久")
+        self.assertTrue(any("卡死" in m for m in logs), logs)
+
+
+class TestDynamicSlots(TestBase):
+    def test_gate_limit_can_grow_and_shrink(self):
+        gate = dl._SlotGate(4)
+        self.assertEqual(gate.limit, 4)
+        gate.set_limit(8)
+        self.assertEqual(gate.limit, 8)
+        gate.set_limit(0)                 # 下限保护
+        self.assertEqual(gate.limit, 1)
+        gate.acquire()
+        self.assertEqual(gate.active, 1)
+        gate.release()
+        self.assertEqual(gate.active, 0)
+
+    def test_auto_slots_expand_when_more_parallel_is_faster(self):
+        """每多一个并发，总速度更快 → 控制器应把并发从 4 扩到 8。"""
+        set_opts(auto_slots=1, auto_slots_interval=0.25,
+                 multi_slots=8, multi_slots_min=4)
+
+        active = {"n": 0, "max": 0}
+        lock = threading.Lock()
+        payload_bytes = payload("dyn", 4096)
+
+        def fake_attempt(task, target_dir, byte_progress, should_abort,
+                         opts, single_mode=False, log=None):
+            with lock:
+                active["n"] += 1
+                active["max"] = max(active["max"], active["n"])
+                level = active["n"]
+            try:
+                # 并发越高 → 每个文件报得越快（模拟带宽没被吃满）
+                total = len(payload_bytes)
+                step = max(1, total // 10)
+                for i in range(10):
+                    if should_abort and should_abort():
+                        return dl._AttemptOutcome(False, "用户中止",
+                                                  aborted=True)
+                    if byte_progress is not None:
+                        byte_progress(task.rel_path,
+                                      min(total, step * (i + 1)), total)
+                    time.sleep(0.03)
+                (target_dir / task.rel_path).parent.mkdir(parents=True,
+                                                          exist_ok=True)
+                (target_dir / task.rel_path).write_bytes(payload_bytes)
+                return dl._AttemptOutcome(True)
+            finally:
+                with lock:
+                    active["n"] -= 1
+
+        logs = []
+        tasks = [self.task(f"mods/f{i}.jar", ["http://example.invalid/x"],
+                           data=payload_bytes) for i in range(16)]
+        with mock.patch.object(dl, "_attempt_file", fake_attempt):
+            res = dl.download_files(tasks, target_dir=self.tmp, threads=8,
+                                    log=lambda lv, m: logs.append(m))
+        self.assertEqual(len(res), 16)
+        self.assertTrue(all(r.ok for r in res), [r.error for r in res
+                                                 if not r.ok][:3])
+        grew = [m for m in logs if "并发扩到" in m]
+        self.assertTrue(grew, f"并发没有扩展：{logs[:12]}")
+        self.assertGreaterEqual(active["max"], 5,
+                                "实际并发没有真的超过 4")

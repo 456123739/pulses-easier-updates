@@ -58,11 +58,18 @@ class StrategyTable(ctk.CTkFrame):
         self._file_items: set[str] = set()
         self._suppress = False
         self._collapsed = True
+        # 「无需更新」：扫描完成后，本次没有差异的条目自动折叠到这里，
+        # 避免和"真的要更新"的条目混在一起误导用户
+        self._change_counts: dict[str, int] = {}
+        self._unchanged_collapsed = True
         self._name_col_width: int = 200
 
         self._disabled_header: ctk.CTkFrame | None = None
         self._disabled_label: ctk.CTkLabel | None = None
         self._disabled_arrow: ctk.CTkButton | None = None
+        self._unchanged_header: ctk.CTkFrame | None = None
+        self._unchanged_label: ctk.CTkLabel | None = None
+        self._unchanged_arrow: ctk.CTkButton | None = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -178,6 +185,17 @@ class StrategyTable(ctk.CTkFrame):
         self.empty_label.grid_remove()
         self._apply_layout()
 
+    def set_change_counts(self, counts: dict[str, int] | None):
+        """
+        扫描完成后告诉表格"每个条目这次改了多少东西"。
+
+        计数为 0（或没有计数）的条目会被折叠进「无需更新」区：
+        它们这次不会被改动，留在主列表里只会让人以为"还要处理"。
+        传 None / 空 dict 表示还没扫描（全部照常显示）。
+        """
+        self._change_counts = dict(counts or {})
+        self._apply_layout()
+
     def set_blacklist(self, items: list[str]):
         """
         设置"上次禁用过的文件夹"。
@@ -291,8 +309,23 @@ class StrategyTable(ctk.CTkFrame):
     def _apply_layout(self):
         enabled: list[_Row] = []
         disabled: list[_Row] = []
+        unchanged: list[_Row] = []
         for r in self._rows.values():
-            (enabled if r.checked else disabled).append(r)
+            if not r.checked:
+                disabled.append(r)
+            elif self._change_counts and \
+                    self._change_counts.get(r.folder, 0) <= 0:
+                # 扫描过了、这次一点差异都没有 → 收进「无需更新」
+                unchanged.append(r)
+            else:
+                enabled.append(r)
+
+        # 记录最近的布局分组：便于测试与排错（界面上看不出"为什么这行不见了"）
+        self._layout_state = {
+            "enabled": [r.folder for r in enabled],
+            "disabled": [r.folder for r in disabled],
+            "unchanged": [r.folder for r in unchanged],
+        }
 
         next_row = 0
         for r in enabled:
@@ -304,36 +337,77 @@ class StrategyTable(ctk.CTkFrame):
                 r.body.grid()
             next_row += 1
 
-        if disabled:
-            self._ensure_disabled_header()
-            assert self._disabled_header is not None
-            self._disabled_header.grid(row=next_row, column=0,
-                                       sticky="ew", pady=(8, 2))
-            self._disabled_header.grid()
+        next_row = self._layout_section(
+            "disabled", disabled, next_row,
+            lambda n: f"已禁用（{n}）",
+            self._collapsed, self._toggle_collapsed)
+
+        self._layout_section(
+            "unchanged", unchanged, next_row,
+            lambda n: f"无需更新（{n}）",
+            self._unchanged_collapsed, self._toggle_unchanged)
+
+    def _layout_section(self, key: str, rows: list[_Row], next_row: int,
+                        label_of, collapsed: bool, on_toggle) -> int:
+        """渲染一个折叠区（已禁用 / 无需更新），返回下一行的行号。"""
+        header = self._section_header(key)
+        header_frame, label, arrow = header
+        if not rows:
+            try:
+                header_frame.grid_remove()
+            except Exception:  # noqa: BLE001, S110
+                pass
+            return next_row
+
+        header_frame.grid(row=next_row, column=0, sticky="ew", pady=(8, 2))
+        header_frame.grid()
+        label.configure(text=label_of(len(rows)))
+        arrow.configure(text="▶" if collapsed else "▼")
+        next_row += 1
+
+        for r in rows:
+            if r.frame is None:
+                continue
+            if collapsed:
+                r.frame.grid_remove()
+                continue
+            r.frame.grid(row=next_row, column=0, sticky="ew", pady=3)
+            r.frame.grid()
+            if r.body is not None:
+                r.body.grid_remove()
             next_row += 1
+        return next_row
 
-            if self._disabled_label is not None:
-                self._disabled_label.configure(
-                    text=f"已禁用（{len(disabled)}）")
-            if self._disabled_arrow is not None:
-                self._disabled_arrow.configure(
-                    text="▼" if not self._collapsed else "▶")
+    def _section_header(self, key: str):
+        """取（或创建）某个折叠区的标题行：▶ 标签（数量）。"""
+        attr = f"_{key}_header"
+        header = getattr(self, attr, None)
+        if header is not None:
+            return (header, getattr(self, f"_{key}_label"),
+                    getattr(self, f"_{key}_arrow"))
 
-            for r in disabled:
-                if r.frame is None:
-                    continue
-                if self._collapsed:
-                    r.frame.grid_remove()
-                else:
-                    r.frame.grid(row=next_row, column=0,
-                                 sticky="ew", pady=3)
-                    r.frame.grid()
-                    if r.body is not None:
-                        r.body.grid_remove()
-                    next_row += 1
-        else:
-            if self._disabled_header is not None:
-                self._disabled_header.grid_remove()
+        header = ctk.CTkFrame(self.rows_frame, fg_color=Color.TRANSPARENT)
+        header.grid_columnconfigure(1, weight=1)
+
+        arrow = ctk.CTkButton(
+            header, text="▶", width=24, height=24,
+            font=Font.SMALL, corner_radius=6,
+            fg_color=Color.TRANSPARENT, hover_color=Color.BORDER,
+            text_color=Color.TEXT_SECONDARY,
+            command=(self._toggle_collapsed if key == "disabled"
+                     else self._toggle_unchanged))
+        arrow.grid(row=0, column=0, sticky="w")
+
+        label = ctk.CTkLabel(
+            header, text="", font=Font.SMALL,
+            text_color=Color.TEXT_MUTED,
+            fg_color=Color.TRANSPARENT, anchor="w")
+        label.grid(row=0, column=1, sticky="w", padx=(6, 0))
+
+        setattr(self, attr, header)
+        setattr(self, f"_{key}_label", label)
+        setattr(self, f"_{key}_arrow", arrow)
+        return header, label, arrow
 
     def _ensure_disabled_header(self):
         if self._disabled_header is not None:
@@ -382,6 +456,10 @@ class StrategyTable(ctk.CTkFrame):
 
     def _toggle_collapsed(self):
         self._collapsed = not self._collapsed
+        self._apply_layout()
+
+    def _toggle_unchanged(self):
+        self._unchanged_collapsed = not self._unchanged_collapsed
         self._apply_layout()
 
     def _on_unify(self):

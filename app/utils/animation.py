@@ -51,6 +51,16 @@ def lerp_color(c1: str, c2: str, t: float) -> str:
     return _rgb_to_hex((r, g, b_))
 
 
+def ease_out_back(t: float, overshoot: float = 1.1) -> float:
+    """轻微过冲再回位：展开/出现类动画用它，看起来"有弹性"。"""
+    c = overshoot + 1.0
+    return 1.0 + c * (t - 1.0) ** 3 + overshoot * (t - 1.0) ** 2
+
+
+def ease_out_cubic(t: float) -> float:
+    return 1.0 - (1.0 - t) ** 3
+
+
 def ease_in_out_cubic(t: float) -> float:
     """缓入缓出：开头慢、中段快、结尾慢（手机滑屏手感）"""
     if t < 0.5:
@@ -206,7 +216,8 @@ def natural_height(widget, refresh: bool = False) -> int:
 
 def animate_height(widget, start_h: float, end_h: float,
                    duration_ms: int = Anim.TOGGLE_MS,
-                   on_done: Callable[[], None] | None = None) -> Tween:
+                   on_done: Callable[[], None] | None = None,
+                   ease: Callable[[float], float] | None = None) -> Tween:
     """高度补间（要求 widget 已关掉尺寸传播，否则会被内容顶回自然高度）。"""
     try:
         widget.grid_propagate(False)
@@ -221,7 +232,179 @@ def animate_height(widget, start_h: float, end_h: float,
         _safe_configure(widget, height=max(0, int(round(
             lerp(start_h, end_h, t_eased)))))
 
-    return tween(widget, duration_ms, _frame, on_done=on_done)
+    return tween(widget, duration_ms, _frame, on_done=on_done,
+                 ease=ease or ease_in_out_cubic)
+
+
+
+class _ChildMask:
+    """
+    折叠动画期间把容器里的子控件**藏起来**，动画结束再按原来的布局管理器恢复。
+
+    为什么需要它：Tk 的容器一改 height，grid/pack 就会每一帧重新排布所有子控件，
+    于是展开/折叠时能看到一行行的抖动和"拉丝"残影。把子控件先撤下，
+    动画期间只有一块干净的背景在长高，结束再让内容逐行出现。
+    """
+
+    def __init__(self, container):
+        self.container = container
+        self.items: list[tuple] = []
+
+    def hide(self) -> None:
+        try:
+            children = list(self.container.winfo_children())
+        except Exception:  # noqa: BLE001
+            children = []
+        for child in children:
+            try:
+                mgr = child.winfo_manager()
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                if mgr == "grid":
+                    self.items.append((child, "grid", child.grid_info()))
+                    child.grid_remove()
+                elif mgr == "pack":
+                    self.items.append((child, "pack", child.pack_info()))
+                    child.pack_forget()
+                elif mgr == "place":
+                    self.items.append((child, "place", child.place_info()))
+                    child.place_forget()
+            except Exception:  # noqa: BLE001, S110
+                continue
+
+    def restore(self, stagger_ms: int = 0,
+                on_done: Callable[[], None] | None = None) -> None:
+        if not self.items:
+            if on_done is not None:
+                try:
+                    on_done()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            return
+
+        pending = list(self.items)
+        self.items = []
+
+        def _restore_one() -> None:
+            if not pending:
+                if on_done is not None:
+                    try:
+                        on_done()
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+                return
+            child, mgr, info = pending.pop(0)
+            try:
+                if child.winfo_exists():
+                    if mgr == "grid":
+                        child.grid(**info)
+                    elif mgr == "place":
+                        child.place(**info)
+                    else:
+                        child.pack(**info)
+            except Exception:  # noqa: BLE001, S110
+                pass
+            if stagger_ms > 0:
+                try:
+                    self.container.after(stagger_ms, _restore_one)
+                    return
+                except Exception:  # noqa: BLE001
+                    pass
+            _restore_one()
+
+        if stagger_ms <= 0:
+            while pending:
+                _restore_one()
+            return
+        _restore_one()
+
+
+
+# ----------------------------------------------------------------------
+# 换页：截图滑动（不移动活控件）
+# ----------------------------------------------------------------------
+def snapshot_slide(container, old_widget, new_widget, *,
+                   duration_ms: int | None = None,
+                   on_done: Callable[[], None] | None = None) -> bool:
+    """
+    把旧页截成一张**图片**滑走，新页原地显示。
+
+    为什么这么做：在 Tk 里水平搬一个活的控件树，每一帧都会重绘所有子窗口，
+    Text / Canvas / 圆角控件会留下一条条竖着的残影（"拉丝"），
+    盖色板只能遮住一部分。这里页面上**没有任何控件在动**，
+    动的只是一张 Bitmap —— 从根上消除残影。
+
+    截图不可用（没有显示器、截图失败、控件还没布局）时返回 False，
+    调用方退回"盖色板 + 搬页面"的旧实现。
+    """
+    import tkinter as tk
+
+    try:
+        from PIL import ImageGrab, ImageTk
+    except Exception:  # noqa: BLE001
+        return False
+
+    try:
+        w = int(old_widget.winfo_width())
+        h = int(old_widget.winfo_height())
+        x = int(old_widget.winfo_rootx())
+        y = int(old_widget.winfo_rooty())
+    except Exception:  # noqa: BLE001
+        return False
+    if w <= 2 or h <= 2:
+        return False
+
+    try:
+        img = ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
+        if img.size != (w, h):
+            img = img.resize((w, h))
+        # 保持引用，否则 PhotoImage 会被回收 → 白块
+        photo = ImageTk.PhotoImage(img, master=container)
+    except Exception:  # noqa: BLE001
+        return False
+
+    try:
+        new_widget.place(in_=container, relx=0, rely=0,
+                         relwidth=1.0, relheight=1.0)
+        canvas = tk.Canvas(container, highlightthickness=0, bd=0,
+                           bg="#202024")
+        canvas.place(x=0, y=0, width=w, height=h)
+        canvas.create_image(0, 0, anchor="nw", image=photo)
+        canvas._snapshot = photo          # type: ignore[attr-defined]
+        # 注意：Canvas.lift 被 Tk 定义成"提升画布内的 item"，
+        # 不带参数会报 wrong # args —— 要提窗口得直接调 raise
+        canvas.tk.call("raise", canvas._w)
+        old_widget.place_forget()
+    except Exception:  # noqa: BLE001
+        return False
+
+    ms = Anim.SWITCH_MS if duration_ms is None else int(duration_ms)
+
+    def _frame(t_eased: float, _raw: float):
+        try:
+            canvas.place_configure(x=int(round(-w * t_eased)))
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    def _done():
+        try:
+            canvas.destroy()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        if on_done is not None:
+            try:
+                on_done()
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    tween(canvas, ms, _frame, on_done=_done, ease=ease_out_quart)
+    return True
+
+
+def ease_out_quart(t: float) -> float:
+    """先快后慢：换页滑出用它，比 in-out 更"利落"。"""
+    return 1.0 - (1.0 - t) ** 4
 
 
 def toggle_height(widget, show: bool,
@@ -258,6 +441,11 @@ def toggle_height(widget, show: bool,
     if cur <= 1:                      # 收起状态（Tk 对未映射控件报 1）
         cur = 0
 
+    # 动画期间先把子控件撤下：否则每一帧都会重新排布，抖 + 拉丝
+    mask = _ChildMask(widget)
+    mask.hide()
+    reveal_ms = 0 if not show else 8
+
     if show:
         _safe_configure(widget, height=0)
         try:
@@ -274,17 +462,29 @@ def toggle_height(widget, show: bool,
                 widget.grid_remove()
             except Exception:  # noqa: BLE001, S110
                 pass
-        try:
-            widget._anim_toggle = None     # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001, S110
-            pass
-        if on_done is not None:
+        def _after_restore():
+            if show:
+                # 内容回来了高度可能略有变化，收个尾
+                try:
+                    h = natural_height(widget, refresh=True)
+                    _safe_configure(widget, height=h)
+                except Exception:  # noqa: BLE001, S110
+                    pass
             try:
-                on_done()
+                widget._anim_toggle = None     # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001, S110
                 pass
+            if on_done is not None:
+                try:
+                    on_done()
+                except Exception:  # noqa: BLE001, S110
+                    pass
 
-    tw = animate_height(widget, start, end, duration_ms, on_done=_done)
+        mask.restore(stagger_ms=reveal_ms, on_done=_after_restore)
+
+    tw = animate_height(
+        widget, start, end, duration_ms, on_done=_done,
+        ease=ease_out_back if show else ease_out_cubic)
     try:
         widget._anim_toggle = tw           # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001, S110

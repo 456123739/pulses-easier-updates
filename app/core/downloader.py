@@ -117,7 +117,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from urllib import error as urlerr
 
 from . import database as db
@@ -191,20 +191,25 @@ _DEFAULTS = {
     "engine": "ridex",
     "mirror_first": 1,
     "mirror_hosts": "",
-    "multi_slots": 12,
+    "multi_slots": 8,               # 并发上限（auto_slots 打开时从 min 逐步扩到它）
+    "multi_slots_min": 4,           # 起步并发
+    "auto_slots": 1,                # 1=按总速度自动在 min..max 之间扩缩
+    "auto_slots_interval": 2.5,     # 调整间隔（秒）
     "part_threads": 4,
     "max_connections": 128,
     "connect_timeout": 10,
     "read_idle_timeout": 20,
-    "per_url_timeout": 90,
-    "stall_timeout": 10,
-    "min_speed_bps": 10240,
+    "per_url_timeout": 0,           # 单 URL 绝对时限（0=不限；只按"卡死"判定）
+    "stall_timeout": 15,            # 连续多少秒**一个字节都没有** → 判卡死
+    # 速度阈值默认关闭（0）：一个文件的上限可能只有几十 KB/s，
+    # 只要它还在稳定出数据就不该被踢出并发池（用户明确要求）
+    "min_speed_bps": 0,
     "speed_window": 5.0,
     "retry_same_url": 1,
     "retry_backoff_ms": 500,
-    "single_url_timeout": 180,
-    "single_stall_timeout": 30,
-    "single_min_speed_bps": 1024,
+    "single_url_timeout": 0,
+    "single_stall_timeout": 40,
+    "single_min_speed_bps": 0,
     # ---- 本轮新增（默认值 = 保持/修复既有行为） ----
     "read_poll_interval": 1.0,      # socket 读超时轮询粒度（秒，0=不设超时）
     "http_status_check": 1,         # 1=非 2xx 视为失败，不落盘
@@ -252,8 +257,9 @@ MIN_PART_SIZE = 512 * 1024
 SINGLE_FAIL_BEFORE_MULTI = 2
 
 # 快速筛除阈值：多线程槽位里，连续 3s 平均速度 < 20KB/s → 立即移出
-FAST_STALL_WINDOW = 3.0
-FAST_STALL_MIN_BPS = 20 * 1024
+# 「卡死」= 一段时间里一个字节都没有（不是"慢"）。
+# 慢速文件留在并发池里跑完，只有真卡死的才降级到慢速车道。
+FAST_STALL_IDLE = 15.0
 
 _REDIRECT_LIMIT = 3
 _ERROR_BODY_SNIPPET = 512
@@ -1174,6 +1180,48 @@ class _FileProgress:
             pass
 
 
+class _SlotGate:
+    """
+    可动态调整的并发闸门。
+
+    `ThreadPoolExecutor` 的并发数是固定的，没法"从 4 扩到 8"；
+    这里用固定线程数 + 可变的许可数来实现：worker 先 `acquire()` 再干活，
+    控制器调 `set_limit()` 就能实时扩/缩。
+    """
+
+    def __init__(self, limit: int):
+        self._limit = max(1, int(limit))
+        self._active = 0
+        self._cond = threading.Condition()
+
+    @property
+    def limit(self) -> int:
+        with self._cond:
+            return self._limit
+
+    @property
+    def active(self) -> int:
+        with self._cond:
+            return self._active
+
+    def acquire(self) -> None:
+        with self._cond:
+            while self._active >= self._limit:
+                self._cond.wait(timeout=0.5)
+            self._active += 1
+
+    def release(self) -> None:
+        with self._cond:
+            if self._active > 0:
+                self._active -= 1
+            self._cond.notify()
+
+    def set_limit(self, limit: int) -> None:
+        with self._cond:
+            self._limit = max(1, int(limit))
+            self._cond.notify_all()
+
+
 class _SpeedWindow:
     __slots__ = ("min_speed", "samples", "window")
 
@@ -1306,20 +1354,17 @@ def _stream_to_file(resp, f, progress: _FileProgress | None, part_id: int,
     _set_socket_timeout(resp, poll)
 
     if single_mode:
-        stall_timeout = _num(opts, "single_stall_timeout", 30)
-        per_url = _num(opts, "single_url_timeout", 180)
-        min_speed = _num(opts, "single_min_speed_bps", 1024)
+        stall_timeout = _num(opts, "single_stall_timeout", 40)
+        per_url = _num(opts, "single_url_timeout", 0)
+        min_speed = _num(opts, "single_min_speed_bps", 0)
     else:
-        stall_timeout = _num(opts, "stall_timeout", 10)
-        per_url = _num(opts, "per_url_timeout", 90)
-        min_speed = _num(opts, "min_speed_bps", 10240)
+        stall_timeout = _num(opts, "stall_timeout", 15)
+        per_url = _num(opts, "per_url_timeout", 0)
+        min_speed = _num(opts, "min_speed_bps", 0)
 
-    speed_window = _SpeedWindow(
-        _num(opts, "speed_window", 5.0), min_speed)
-
-    # 快速筛除窗口（仅 fast_stall=True 时启用）
-    fast_window = _SpeedWindow(FAST_STALL_WINDOW, FAST_STALL_MIN_BPS) \
-        if fast_stall else None
+    # 速度阈值默认 0 = 关闭：**慢不等于卡死**，只有"一个字节都没有"才判死
+    speed_window = (_SpeedWindow(_num(opts, "speed_window", 5.0), min_speed)
+                    if min_speed > 0 else None)
 
     last_change_ts = time.time()
     written = 0
@@ -1329,22 +1374,22 @@ def _stream_to_file(resp, f, progress: _FileProgress | None, part_id: int,
         now = time.time()
         if _is_abort(should_abort):
             raise _AbortError("用户中止", aborted=True)
-        if now - url_start > per_url:
+        if per_url > 0 and now - url_start > per_url:
             raise _AbortError(
-                f"{url} → 超过单 URL 时限 {per_url:.0f}s", stalled=True)
+                f"{url} → 超过单 URL 时限 {per_url:.0f}s", stalled=True,
+                fast_stalled=fast_stall)
+        # 唯一的"判死"条件：连续 stall_timeout 秒一个字节都没有。
+        # 多线程池里判死 → fast_stalled，立刻降级到慢速车道，
+        # 不再在同一个文件上反复耗 URL 配额。
         if now - last_change_ts > stall_timeout:
             raise _AbortError(
-                f"{url} → 连续 {stall_timeout:.0f}s 无数据增长",
-                stalled=True)
-        if speed_window.is_too_slow(now):
+                f"{url} → 连续 {stall_timeout:.0f}s 没有收到数据（判定卡死）",
+                stalled=True, fast_stalled=fast_stall)
+        if speed_window is not None and speed_window.is_too_slow(now):
             raise _AbortError(
                 f"{url} → 速度低于 {min_speed:.0f} B/s 持续 "
-                f"{speed_window.window:.0f}s", stalled=True)
-        if fast_window is not None and fast_window.is_too_slow(now):
-            raise _AbortError(
-                f"{url} → 速度低于 {FAST_STALL_MIN_BPS // 1024} KB/s 持续 "
-                f"{FAST_STALL_WINDOW:.0f}s（快速筛除）",
-                stalled=True, fast_stalled=True)
+                f"{speed_window.window:.0f}s", stalled=True,
+                fast_stalled=fast_stall)
 
         if expected_bytes is not None and written >= expected_bytes:
             drained = True
@@ -1375,9 +1420,8 @@ def _stream_to_file(resp, f, progress: _FileProgress | None, part_id: int,
         written += len(chunk)
         now2 = time.time()
         last_change_ts = now2
-        speed_window.add(now2, written)
-        if fast_window is not None:
-            fast_window.add(now2, written)
+        if speed_window is not None:
+            speed_window.add(now2, written)
         if progress is not None:
             progress.add(part_id, len(chunk))
 
@@ -2327,7 +2371,7 @@ def download_files(
                 pass
 
         try:
-            outcome = _attempt_file(task, target_dir, byte_progress,
+            outcome = _attempt_file(task, target_dir, _count_bytes,
                                     should_abort, opts,
                                     single_mode=False, log=log)
         except Exception as e:  # noqa: BLE001
@@ -2348,13 +2392,23 @@ def download_files(
             _report_final(task, True, "")
             return res
 
-        # 转入单线程重试槽位：**不算最终态**，进度与收尾回调都不动
-        if log:
-            try:
-                log("warn", f"{task.rel_path} 转入重试队列（稍后交给 Aster）")
-            except Exception:  # noqa: BLE001, S110
-                pass
-        retry_queue.put(task)
+        # 卡死 → 慢速车道（单槽位，立刻开始，不等主池跑完）；
+        # 硬失败（404 / 校验不符 / 源都挂了）→ 最后整批交给 Aster。
+        if getattr(outcome, "fast_stalled", False):
+            if log:
+                try:
+                    log("warn", f"{task.rel_path} 判定卡死，转入慢速车道重试")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            slow_q.put(task)
+        else:
+            if log:
+                try:
+                    log("warn",
+                        f"{task.rel_path} 转入重试队列（稍后交给 Aster）")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            retry_queue.put(task)
         res = DownloadResult(task, False, None, outcome.error)
         _store(task, res)
         return res
@@ -2363,10 +2417,8 @@ def download_files(
     # 不再保留 RideX 自己的"单线程耐心池"：主池救不回来的文件直接整批交给
     # Aster 引擎（它自带源降级 + 整文件重试 + 镜像优先），省掉一层无意义的
     # 队列转换。Aster 在主池收尾后启动，失败文件本来就是少数，尾巴很短。
-    multi_workers = max(1, multi_slots)
-
     def _hand_to_aster(pending: list[DownloadTask]) -> None:
-        """把主池失败的文件整批交给 Aster 重下。"""
+        """把主池 / 慢速车道都救不回来的文件整批交给 Aster 重下。"""
         if not pending:
             return
         if _is_abort(should_abort):
@@ -2386,7 +2438,7 @@ def download_files(
         try:
             from .engines import aster
             results = aster.download_files(
-                pending, target_dir=target_dir, threads=multi_workers,
+                pending, target_dir=target_dir, threads=max(1, multi_slots),
                 log=log, byte_progress=byte_progress,
                 should_abort=should_abort) or []
         except Exception as e:  # noqa: BLE001
@@ -2427,36 +2479,177 @@ def download_files(
             _store(t, res)
             _report_final(t, False, err)
 
-    try:
-        with ThreadPoolExecutor(max_workers=multi_workers) as main_pool:
-            futures = {main_pool.submit(_run_multi, t): t for t in tasks}
-            for fut in as_completed(futures):
-                try:
-                    fut.result()
-                except Exception as e:  # noqa: BLE001
-                    t = futures[fut]
-                    res = DownloadResult(t, False, None, str(e))
-                    _store(t, res)
-                    _report_final(t, False, str(e))
-    except Exception as e:  # noqa: BLE001
+    max_slots = max(1, multi_slots)
+    min_slots = max(1, min(int(_num(opts, "multi_slots_min", 4)), max_slots))
+    auto_slots = _flag(opts, "auto_slots", True) and max_slots > min_slots
+
+    def _log(level: str, msg: str):
         if log:
             try:
-                log("error", f"下载池异常：{e}")
+                log(level, msg)
             except Exception:  # noqa: BLE001, S110
                 pass
+
+    # 并发闸门：起步 min_slots，控制器按"总速度还在不在涨"逐步扩到 max_slots
+    gate = _SlotGate(min_slots if auto_slots else max_slots)
+    if auto_slots:
+        _log("info", f"并发槽位 {gate.limit} 起步，最多扩到 {max_slots}"
+                     "（总速度吃满就停）")
+
+    fast_q: Queue = Queue()
+    slow_q: Queue = Queue()
+    for t in tasks:
+        fast_q.put(t)
+
+    # 吞吐计数器：用于判断"再加一个槽位还能不能更快"
+    bytes_state = {"total": 0}
+    per_file_bytes: dict[str, int] = {}
+    bytes_lock = threading.Lock()
+
+    def _count_bytes(rel: str, done: int, total_bytes: int):
+        with bytes_lock:
+            prev = per_file_bytes.get(rel, 0)
+            if done < prev:                 # 重新从 0 开始下
+                prev = 0
+            if done > prev:
+                bytes_state["total"] += done - prev
+            per_file_bytes[rel] = done
+        if byte_progress is not None:
+            try:
+                byte_progress(rel, done, total_bytes)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    slow_failed: list[DownloadTask] = []
+    slow_failed_lock = threading.Lock()
+    fast_done = threading.Event()
+
+    def _fast_worker():
+        while True:
+            task = fast_q.get()
+            if task is None:
+                return
+            gate.acquire()
+            try:
+                _run_multi(task)
+            except Exception as e:  # noqa: BLE001
+                _log("error", f"{task.rel_path} 下载线程异常：{e}")
+                res = DownloadResult(task, False, None, str(e))
+                _store(task, res)
+                _report_final(task, False, str(e))
+            finally:
+                gate.release()
+
+    def _slow_worker():
+        """慢速车道：只跑"卡死"过的文件，单槽位，不和主池抢并发。"""
+        while True:
+            task = slow_q.get()
+            if task is None:
+                return
+            if _is_abort(should_abort):
+                res = DownloadResult(task, False, None, "用户中止",
+                                     aborted=True)
+                _store(task, res)
+                _report_final(task, False, "用户中止", aborted=True)
+                continue
+            if on_file_started is not None:
+                try:
+                    on_file_started(task)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            try:
+                outcome = _attempt_file(task, target_dir, _count_bytes,
+                                        should_abort, opts,
+                                        single_mode=True, log=log)
+            except Exception as e:  # noqa: BLE001
+                outcome = _AttemptOutcome(
+                    False, f"内部异常：{type(e).__name__}: {e}")
+            if outcome.aborted:
+                res = DownloadResult(task, False, None, "用户中止",
+                                     aborted=True)
+                _store(task, res)
+                _report_final(task, False, "用户中止", aborted=True)
+                continue
+            if outcome.ok:
+                res = DownloadResult(task, True,
+                                     target_dir / task.rel_path, "")
+                _store(task, res)
+                _report_final(task, True, "")
+                continue
+            # 慢速车道也失败 → 留给 Aster
+            _log("warn", f"{task.rel_path} 慢速重试仍失败，交给 Aster")
+            with slow_failed_lock:
+                slow_failed.append(task)
+            _store(task, DownloadResult(task, False, None,
+                                        outcome.error))
+
+    def _controller():
+        """按"总速度还在不在涨"调整并发：涨就加，不涨就退回并锁定。"""
+        interval = max(0.8, _num(opts, "auto_slots_interval", 2.5))
+        prev_total = bytes_state["total"]
+        base_speed = 0.0
+        pending_up = False
+        saturated = False
+        while not fast_done.is_set():
+            time.sleep(interval)
+            if fast_done.is_set():
+                return
+            cur = bytes_state["total"]
+            speed = (cur - prev_total) / interval
+            prev_total = cur
+            if speed <= 0:
+                continue
+            if pending_up:
+                # 上一轮加过一个槽位：速度没明显上涨说明带宽已经吃满
+                if speed < base_speed * 1.05:
+                    gate.set_limit(max(min_slots, gate.limit - 1))
+                    saturated = True
+                    _log("info", f"总速度 {speed / 1024:.0f} KB/s 已吃满带宽，"
+                                 f"并发回落到 {gate.limit}")
+                pending_up = False
+            elif not saturated and gate.limit < max_slots:
+                base_speed = speed
+                gate.set_limit(gate.limit + 1)
+                pending_up = True
+                _log("info", f"总速度 {speed / 1024:.0f} KB/s 仍在涨，"
+                             f"并发扩到 {gate.limit}/{max_slots}")
+
+    fast_threads = [threading.Thread(target=_fast_worker, daemon=True)
+                    for _ in range(max_slots)]
+    slow_thread = threading.Thread(target=_slow_worker, daemon=True)
+    ctl_thread = (threading.Thread(target=_controller, daemon=True)
+                  if auto_slots else None)
+    try:
+        for th in fast_threads:
+            th.start()
+        slow_thread.start()
+        if ctl_thread is not None:
+            ctl_thread.start()
+        for _ in fast_threads:
+            fast_q.put(None)
+        for th in fast_threads:
+            th.join()
+        fast_done.set()
+        slow_q.put(None)
+        slow_thread.join()
+    except Exception as e:  # noqa: BLE001
+        _log("error", f"下载池异常：{e}")
+        fast_done.set()
         for t in tasks:
             if id(t) not in outcome_map:
                 res = DownloadResult(t, False, None, f"下载池异常：{e}")
                 _store(t, res)
                 _report_final(t, False, str(e))
 
-    # 主池结束：把降级的文件整批交给 Aster
+    # 主池 + 慢速车道都结束：剩下的（硬失败 + 慢速重试失败）整批交 Aster
     pending: list[DownloadTask] = []
     while True:
         try:
             pending.append(retry_queue.get_nowait())
-        except Exception:  # noqa: BLE001
+        except Empty:
             break
+    with slow_failed_lock:
+        pending.extend(slow_failed)
     _hand_to_aster(pending)
 
     if _flag(opts, "cleanup_residual_parts", True):
