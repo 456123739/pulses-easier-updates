@@ -248,6 +248,26 @@ class TestManifestSafety(unittest.TestCase):
             pack_files={"mods/a.jar", "mods/kept.jar"})
         self.assertIsNone(fast, "漏记的文件会让它永远装不上，必须回退")
 
+    def test_manifest_prefix_matches_zip_members(self):
+        """标准 overrides/ 布局：zip 成员带前缀，清单键不带 —— 必须能对上。"""
+        import hashlib
+        import zipfile
+        from app.ui.player_view import _extract_all_members
+        src = self.tmp / "std.zip"
+        with zipfile.ZipFile(src, "w") as zf:
+            zf.writestr("modrinth.index.json", "{}")
+            zf.writestr("overrides/mods/a.jar", "NEW")
+            zf.writestr("overrides/mods/b.jar", "SAME")
+        dest = self.tmp / "std_ex"
+        dest.mkdir()
+        manifest = {"mods/a.jar": {"algo": "sha1", "value": "0" * 40},
+                    "mods/b.jar": {"algo": "sha1",
+                                   "value": hashlib.sha1(b"SAME").hexdigest()}}
+        count, bad = _extract_all_members(src, dest, manifest,
+                                          prefix="overrides/")
+        self.assertEqual(count, 3)
+        self.assertEqual(bad, ["mods/a.jar"], "清单键必须按内容根对齐")
+
     def test_manifest_mismatch_detected_while_extracting(self):
         """解压的同时按清单复核（零额外 IO），陈旧哈希必须被抓出来。"""
         import hashlib

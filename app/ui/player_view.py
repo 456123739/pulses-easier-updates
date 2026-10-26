@@ -129,7 +129,8 @@ def _zip_layout(zip_path: Path
 
 
 def _extract_all_members(zip_path: Path, extract_dir: Path,
-                         manifest: dict | None = None
+                         manifest: dict | None = None,
+                         prefix: str = ""
                          ) -> tuple[int, list[str]]:
     """
     解压整个更新包，**在同一次读取里**按清单复核哈希。
@@ -144,16 +145,23 @@ def _extract_all_members(zip_path: Path, extract_dir: Path,
     bad: list[str] = []
     count = 0
     manifest = manifest if isinstance(manifest, dict) else {}
+    prefix = prefix or ""
     with zipfile.ZipFile(zip_path) as zf:
         for info in zf.infolist():
             name = str(info.filename).replace("\\", "/")
             if info.is_dir() or not name:
                 continue
             rel = name.lstrip("/")
+            # 规范化重复斜杠/`.`（与 extractall 的行为保持一致，避免静默丢文件）
+            if "//" in rel or "/./" in rel or rel.startswith("./"):
+                rel = "/".join(p for p in rel.split("/") if p not in ("", "."))
             if not is_safe_rel_path(rel):
-                continue                  # 穿越/保留名：不落盘
+                continue                  # 穿越 / 盘符 / 保留名：不落盘
             target = extract_dir / rel
-            entry = manifest.get(rel)
+            # 清单的键是"相对内容根"（overrides/ 已去掉），zip 成员名带前缀
+            key = (rel[len(prefix):] if prefix and rel.startswith(prefix)
+                   else rel)
+            entry = manifest.get(key)
             algo = str(entry.get("algo", "")) if isinstance(entry, dict) else ""
             expect = str(entry.get("value", "")) if isinstance(entry, dict) else ""
             hasher = None
@@ -173,7 +181,7 @@ def _extract_all_members(zip_path: Path, extract_dir: Path,
                         hasher.update(chunk)
             count += 1
             if hasher is not None and hasher.hexdigest() != expect:
-                bad.append(rel)
+                bad.append(key)
     return count, bad
 
 
@@ -1276,14 +1284,20 @@ class PlayerView(ctk.CTkFrame):
                 _n, _bad = _extract_all_members(
                     update_zip, extract_dir,
                     manifest_files
-                    if not getattr(self, "_forced_fs_scan", False) else None)
+                    if not getattr(self, "_forced_fs_scan", False) else None,
+                    prefix=prefix)
                 if _bad:
                     self._manifest_mismatch = _bad
                     self.ui_post(self._on_manifest_mismatch)
-            except NotADirectoryError as e:  # noqa: BLE001
+            except (NotADirectoryError, FileExistsError) as e:  # noqa: BLE001
                 self._extract_error.append(
                     "更新包结构异常（同名文件与目录冲突）："
                     f"{getattr(e, 'filename', '') or e}")
+            except RuntimeError as e:  # noqa: BLE001
+                msg = str(e)
+                if "encrypted" in msg.lower() or "password" in msg.lower():
+                    msg = "更新包已加密，请让作者提供未加密的包"
+                self._extract_error.append(msg)
             except Exception as e:  # noqa: BLE001
                 self._extract_error.append(str(e))
             finally:
