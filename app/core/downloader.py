@@ -2559,11 +2559,21 @@ def download_files(
     slow_failed_lock = threading.Lock()
     fast_done = threading.Event()
 
+    stop_fast = threading.Event()
+    pending_lock = threading.Lock()
+    pending = {"n": len(tasks)}
+
     def _fast_worker():
-        while True:
-            task = fast_q.get()
-            if task is None:
-                return
+        # 用"超时 + stop 事件"而不是哨兵退出：并发闸门可能让某些 worker
+        # 还握着任务在等许可，此时哨兵会被别的 worker 先吃掉，剩下的
+        # 永远 get 不到东西 —— join 就挂死了。
+        while not stop_fast.is_set():
+            try:
+                task = fast_q.get(timeout=0.2)
+            except Empty:
+                continue
+            with pending_lock:
+                pending["n"] -= 1
             gate.acquire()
             try:
                 _run_multi(task)
@@ -2574,6 +2584,9 @@ def download_files(
                 _report_final(task, False, str(e))
             finally:
                 gate.release()
+                with pending_lock:
+                    if pending["n"] <= 0 and gate.active <= 0:
+                        stop_fast.set()
 
     def _slow_worker():
         """慢速车道：只跑"卡死"过的文件，单槽位，不和主池抢并发。"""
@@ -2660,8 +2673,6 @@ def download_files(
         slow_thread.start()
         if ctl_thread is not None:
             ctl_thread.start()
-        for _ in fast_threads:
-            fast_q.put(None)
         for th in fast_threads:
             th.join()
         fast_done.set()

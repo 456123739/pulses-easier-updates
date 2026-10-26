@@ -100,7 +100,8 @@ _META_NAMES = {
 }
 
 
-def _zip_layout(zip_path: Path) -> tuple[str, bool, list[str]]:
+def _zip_layout(zip_path: Path
+                ) -> tuple[str, bool, list[str], list[str]]:
     """
     返回 (内容根前缀, 是否标准 .eapack 布局, 内容根下的顶层目录名)。
 
@@ -112,7 +113,7 @@ def _zip_layout(zip_path: Path) -> tuple[str, bool, list[str]]:
             names = [n.replace("\\", "/") for n in zf.namelist()
                      if n and not n.endswith("/")]
     except Exception:  # noqa: BLE001
-        return "", False, []
+        return "", False, [], []
     tops = {n.split("/", 1)[0] for n in names}
     standard = bool(tops) and "overrides" in tops and all(
         t == "overrides" or t in _META_NAMES for t in tops)
@@ -124,22 +125,13 @@ def _zip_layout(zip_path: Path) -> tuple[str, bool, list[str]]:
         if not rest or "/" not in rest:
             continue
         dirs.add(rest.split("/", 1)[0])
-    return prefix, standard, sorted(dirs)
-
-
-def _zip_names(zip_path: Path) -> list[str]:
-    """zip 里所有文件条目（已统一成 / 分隔）。"""
-    try:
-        with zipfile.ZipFile(zip_path) as zf:
-            return [n.replace("\\", "/") for n in zf.namelist()
-                    if n and not n.endswith("/")]
-    except Exception:  # noqa: BLE001
-        return []
+    return prefix, standard, sorted(dirs), names
 
 
 def _manifest_mismatches(content_root: Path,
                          manifest: dict,
-                         sample: int = 128) -> list[str]:
+                         sample: int = 128,
+                         max_bytes: int = 64 * 1024 * 1024) -> list[str]:
     """
     用实际解压出来的文件复核清单：哈希对不上就说明清单陈旧/被改过。
 
@@ -161,8 +153,11 @@ def _manifest_mismatches(content_root: Path,
         step = len(items) / float(sample)
         items = [items[int(i * step)] for i in range(sample)]
 
+    read_bytes = 0
     for rel, entry in items:
         if len(bad) >= 20:
+            break
+        if read_bytes > max_bytes:
             break
         algo = str(entry.get("algo", "") or "")
         value = str(entry.get("value", "") or "")
@@ -173,6 +168,10 @@ def _manifest_mismatches(content_root: Path,
         except Exception:  # noqa: BLE001
             continue
         if not path.is_file():
+            continue
+        try:
+            read_bytes += path.stat().st_size
+        except OSError:
             continue
         actual = _hash_file_quiet(path, algo)
         if actual and actual != value:
@@ -854,6 +853,9 @@ class PlayerView(ctk.CTkFrame):
         self._cleanup_temp_dir()
         self._forced_fs_scan = False
         self._manifest_mismatch = []
+        self._needs_rescan = False
+        self._scan_used_fast = False
+        self._extract_zip = None
         self.diff = None
         self.plan = None
         self._merged = []
@@ -1232,15 +1234,23 @@ class PlayerView(ctk.CTkFrame):
         # 否则半个目录 / .pulses_new 会被当成"玩家本地文件"算进差异里
         self._recover_apply_leftovers()
 
-        self._temp_dir = self._make_work_dir()
-        if self._temp_dir is None:
-            raise RuntimeError("无法创建临时工作目录")
+        # 同一个更新包、已经解压完了 → 直接复用（"清单不一致"触发的重扫
+        # 不该再把几百 MB 解压一遍）
+        reuse = (self._temp_dir is not None
+                 and getattr(self, "_extract_zip", None) == update_zip
+                 and self._extract_done is not None
+                 and self._extract_done.is_set()
+                 and not self._extract_error)
+        if not reuse:
+            self._temp_dir = self._make_work_dir()
+            if self._temp_dir is None:
+                raise RuntimeError("无法创建临时工作目录")
         extract_dir = Path(self._temp_dir.name)
 
         self.ui_post( self._set_hint, "正在读更新包…")
 
         # ── 布局：内容根前缀（"overrides/" 还是根）、顶层目录名 ──
-        prefix, standard, zip_tops = _zip_layout(update_zip)
+        prefix, standard, zip_tops, zip_names = _zip_layout(update_zip)
 
         # ── 先解压根目录散文件（很小），让比对能覆盖 options.txt 一类 ──
         content_root = (extract_dir / prefix) if prefix else extract_dir
@@ -1255,8 +1265,13 @@ class PlayerView(ctk.CTkFrame):
                              _root_failed[:3]))
 
         # ── 其余文件后台解压：比对不等它，应用/下载前再等 ──
-        self._extract_done = threading.Event()
-        self._extract_error: list[str] = []
+        if reuse:
+            self._extract_done.set()
+            self._extract_error = []
+        else:
+            self._extract_done = threading.Event()
+            self._extract_error = []
+            self._extract_zip = update_zip
 
         def _extract_all():
             try:
@@ -1278,15 +1293,16 @@ class PlayerView(ctk.CTkFrame):
             finally:
                 self._extract_done.set()
 
-        threading.Thread(target=_extract_all, daemon=True).start()
+        if not reuse:
+            threading.Thread(target=_extract_all, daemon=True).start()
 
         pack, err = parse_mrpack(update_zip)
         recorded = eapack_mod.read_hashes(update_zip) or {}
         manifest_files = recorded.get("files") or {}
         folder_hashes = recorded.get("folders") or {}
-        pack_files = {n[len(prefix):] for n in _zip_names(update_zip)
-                      if prefix and n.startswith(prefix)} if prefix else set(
-            _zip_names(update_zip))
+        pack_files = ({n[len(prefix):] for n in zip_names
+                       if n.startswith(prefix)} if prefix
+                      else set(zip_names))
         fast_diff = (bool(manifest_files) and standard
                      and not getattr(self, "_forced_fs_scan", False))
         self._scan_used_fast = fast_diff
