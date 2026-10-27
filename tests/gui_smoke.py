@@ -488,13 +488,13 @@ def main() -> int:
         pv.log.clear()
         if app._current != "玩家":
             app._on_identity_changed("玩家")
-            _pump(app, 0.6, lambda: not app._switching)
+            _pump(app, 2.5, lambda: not app._switching)
         ok_first = app._on_identity_changed("开发者")
         ok_second = app._on_identity_changed("玩家")
         check(ok_first is True, "第一次切换被接受")
         check(ok_second is False,
               "动画期间的第二次点击被拒绝（开关会回滚，不会错位）")
-        _pump(app, 1.2, lambda: not app._switching)
+        _pump(app, 2.5, lambda: not app._switching)
         app.update()
         check(app._current == "玩家", "动画结束后自动补切到最后一次点击",
               app._current)
@@ -549,22 +549,22 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             check(False, "身份切换没有抛异常", str(exc))
             return True
-        # 动画刚开始时应该有一张截图画布盖在页面区上
+        # 换页用「logo 覆盖层」：开始时应该有两块纯色面板盖在页面区上
         found = False
         for _ in range(12):
             app.update()
-            canvases = [w for w in app.page_host.winfo_children()
-                        if w.winfo_class() == "Canvas"]
-            if canvases:
+            overlays = [w for w in app.page_host.winfo_children()
+                        if getattr(w, "_transition_overlay", False)]
+            if len(overlays) >= 2:
                 found = True
                 break
             time.sleep(0.02)
-        _pump(app, 0.6, lambda: app._switching is False)
+        _pump(app, 2.5, lambda: app._switching is False)
         left = [w for w in app.page_host.winfo_children()
-                if w.winfo_class() == "Canvas"]
+                if getattr(w, "_transition_overlay", False)]
         check(True, "换页没有抛异常")
-        check(found or True, "换页优先走截图滑动（没有截图画布时退回旧实现）")
-        check(not left, "换页结束后截图用的画布已销毁")
+        check(found, "换页用 logo 覆盖层（两块纯色面板）")
+        check(not left, "换页结束后覆盖层已清理")
         check(app._current == target, "身份确实切过去了", app._current)
         pages = [w for w in app.page_host.winfo_children()
                  if w.winfo_class() != "Canvas" and w.place_info()]

@@ -16,6 +16,7 @@ from ..core import resume as resume_mod
 from ..core.state import AppState
 from ..theme import Anim, Color, Size
 from ..utils.animation import slide_pages, snapshot_slide
+from .transition import clear_overlays, logo_transition
 from . import motion, win11
 from .developer_view import DeveloperView
 from .player_view import PlayerView
@@ -794,6 +795,11 @@ class MainWindow(ctk.CTk):
                     pass
                 self._switch_guard = None
 
+            try:
+                clear_overlays(self.page_host)
+            except Exception:  # noqa: BLE001, S110
+                pass
+
             # 兜底摆位：动画中途被打断时，旧页可能还压在下面没撤
             try:
                 if old.winfo_exists():
@@ -831,14 +837,25 @@ class MainWindow(ctk.CTk):
         # _finish，那时要能把这个定时器取消掉。
         try:
             self._switch_guard = self.after(
-                Anim.SWITCH_MS + 200, _finish)
+                Anim.SWITCH_MS + 650, _finish)
         except Exception:  # noqa: BLE001
             self._switch_guard = None
 
-        # 首选：把旧页截成一张图滑走（页面上的控件一个都不动 → 不会拉丝）。
+        # 首选：logo 覆盖层（滑入 → 盖住时换页 → 上下对开）。
+        # 全程只有两块纯色面板 + 一张 logo 在动，页面上没有控件位移，
+        # 既不拉丝也不依赖截图。有弹窗压着时也不影响（覆盖层在最上面）。
+        fast_ok = False
+        try:
+            fast_ok = logo_transition(self.page_host, old, new,
+                                      on_done=_finish)
+        except Exception:  # noqa: BLE001, S110
+            fast_ok = False
+        if fast_ok:
+            return
+
+        # 次选：把旧页截成一张图滑走（页面上的控件一个都不动 → 不会拉丝）。
         # 但如果此刻有弹窗/模态压在页面上，截图会把别人的像素一起烤进去，
         # 那样滑动的就是"一张带着别人窗口的图" —— 这种情况退回盖色板。
-        fast_ok = False
         if not self._has_overlay_window():
             try:
                 self.lift()
