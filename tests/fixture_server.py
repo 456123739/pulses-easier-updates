@@ -240,6 +240,13 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             size = max(0, min(size, _MAX_PAYLOAD))
             body = payload(name or kind, size) if size else b""
+            # ?ms=N：故意让这个请求占住 handler N 毫秒，用来稳定测"并发"
+            try:
+                delay_ms = int(params.get("ms", "0"))
+            except ValueError:
+                delay_ms = 0
+            if delay_ms > 0:
+                time.sleep(min(delay_ms, 2000) / 1000.0)
 
             if kind == "data":
                 sent = self._serve_range(body)

@@ -170,8 +170,9 @@ class TestScheduling(TestBase):
             rel = f"mods/mod_{i}.jar"
             data = payload(f"m{i}", size)
             expect[rel] = data
-            tasks.append(self.task(rel, [self.srv.url("data", f"m{i}", size)],
-                                   data=data))
+            # 每个请求占住 20ms：小文件秒回时并发观测不到，容易误判"没并发"
+            url = self.srv.url("data", f"m{i}", size) + "&ms=20"
+            tasks.append(self.task(rel, [url], data=data))
         done = []
         results = self.run_dl(tasks, progress=lambda d, t, x: done.append(d))
         self.assertEqual(len(results), n)
