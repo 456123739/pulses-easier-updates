@@ -136,6 +136,9 @@ def main() -> int:
         if not report.is_file():
             log("没有拿到 e2e 报告；阶段："
                 + (stage.read_text(encoding="utf-8") if stage.is_file() else "未启动"))
+            err = Path(str(report) + ".err")
+            if err.is_file():
+                log("启动异常：\n" + err.read_text(encoding="utf-8")[-3000:])
             return 1
         data = json.loads(report.read_text(encoding="utf-8"))
         for s in data.get("steps", []):
