@@ -1,3 +1,5 @@
+import { invoke } from '@/bridge'
+import { useApp } from '@/store/app'
 import { useUi } from '@/store/ui'
 import styles from './PendingBanner.module.css'
 
@@ -8,6 +10,16 @@ interface Props {
 
 export default function PendingBanner({ count, mode }: Props) {
   const openSheet = useUi((s) => s.openSheet)
+  const connected = useApp((s) => s.connected)
+
+  const giveUp = async () => {
+    if (!connected) return
+    try {
+      await invoke('update.giveup')
+    } catch {
+      /* 忽略 */
+    }
+  }
   const title = mode === 'wait' ? `还差 ${count} 个文件` : `上次更新未完成 · 还差 ${count} 个文件`
   const sub =
     mode === 'wait'
@@ -29,7 +41,11 @@ export default function PendingBanner({ count, mode }: Props) {
         >
           打开补入窗口
         </button>
-        <button className="btn btn-ghost" style={{ height: 30 }}>
+        <button
+          className="btn btn-ghost"
+          style={{ height: 30 }}
+          onClick={() => void giveUp()}
+        >
           {mode === 'wait' ? '放弃…' : '不再提醒'}
         </button>
       </div>

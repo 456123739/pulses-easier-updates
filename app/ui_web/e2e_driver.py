@@ -35,7 +35,7 @@ CLICK = """
 })()
 """
 
-TEXT = "() => document.body.innerText"
+TEXT = "document.body.innerText"
 
 
 def run(window, controller, bus, cfg: dict) -> None:
@@ -44,6 +44,24 @@ def run(window, controller, bus, cfg: dict) -> None:
 
     def js(code: str):
         return window.evaluate_js(code)
+
+    def invoke(method: str, params: dict, timeout: float = 60.0):
+        """evaluate_js 不会等 Promise：发起后轮询一个全局变量拿结果。"""
+        payload = json.dumps(params)
+        js(f"""window.__e2e = null;
+            window.pywebview.api.invoke({json.dumps(method)}, {payload})
+              .then(function (r) {{ window.__e2e = r; }})
+              .catch(function (e) {{
+                window.__e2e = {{ok: false, error: {{message: String(e)}}}};
+              }});
+            'started'""")
+        end = time.time() + timeout
+        while time.time() < end:
+            res = js("window.__e2e")
+            if res:
+                return res
+            time.sleep(0.25)
+        raise RuntimeError(f"桥调用超时：{method}")
 
     def step(name: str, ok: bool, detail: str = "") -> None:
         report["steps"].append({"name": name, "ok": bool(ok),
@@ -73,14 +91,12 @@ def run(window, controller, bus, cfg: dict) -> None:
         wait_text("定位整合包", 60)
         step("界面渲染", True)
 
-        res = js("window.pywebview.api.invoke('app.pick_pack', {path: %s})"
-                 % json.dumps(cfg["pack"]))
+        res = invoke("app.pick_pack", {"path": cfg["pack"]})
         step("定位整合包", bool(res and res.get("ok")), res)
         wait_text(Path(cfg["pack"]).name[:6], 30)
         step("整合包信息显示", True)
 
-        res = js("window.pywebview.api.invoke('update.pick', {path: %s})"
-                 % json.dumps(cfg["update"]))
+        res = invoke("update.pick", {"path": cfg["update"]})
         step("导入更新包", bool(res and res.get("ok")), res)
 
         click("开始更新")

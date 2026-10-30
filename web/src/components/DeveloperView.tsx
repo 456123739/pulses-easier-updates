@@ -27,6 +27,7 @@ export default function DeveloperView() {
   const pushToast = useApp((s) => s.pushToast)
   const [changelog, setChangelog] = useState('')
   const [outName, setOutName] = useState('')
+  const [outPath, setOutPath] = useState('')
   const seq = useRef(0)
 
   // 后端是事实来源；本地只在打字时短暂领先（防抖动回写）
@@ -94,10 +95,23 @@ export default function DeveloperView() {
     }
   }
 
+  const chooseOut = async () => {
+    if (!connected) return
+    try {
+      const picked = await pickPath('save', outName || 'update.eapack')
+      if (picked) {
+        setOutPath(picked)
+        setOutName(picked.replace(/^.*[\\/]/, ''))
+      }
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '选择失败', 'error')
+    }
+  }
+
   const build = async () => {
     if (!connected || !dev?.source) return
     const dir = dev.source.path.replace(/[\\/][^\\/]+$/, '')
-    const out = `${dir}/${outName || 'update.eapack'}`
+    const out = outPath || `${dir}/${outName || 'update.eapack'}`
     try {
       await invoke('dev.export', { path: out })
     } catch (err) {
@@ -164,6 +178,19 @@ export default function DeveloperView() {
           </div>
         </div>
 
+        {dev?.source && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn-ghost"
+              style={{ height: 28, fontSize: 11.5 }}
+              onClick={() => void invoke('dev.clear')}
+              disabled={exporting}
+            >
+              清空
+            </button>
+          </div>
+        )}
+
         <div className={styles.actions}>
           <input
             className="input"
@@ -172,6 +199,9 @@ export default function DeveloperView() {
             placeholder="输出文件名"
             style={{ flex: 1, minWidth: 0 }}
           />
+          <button className="btn" style={{ height: 38 }} onClick={() => void chooseOut()}>
+            位置…
+          </button>
           <button
             className="btn btn-primary"
             style={{ height: 38, padding: '0 20px' }}

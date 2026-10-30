@@ -61,7 +61,10 @@ export async function invoke<T = unknown>(
   return result.data as T
 }
 
-export async function pickPath(kind: 'file' | 'folder', filters = ''): Promise<string> {
+export async function pickPath(
+  kind: 'file' | 'folder' | 'save',
+  filters = '',
+): Promise<string> {
   const api = window.pywebview?.api
   if (!api?.pick_path) throw new BridgeError('NO_BRIDGE', '桌面桥接尚未就绪')
   const result = await api.pick_path(kind, filters)

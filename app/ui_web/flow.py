@@ -590,6 +590,17 @@ class Flow:
             self._done_paths.add(rel)
             self._write_resume()
 
+    def give_up(self) -> dict:
+        """放弃补入：清掉待补列表，让流程可以继续（缺失文件会记进日志）。"""
+        if not self.pending:
+            return {"ok": True, "pending": []}
+        missed = [p.get("path", "") for p in self.pending]
+        self.pending = []
+        self.bus.log(f"已放弃 {len(missed)} 个未能下载的文件："
+                     + "、".join(missed[:3]), "WARNING")
+        self.controller.push_state()
+        return {"ok": True, "pending": []}
+
     def abort(self) -> dict:
         self._abort.set()
         self.bus.log("已请求中止", "WARNING")
