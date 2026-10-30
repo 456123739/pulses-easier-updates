@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { invoke, pickPath } from '@/bridge'
+import { useApp } from '@/store/app'
 import { usePlayer } from '@/store/player'
 import type { StrategyRow } from '@/store/player'
 import Icon from './Icon'
@@ -19,6 +21,42 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
   const data = rows ?? all
   const [showDisabled, setShowDisabled] = useState(false)
   const [showUnchanged, setShowUnchanged] = useState(false)
+  const [unifyOpen, setUnifyOpen] = useState(false)
+  const connected = useApp((s) => s.connected)
+  const pushToast = useApp((s) => s.pushToast)
+
+  const exportConfig = async () => {
+    if (!connected) return
+    try {
+      const path = await pickPath('save', '策略配置.json')
+      if (path) await invoke('update.config.export', { path })
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '导出失败', 'error')
+    }
+  }
+
+  const importConfig = async () => {
+    if (!connected) return
+    try {
+      const path = await pickPath('file', '')
+      if (path) await invoke('update.config.import', { path })
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '导入失败', 'error')
+    }
+  }
+
+  const unify = async (value: string) => {
+    setUnifyOpen(false)
+    if (!connected) return
+    try {
+      await invoke('update.strategy.setAll', {
+        value,
+        names: enabled.map((r) => r.name),
+      })
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '设置失败', 'error')
+    }
+  }
 
   const enabled = useMemo(() => data.filter((r) => r.checked && (r.changed ?? 0) > 0), [data])
   const unchanged = useMemo(() => data.filter((r) => r.checked && (r.changed ?? 0) === 0), [data])
@@ -32,8 +70,12 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
       <div className={styles.head}>
         <span className="t-title">更新策略</span>
         <div className={styles.headBtns}>
-          <button className={styles.mini}>导入配置</button>
-          <button className={styles.mini}>导出配置</button>
+          <button className={styles.mini} onClick={() => void importConfig()}>
+            导入配置
+          </button>
+          <button className={styles.mini} onClick={() => void exportConfig()}>
+            导出配置
+          </button>
         </div>
       </div>
 
@@ -73,11 +115,37 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
 
       {!compact && (
         <div className={styles.foot}>
-          <button className="btn" style={{ height: 32, padding: '0 16px' }}>
-            统一策略
-          </button>
+          <div style={{ position: 'relative' }}>
+            <button
+              className="btn"
+              style={{ height: 32, padding: '0 16px' }}
+              onClick={() => setUnifyOpen((v) => !v)}
+              disabled={enabled.length === 0}
+            >
+              统一策略
+            </button>
+            <AnimatePresence>
+              {unifyOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 4 }}
+                  transition={{ duration: 0.16, ease: [0.25, 0.8, 0.35, 1] }}
+                  className={`card ${styles.unifyMenu}`}
+                >
+                  {['完全匹配', '替换重名', '跳过重名'].map((s) => (
+                    <button key={s} className={styles.unifyItem} onClick={() => void unify(s)}>
+                      {s}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
           <span className={styles.count}>
-            {enabled.length} 项参与更新 · 跳过 {data.filter((r) => r.changed).length ? '' : ''}
+            {enabled.length} 项参与更新
+            {unchanged.length > 0 ? ` · ${unchanged.length} 项无需更新` : ''}
+            {disabled.length > 0 ? ` · ${disabled.length} 项已禁用` : ''}
           </span>
         </div>
       )}

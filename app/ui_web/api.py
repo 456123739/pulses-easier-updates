@@ -65,6 +65,10 @@ class Api:
             "update.strategy.setAll": lambda p: self.controller.flow.set_all(
                 p.get("value", ""), p.get("checked"), p.get("names")),
             "update.resume": lambda p: self.controller.flow.resume(),
+            "update.config.export": lambda p: self.controller.flow.export_config(
+                p.get("path", "")),
+            "update.config.import": lambda p: self.controller.flow.import_config(
+                p.get("path", "")),
             # ---- 开发者：制作更新包 ----
             "dev.pick": lambda p: self.controller.dev.import_zip(p.get("path", "")),
             "dev.state": lambda p: self.controller.dev.snapshot(),

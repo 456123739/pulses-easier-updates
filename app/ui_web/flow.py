@@ -601,6 +601,46 @@ class Flow:
         self.controller.push_state()
         return {"ok": True, "pending": []}
 
+    # ------------------------------------------------------------------
+    # 策略配置的导入 / 导出（给"这套策略存下来"用）
+    # ------------------------------------------------------------------
+    def export_config(self, raw: str) -> dict:
+        path = Path(raw).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"version": 1,
+                   "strategies": dict(self.strategies),
+                   "checked": dict(self.checked)}
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        self.bus.log(f"策略配置已导出：{path.name}", "SUCCESS")
+        return {"path": str(path)}
+
+    def import_config(self, raw: str) -> dict:
+        path = Path(raw).expanduser()
+        if not path.is_file():
+            raise FlowError(f"文件不存在：{path}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:                           # noqa: BLE001
+            raise FlowError(f"不是有效的策略配置：{exc}") from exc
+        strategies = data.get("strategies") or {}
+        checked = data.get("checked") or {}
+        if not isinstance(strategies, dict):
+            raise FlowError("配置文件里的 strategies 不合法")
+        known = set(self.tops) | set(self.root_files)
+        applied = 0
+        with self._lock:
+            for name, value in strategies.items():
+                if name in known and isinstance(value, str):
+                    self.strategies[name] = value
+                    applied += 1
+            for name, value in checked.items():
+                if name in known:
+                    self.checked[name] = bool(value)
+        self.bus.log(f"已导入策略配置（{applied} 项）", "SUCCESS")
+        self.controller.push_state()
+        return self.snapshot()
+
     def abort(self) -> dict:
         self._abort.set()
         self.bus.log("已请求中止", "WARNING")

@@ -219,6 +219,8 @@ export const usePlayer = create<PlayerStore>((set, get) => ({
         strategies: r.strategies,
         current: r.current,
         checked: r.checked,
+        // 待更新条数来自后端；0 的行会折叠进「无需更新」
+        changed: flow.changeCounts?.[r.name] ?? 0,
       }))
       const groups: ChangeGroup[] = flow.groups.map((g) => ({
         top: g.top,
@@ -241,14 +243,19 @@ export const usePlayer = create<PlayerStore>((set, get) => ({
               ? 'apply'
               : 'idle'
       const hasDiff = groups.some((g) => g.items.length > 0)
+      const finished = flow.phase === 'done'
       const btn: BtnState =
         phase !== 'idle'
           ? 'busy'
-          : hasDiff
-            ? 'confirm'
-            : flow.update
-              ? 'ready'
-              : 'disabled'
+          : finished
+            ? 'ready'                 // 更新完成：回到「开始更新」，可再扫一次
+            : hasDiff
+              ? 'confirm'
+              : flow.update
+                ? 'ready'
+                : flow.resume
+                  ? 'resume'
+                  : 'disabled'
       return {
         strategies,
         groups,

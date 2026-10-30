@@ -146,3 +146,28 @@
   align-items: center;
   gap: 2px;
 }
+
+/* 统一策略的小浮层 */
+.unifyMenu {
+  position: absolute;
+  left: 0;
+  bottom: 40px;
+  min-width: 128px;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  z-index: 20;
+}
+
+.unifyItem {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: var(--fs-body);
+  color: var(--c-text-2);
+}
+.unifyItem:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--c-text);
+}
