@@ -27,6 +27,7 @@ from pathlib import Path
 from ..config import (Strategy, default_strategy_for_dir,
                       default_strategy_for_file)
 from ..core import config_exclude
+from ..core import recover as recover_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
 from ..core.apply_rules import is_checked as _rule_is_checked
@@ -230,6 +231,14 @@ class Flow:
             root = self.pack_root
             assert zpath is not None and root is not None
             self.bus.log(f"开始比对：{zpath.name}", "INFO")
+            # 上次中断留下的 .xxx.pulses_tmp 会被当成"玩家文件"算进差异里，先收拾
+            try:
+                if recover_mod.has_leftovers(root):
+                    stats = recover_mod.recover_leftovers(
+                        root, log=lambda level, msg: self.bus.log(msg, level.upper()))
+                    self.bus.log(recover_mod.summary(stats), "WARNING")
+            except Exception as exc:                       # noqa: BLE001
+                self.bus.log(f"清理上次残留失败：{exc}", "WARNING")
             self._temp = Path(tempfile.mkdtemp(prefix="pe-web-"))
             prefix, _standard, zip_tops, _names = _zip_layout(zpath)
             content_root = (self._temp / prefix) if prefix else self._temp
