@@ -83,8 +83,16 @@ def main() -> int:
         log("非 Windows，跳过真机 e2e")
         return 0
 
-    # 产物必须已构建：CI 里这一步在 npm run build 之后
-    if not (ROOT / "web" / "dist" / "index.html").is_file():
+    # 要测的"壳"：显式 --exe 就是打包后的程序，否则跑源码
+    exe_arg = ""
+    if "--exe" in sys.argv:
+        exe_arg = sys.argv[sys.argv.index("--exe") + 1]
+    exe_path = Path(exe_arg).resolve() if exe_arg else None
+    if exe_path is not None:
+        if not exe_path.is_file():
+            log(f"找不到打包产物：{exe_path}")
+            return 1
+    elif not (ROOT / "web" / "dist" / "index.html").is_file():
         log("缺少 web/dist，先构建前端")
         return 1
 
@@ -106,9 +114,12 @@ def main() -> int:
             "HOME": str(home),
             "USERPROFILE": str(home),
         }
-        exe = Path(sys.executable)
-        cmd = [str(exe)] if getattr(sys, "frozen", False) else [
-            str(exe), str(ROOT / "main.py")]
+        if exe_path is not None:
+            cmd = [str(exe_path)]
+        else:
+            exe = Path(sys.executable)
+            cmd = [str(exe)] if getattr(sys, "frozen", False) else [
+                str(exe), str(ROOT / "main.py")]
         log("启动：" + " ".join(cmd))
         proc = subprocess.Popen(cmd, cwd=str(ROOT), env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

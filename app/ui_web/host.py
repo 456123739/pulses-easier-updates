@@ -19,7 +19,7 @@ import sys
 import threading
 from pathlib import Path
 
-from ..paths import bundle_dir, project_root
+from ..paths import bundle_dir, exe_dir, project_root
 from .api import Api
 from .controller import AppController
 from .events import EventBus, EventPump
@@ -31,11 +31,16 @@ BG = "#1E1E1E"
 
 
 def web_dist_dir() -> Path:
-    """前端产物目录（源码 / 打包都要能找到）。"""
-    bundled = bundle_dir() / "web" / "dist"
-    if bundled.is_dir():
-        return bundled
-    return project_root() / "web" / "dist"
+    """前端产物目录（源码 / 打包都要能找到）。
+
+    打包后 PyInstaller 可能把 datas 放 `_internal/`（默认）也可能与 exe 同级
+    （contents_directory="."），两个都试一遍，避免"包里有但找不到"。
+    """
+    for base in (bundle_dir(), exe_dir(), project_root()):
+        candidate = base / "web" / "dist"
+        if (candidate / "index.html").is_file():
+            return candidate
+    return bundle_dir() / "web" / "dist"
 
 
 def _web_target() -> str:
