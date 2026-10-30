@@ -1,77 +1,81 @@
-.dialog-mask {
+.mask {
   position: fixed;
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: 150;
+  background: rgba(10, 10, 11, 0.45);
+  z-index: 160;
 }
 
-.dialog-card {
+.card {
   min-width: 360px;
-  max-width: 560px;
-  padding: 20px 22px 16px;
-  border-radius: var(--r-modal);
-  background: var(--c-card);
-  box-shadow: var(--shadow-modal);
+  max-width: 540px;
+  padding: 22px 24px 18px;
+  border-radius: 18px;
+  background: #1e1e21;
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-3);
 }
 
-.dialog-title {
-  font-size: var(--fs-title);
-  font-weight: var(--fw-bold);
+.title {
+  font-family: var(--font-display);
+  font-size: 15.5px;
+  font-weight: 590;
   color: var(--c-text);
   margin-bottom: 8px;
 }
 
-.dialog-message {
+.message {
   font-size: var(--fs-body);
   color: var(--c-text);
   white-space: pre-wrap;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
-.dialog-detail {
-  margin-top: 8px;
+.detail {
+  margin-top: 10px;
   max-height: 180px;
   overflow: auto;
-  padding: 8px 10px;
-  border-radius: var(--r-input);
-  background: var(--c-log);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #171718;
+  border: 1px solid var(--hairline);
   color: var(--c-text-2);
   font-family: var(--font-mono);
   font-size: var(--fs-small);
   white-space: pre-wrap;
 }
 
-.dialog-actions {
+.actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 18px;
+  margin-top: 20px;
 }
 
-.dialog-btn {
+.btn {
   height: 34px;
   min-width: 84px;
   padding: 0 16px;
-  border-radius: var(--r-btn);
-  background: var(--c-workspace);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
   color: var(--c-text-2);
   font-size: var(--fs-body);
-  transition: background var(--dur-hover) var(--ease-out),
-    color var(--dur-hover) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
-.dialog-btn:hover {
+.btn:hover {
   color: var(--c-text);
+  background: rgba(255, 255, 255, 0.1);
 }
 
-.dialog-btn.primary {
+.btn.primary {
   background: var(--c-accent);
   color: var(--c-on-accent);
-  font-weight: var(--fw-bold);
+  font-weight: 590;
 }
 
-.dialog-btn.primary:hover {
+.btn.primary:hover {
   background: var(--c-accent-hover);
 }

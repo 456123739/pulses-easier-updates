@@ -20,6 +20,9 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# 直接 `python tests/xxx.py` 时 sys.path[0] 是 tests/，要显式把仓库根加回来
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 TIMEOUT = float(os.environ.get("PULSES_E2E_TIMEOUT", "300"))
 
 
@@ -147,6 +150,13 @@ def main() -> int:
         assert (pack / "config" / "sodium-options.json").read_text() == \
             '{"render_distance": 8}\n'
         log("磁盘结果正确（含智能剔除保护）")
+
+        try:                                            # 截图留给 CI 产物
+            from PIL import ImageGrab
+            ImageGrab.grab().save(str(ROOT / "e2e-windows.png"))
+            log("已截图 e2e-windows.png")
+        except Exception as exc:                        # noqa: BLE001
+            log(f"截图失败（不影响结论）：{exc}")
         return 0
     except Exception:                                   # noqa: BLE001
         import traceback

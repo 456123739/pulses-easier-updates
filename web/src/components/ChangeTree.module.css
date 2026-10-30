@@ -78,6 +78,9 @@
 }
 
 .item {
+  /* 变更多的时候（几千行）浏览器只渲染视口附近的，避免滚动掉帧 */
+  content-visibility: auto;
+  contain-intrinsic-size: 22px;
   display: flex;
   align-items: center;
   gap: 6px;

@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { invoke } from '@/bridge'
 import { useApp } from '@/store/app'
-import './DialogHost.module.css'
+import styles from './DialogHost.module.css'
 
 /** 弹窗宿主（骨架版）：alert/confirm/locate 用同一个壳，细节待规范。 */
 export default function DialogHost() {
@@ -24,14 +24,14 @@ export default function DialogHost() {
     <AnimatePresence>
       {dialog && (
         <motion.div
-          className="dialog-mask"
+          className={styles.mask}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.17 }}
         >
           <motion.div
-            className="dialog-card"
+            className={styles.card}
             initial={{ opacity: 0, y: 16, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -39,14 +39,14 @@ export default function DialogHost() {
             role="dialog"
             aria-modal="true"
           >
-            {dialog.title && <div className="dialog-title">{dialog.title}</div>}
-            <div className="dialog-message">{dialog.message}</div>
-            {dialog.detail && <div className="dialog-detail selectable">{dialog.detail}</div>}
-            <div className="dialog-actions">
+            {dialog.title && <div className={styles.title}>{dialog.title}</div>}
+            <div className={styles.message}>{dialog.message}</div>
+            {dialog.detail && <div className={`${styles.detail} selectable`}>{dialog.detail}</div>}
+            <div className={styles.actions}>
               {(dialog.buttons ?? [{ id: 'ok', label: '好', primary: true }]).map((b) => (
                 <button
                   key={b.id}
-                  className={`dialog-btn${b.primary ? ' primary' : ''}`}
+                  className={`${styles.btn}${b.primary ? ' ' + styles.primary : ''}`}
                   onClick={() => respond(b.id)}
                 >
                   {b.label}

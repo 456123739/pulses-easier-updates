@@ -117,6 +117,27 @@ check(await page.getByText('取消下载').first().isVisible(), '下载中主按
 check((await page.locator('text=正在下载').count()) > 0, '下载提示文案可见')
 if (SHOTS) await page.screenshot({ path: 'shots/ui-download.png' })
 
+// 9) 对话框（关闭守卫等都用它）
+await page.evaluate(() => {
+  window.__pe.useApp.setState({
+    dialog: {
+      id: 'd1',
+      kind: 'confirm',
+      title: '更新流程正在进行',
+      message: '现在关闭会中断下载。要放弃吗？',
+      buttons: [
+        { id: 'cancel', label: '继续更新' },
+        { id: 'ok', label: '放弃并关闭', primary: true },
+      ],
+    },
+  })
+})
+await page.waitForTimeout(360)
+check(await page.getByText('更新流程正在进行').first().isVisible(), '对话框可弹出')
+await page.getByRole('button', { name: '继续更新' }).click()
+await page.waitForTimeout(700)
+check(!(await page.getByText('更新流程正在进行').isVisible()), '对话框可关闭')
+
 await page.waitForTimeout(120)
 check(errors.length === 0, '无控制台错误', errors.join(' | ').slice(0, 300))
 await browser.close()
