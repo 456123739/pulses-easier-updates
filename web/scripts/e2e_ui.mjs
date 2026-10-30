@@ -6,7 +6,8 @@ import { join } from 'node:path'
 
 const url = process.argv[2] || 'http://127.0.0.1:8123/index.html'
 const work = process.argv[3]
-const exe = process.env.CHROMIUM || '/home/admin/.cache/ms-playwright/chromium-1194/chrome-linux/chrome'
+// CI 用 playwright 自己装的内核；本机可以指定 CHROMIUM 覆盖
+const exe = process.env.CHROMIUM || ''
 
 const fixture = JSON.parse(readFileSync(join(work, 'fixture.json'), 'utf8'))
 let failed = 0
@@ -15,7 +16,10 @@ const check = (ok, label, extra = '') => {
   if (!ok) failed++
 }
 
-const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] })
+const browser = await chromium.launch({
+  ...(exe ? { executablePath: exe } : {}),
+  args: ['--no-sandbox'],
+})
 const page = await browser.newPage({ viewport: { width: 1440, height: 860 } })
 const errors = []
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })

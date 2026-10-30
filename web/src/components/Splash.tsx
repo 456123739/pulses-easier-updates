@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import logo from '@/assets/logo.png'
 import styles from './Splash.module.css'
 
-/** 启动页：整屏玻璃卡 + logo 呼吸 + 流光进度条。 */
+/** 启动页：哑光卡 + logo + 细进度条（不做流光）。 */
 export default function Splash() {
   return (
     <motion.div

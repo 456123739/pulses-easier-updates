@@ -8,7 +8,7 @@
 }
 
 .card {
-  width: 320px;
+  width: 336px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -21,9 +21,10 @@
 }
 
 .logo {
-  width: 76px;
-  height: 76px;
-  border-radius: 18px;
+  width: 92px;
+  height: 92px;
+  border-radius: 22px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
   object-fit: contain;
 }
 
