@@ -125,7 +125,11 @@ function Group({
                 <span className={styles.mark} data-kind={it.kind}>
                   {it.kind === 'added' ? '+' : it.kind === 'modified' ? '~' : '-'}
                 </span>
-                <span className={styles.path}>{it.path}</span>
+                <span className={styles.path}>
+                  {it.path.startsWith(`${group.top}/`)
+                    ? it.path.slice(group.top.length + 1)
+                    : it.path}
+                </span>
                 {it.skipped && <span className={styles.skipped}>已跳过</span>}
               </div>
             ))}

@@ -1,10 +1,22 @@
 import { useEffect, useRef } from 'react'
+import { useApp } from '@/store/app'
 import { usePlayer } from '@/store/player'
 import styles from './LogPanel.module.css'
 
 export default function LogPanel() {
-  const log = usePlayer((s) => s.log)
-  const clearLog = usePlayer((s) => s.clearLog)
+  const demo = usePlayer((s) => s.log)
+  const clearDemo = usePlayer((s) => s.clearLog)
+  const connected = useApp((s) => s.connected)
+  const real = useApp((s) => s.logs)
+
+  // 后端推的日志是唯一事实；没连桥（浏览器预览）时才用演示数据
+  const log = connected
+    ? real.map((l) => ({ id: l.id, level: l.level.toLowerCase(), text: l.message }))
+    : demo
+  const clearLog = () => {
+    clearDemo()
+    if (connected) useApp.getState().clearLogs()
+  }
   const boxRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
 
