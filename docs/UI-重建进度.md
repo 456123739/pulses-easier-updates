@@ -37,6 +37,8 @@
 | 界面交互（Playwright） | `web/scripts/ui_test.mjs` | 12 项全过：渲染/胶囊/折叠/换身份/首选项/受阻条/下载态/无控制台错误 |
 | 截图 | `web/scripts/shot.mjs` + `ui_test.mjs --shots` | `web/shots/*.png` |
 | 端到端（Tk 真窗口） | `tests/e2e_flow.py`（Windows） | 未改，仍覆盖完整流程 |
+| 端到端（新界面，真前端 + 真 Api） | `scripts/dev/run_ui_e2e.py` | **12 项**：定位 → 导入 → 比对 → 应用 → 磁盘校验 |
+| 外壳冒烟（真 WebView2 起窗） | `tests/web_e2e_windows.py` / CI 打包后起窗 | CI 里跑，证据进 artifact |
 
 ## 已补完（第二轮）
 
@@ -50,6 +52,15 @@
 - 进度文案来自后端（正在下载 / 应用 12/40 / 更新完成）
 - 真机端到端：`app/ui_web/e2e_driver.py` 在真实 WebView2 页面里点按钮，
   `tests/web_e2e_windows.py` 搭夹具核对磁盘；CI 里阻断并重试一次
+
+## 端到端是怎么做到"真机"的
+
+浏览器里跑不了新界面，是因为它依赖 pywebview 注入的 `window.pywebview`。
+`scripts/dev/bridge_server.py` 用 HTTP 把同一套东西补上（`/api/invoke` 直接调
+`app/ui_web/api.py`，`/api/events` 拉事件流），页面里注入同构 shim。
+
+于是 CI 上的端到端是：**真前端产物 + 真 Api + 真流程 + 真磁盘**，Playwright 点按钮；
+只有外壳（WebView2）不同，外壳另有一条"打包后起窗冒烟"覆盖。
 
 ## 未完成（按优先级）
 

@@ -73,6 +73,29 @@ jobs:
       - name: PyInstaller 打包
         run: python -m PyInstaller --clean --noconfirm pulses-easier.spec
 
+      # 打包后的壳：真的 exe + 真 WebView2 起窗（窗口标题出现即通过）
+      - name: 打包后起窗冒烟（新界面）
+        shell: pwsh
+        run: |
+          $exe = "dist/Pulses Easier/Pulses Easier.exe"
+          if (-not (Test-Path $exe)) { throw "没找到打包产物" }
+          if (-not (Test-Path "dist/Pulses Easier/web/dist/index.html")) {
+            throw "web/dist 没进包"
+          }
+          $env:PULSES_UI = "web"
+          $p = Start-Process -FilePath $exe -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+            if ($p.MainWindowTitle) { $ok = $true; break }
+          }
+          $title = $p.MainWindowTitle
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          if (-not $ok) { throw "窗口没起来（MainWindowTitle 为空）" }
+          Write-Host "窗口标题：$title"
+
       - name: 保存端到端截图
         if: always()
         uses: actions/upload-artifact@v4
