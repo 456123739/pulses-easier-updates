@@ -1,0 +1,117 @@
+/* 设计令牌 v3 — 哑光、极简、克制的深色语言
+   原则：不做高光/发光/镜面渐变；层次靠"色调差 + 发丝线 + 极浅投影"，
+   强调色只用于主操作与选中态，面积克制。 */
+:root {
+  /* ---- 中性色阶（哑光，低饱和）---- */
+  --c-base: #101011;
+  --c-window: #161617;
+  --c-sidebar: #1a1a1c;
+  --c-workspace: #141415;
+  --c-card: #1f1f22;
+  --c-card-2: #232326;
+  --c-log: #191a1b;
+  --c-input: #1c1c1f;
+
+  /* ---- 材质 ---- */
+  --mat-1: rgba(255, 255, 255, 0.028);
+  --mat-2: rgba(255, 255, 255, 0.045);
+  --mat-3: rgba(255, 255, 255, 0.07);
+  --hairline: rgba(255, 255, 255, 0.065);
+  --hairline-strong: rgba(255, 255, 255, 0.11);
+  --glass-blur: blur(20px) saturate(120%);
+  --glass-blur-thick: blur(28px) saturate(120%);
+
+  /* ---- 强调色（青，压低饱和）---- */
+  --c-accent: #4ec9b0;
+  --c-accent-hover: #5ed3bb;
+  --c-accent-press: #43b39c;
+  --c-accent-soft: rgba(78, 201, 176, 0.12);
+  --c-accent-line: rgba(78, 201, 176, 0.34);
+  --c-accent-text: #8fe3d1;
+
+  /* ---- 文字 ---- */
+  --c-text: #e9e9ec;
+  --c-text-2: rgba(233, 233, 236, 0.58);
+  --c-muted: rgba(233, 233, 236, 0.34);
+  --c-on-accent: #0b1f1b;
+  --c-border: rgba(255, 255, 255, 0.08);
+
+  /* ---- 语义色 ---- */
+  --c-added: #6fc7b3;
+  --c-modified: #cfcfa0;
+  --c-deleted: #e08d7c;
+  --c-warn: #cfcfa0;
+  --c-error: #e08d7c;
+  --c-warn-soft: rgba(207, 207, 160, 0.1);
+  --c-error-soft: rgba(224, 141, 124, 0.1);
+
+  /* ---- 字体 ---- */
+  --font-ui: "SF Pro Text", "PingFang SC", "Microsoft YaHei UI",
+    "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  --font-display: "SF Pro Display", "PingFang SC", "Microsoft YaHei UI",
+    "Noto Sans CJK SC", sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", "Consolas", "DejaVu Sans Mono",
+    monospace;
+  --fs-display: 24px;
+  --fs-title: 15px;
+  --fs-body: 13px;
+  --fs-small: 11.5px;
+  --fs-tiny: 10.5px;
+  --fw-bold: 590;
+
+  /* ---- 尺寸 ---- */
+  --sidebar-w: 244px;
+  --player-l: 46%;
+  --player-r: 54%;
+  --dev-l: 64%;
+  --dev-r: 36%;
+  --dev-right-min: 320px;
+
+  --r-xl: 20px;
+  --r-card: 16px;
+  --r-btn: 10px;
+  --r-pill: 999px;
+  --r-input: 10px;
+  --r-drop: 14px;
+
+  --gap: 12px;
+  --pad-panel: 18px;
+  --pad-ws: 18px;
+
+  --logo: 76px;
+  --drop-h-sidebar: 104px;
+  --drop-h-work: 112px;
+  --btn-main-h: 48px;
+  --progress-h: 6px;
+  --log-h: 168px;
+
+  /* ---- 投影：只做"离地一点点"，不做光环 ---- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.34), 0 14px 28px -22px rgba(0, 0, 0, 0.8);
+  --shadow-3: 0 8px 18px rgba(0, 0, 0, 0.42), 0 32px 64px -40px rgba(0, 0, 0, 0.9);
+
+  /* ---- 动效：短、稳、无弹跳（回弹只在滑块上用，幅度 ≤3%）---- */
+  --dur-fast: 110ms;
+  --dur-base: 180ms;
+  --dur-panel: 240ms;
+  --dur-cover: 170ms;
+  --ease-out: cubic-bezier(0.25, 0.8, 0.35, 1);
+  --ease-spring: cubic-bezier(0.32, 1.06, 0.6, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root[data-motion='off'] *,
+:root[data-motion='off'] *::before,
+:root[data-motion='off'] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

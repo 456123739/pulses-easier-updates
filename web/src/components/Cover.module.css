@@ -1,0 +1,15 @@
+.cover {
+  position: fixed;
+  inset: 0;
+  z-index: 180;
+  display: grid;
+  place-items: center;
+  background: #101011;
+}
+
+.mark {
+  width: 132px;
+  height: auto;
+  opacity: 0.9;
+  user-select: none;
+}

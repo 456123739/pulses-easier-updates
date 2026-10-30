@@ -30,6 +30,12 @@ NAME = "Pulses Easier"
 
 # ---- 数据文件 ----
 datas = [(str(ROOT / "assets"), "assets")]
+# 新界面是 React 构建产物：不进版本库，但要进安装包
+_web_dist = ROOT / "web" / "dist"
+if _web_dist.is_dir():
+    datas.append((str(_web_dist), "web/dist"))
+else:
+    print("[warn] 缺少 web/dist：新界面（PULSES_UI=web）将不可用")
 for pkg in ("customtkinter", "tkinterdnd2"):
     try:
         datas += collect_data_files(pkg)
@@ -45,7 +51,7 @@ hiddenimports = [
 try:
     import webview                                # noqa: F401
     hiddenimports += ["webview", "webview.platforms.edgechromium",
-                      "clr_loader"]
+                      "webview.platforms.winforms", "clr_loader"]
 except Exception:                                 # noqa: BLE001
     print("[info] 未安装 pywebview，更新日志预览将降级为系统浏览器")
 

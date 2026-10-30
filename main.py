@@ -23,6 +23,13 @@ if len(sys.argv) >= 3 and sys.argv[1] == "--preview-worker":
     from app.core.preview_worker import main as _preview_main
     sys.exit(_preview_main(sys.argv[2:]))
 
+import os
+
+# 新界面（React + pywebview）在灰度阶段：显式 PULSES_UI=web 才启用。
+if os.environ.get("PULSES_UI", "").strip().lower() == "web":
+    from app.ui_web import host as _web_host
+    raise SystemExit(_web_host.run(sys.argv[1:]))
+
 import customtkinter as ctk
 
 try:

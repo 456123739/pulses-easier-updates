@@ -1,0 +1,64 @@
+.btn {
+  position: relative;
+  height: var(--btn-main-h);
+  width: 100%;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 590;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+  transition: background var(--dur-base) var(--ease-out),
+    color var(--dur-base), border-color var(--dur-base);
+}
+
+.primary {
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+}
+.primary:hover {
+  background: var(--c-accent-hover);
+}
+
+/* 哑光：不做流光 */
+.sheen {
+  display: none;
+}
+
+.confirm {
+  background: #cfcfa0;
+  color: #1c1c12;
+}
+.confirm:hover {
+  background: #dadbb0;
+}
+
+.ghost {
+  background: var(--mat-2);
+  color: var(--c-text);
+  border-color: var(--hairline);
+}
+.ghost:hover {
+  background: var(--mat-3);
+}
+
+.muted {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--c-muted);
+  border-color: transparent;
+}
+
+.cancel {
+  background: transparent;
+  color: var(--c-error);
+  border-color: rgba(224, 141, 124, 0.3);
+  cursor: default;
+}
+
+.label {
+  position: relative;
+  z-index: 1;
+}
