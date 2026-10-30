@@ -108,12 +108,12 @@ class SettingsAndResumeCase(unittest.TestCase):
         self.assertEqual(got["data"]["whitelist"], ["mods", "config"])
 
     def test_db_path_set_and_get(self):
-        target = self.tmp / "moved" / "p.db"
+        target = self.tmp / "moved" / "p.db"          # 前端传的是"文件"
         res = self.api.invoke("app.db.set", {"path": str(target)})
         self.assertTrue(res["ok"], res)
-        self.assertEqual(Path(res["data"]["path"]), target)
+        self.assertEqual(Path(res["data"]["path"]), target.parent)
         self.assertEqual(Path(self.api.invoke("app.db.get")["data"]["path"]),
-                         target)
+                         target.parent)
 
     def test_resume_info_after_scan(self):
         pack, update = self._build()

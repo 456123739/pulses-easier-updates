@@ -220,6 +220,9 @@ class AppController:
 
     def set_db_path(self, raw: str) -> dict:
         path = Path(str(raw)).expanduser()
+        # 允许前端传"文件"，但数据库是一整个目录（config.json 等都在里面）
+        if path.suffix:
+            path = path.parent
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.exists():
