@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false && tsc -b"
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false && tsc -b",
+    "test:ui": "node scripts/ui_test.mjs",
+    "test:e2e": "node scripts/e2e_ui.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.0",

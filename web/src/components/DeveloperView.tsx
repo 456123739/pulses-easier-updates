@@ -136,7 +136,7 @@ export default function DeveloperView() {
               ? `${dev.files} 个文件 · ${dev.version || '未标注版本'}`
               : '支持整合包根目录 / 版本目录'
           }
-          hint={dev?.source ? undefined : '或点击选择'}
+          hint={dev?.source ? '' : '或点击选择'}
           height={92}
           onPick={importZip}
         />

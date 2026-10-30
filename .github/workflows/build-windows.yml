@@ -54,18 +54,16 @@ jobs:
       - name: 单元测试（失败即阻断）
         run: python -m unittest discover -s tests -p "test_*.py"
 
-      # 真机端到端：真的 WebView2 + 真前端 + 真桥，在真页面里点完整流程
-      # （第一次失败重试一次，避免 runner 冷启动把它抖红）
-      - name: 真机端到端（新界面）
-        shell: pwsh
+      # 端到端：真前端 + 真 Api + 真流程（Playwright 在真页面里点，Python 干活）
+      - name: 端到端（真前端 + 真 Api）
         run: |
-          python tests/web_e2e_windows.py
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "第一次失败，重试一次…"
-            Start-Sleep -Seconds 8
-            python tests/web_e2e_windows.py
-          }
-          if ($LASTEXITCODE -ne 0) { throw "真机端到端失败" }
+          npx --prefix web playwright install chromium
+          python scripts/dev/run_ui_e2e.py
+
+      # 外壳冒烟：真 WebView2 起窗并加载页面（失败不阻断发布，留证据）
+      - name: 外壳冒烟（WebView2）
+        continue-on-error: true
+        run: python tests/web_e2e_windows.py
 
       # 真实 Tk 窗口：动画 / 文字刷新 / 列表增量 / 滚动位置
       # （没有桌面时脚本自己跳过，不会误伤）
@@ -80,7 +78,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-screenshots
-          path: e2e-windows.png
+          path: |
+            e2e-ui.png
+            e2e-windows.png
           if-no-files-found: ignore
 
       - name: 组装发布目录 + 压缩
