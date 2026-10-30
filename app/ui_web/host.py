@@ -114,7 +114,12 @@ def run(argv: list[str] | None = None) -> int:
         except Exception:                            # noqa: BLE001, S110
             pass
 
-    e2e_mark("window-created")
+    e2e_mark("window-created:" + str(target))
+    try:
+        import webview as _wv
+        e2e_mark("window-created:" + str(target) + " pywebview=" + getattr(_wv, "__version__", "?"))
+    except Exception:                                # noqa: BLE001, S110
+        pass
     if os.environ.get("PULSES_E2E", "").strip() in ("1", "true", "yes"):
         # 不等 loaded：页面没加载出来时也要有报告，否则 CI 只能看到"没拿到报告"
         try:
@@ -161,6 +166,7 @@ def run(argv: list[str] | None = None) -> int:
     except Exception:                                # noqa: BLE001, S110
         pass
 
+    e2e_mark("starting")
     try:
         webview.start(
             debug=bool(os.environ.get("PULSES_WEBVIEW_DEBUG")),
