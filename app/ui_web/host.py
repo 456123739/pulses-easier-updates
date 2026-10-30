@@ -27,7 +27,7 @@ from .events import EventBus, EventPump
 WINDOW_TITLE = "Pulses Easier"
 WINDOW_W, WINDOW_H = 1440, 860
 WINDOW_MIN = (1000, 620)
-BG = "#1E1E1E"
+BG = "#101011"          # 与新界面底色一致，避免启动时闪一下浅灰
 
 
 def web_dist_dir() -> Path:
