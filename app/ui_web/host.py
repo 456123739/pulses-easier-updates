@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 from ..paths import bundle_dir, project_root
@@ -120,6 +121,16 @@ def run(argv: list[str] | None = None) -> int:
             from .e2e_driver import launch_if_requested
             launch_if_requested(window, controller, bus, delay=2.0)
             e2e_mark("driver-launched")
+
+            def _force_show():
+                import time as _t
+                _t.sleep(4.0)
+                try:
+                    window.show()
+                except Exception:                    # noqa: BLE001, S110
+                    pass
+
+            threading.Thread(target=_force_show, daemon=True).start()
         except Exception as exc:                     # noqa: BLE001
             bus.log(f"e2e 驱动启动失败：{exc}", "ERROR")
     pump_holder: dict[str, EventPump] = {}

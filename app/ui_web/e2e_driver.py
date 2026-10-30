@@ -43,10 +43,23 @@ def run(window, controller, bus, cfg: dict) -> None:
     report = {"ok": False, "steps": [], "error": ""}
 
     def js(code: str):
-        try:
-            return window.evaluate_js(code)
-        except Exception:                             # noqa: BLE001
+        """带看门狗：页面没加载时 evaluate_js 可能一直不返回，不能拖住报告。"""
+        box: dict = {}
+
+        def work():
+            try:
+                box["value"] = window.evaluate_js(code)
+            except Exception as exc:                  # noqa: BLE001
+                box["error"] = exc
+
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        th.join(10.0)
+        if th.is_alive():
+            raise RuntimeError("evaluate_js 超时（页面可能没渲染出来）")
+        if "error" in box:
             return None
+        return box.get("value")
 
     def invoke(method: str, params: dict, timeout: float = 60.0):
         """evaluate_js 不会等 Promise：发起后轮询一个全局变量拿结果。"""
