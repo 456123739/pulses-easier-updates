@@ -173,11 +173,23 @@ def run(argv: list[str] | None = None) -> int:
 
     e2e_mark("starting")
     try:
+        try:
+            import webview as _wv
+            e2e_mark("starting pywebview=" + getattr(_wv, "__version__", "?"))
+        except Exception:                            # noqa: BLE001, S110
+            pass
         webview.start(
             debug=bool(os.environ.get("PULSES_WEBVIEW_DEBUG")),
             http_server=True,
             private_mode=True,
         )
+    except Exception:                                # noqa: BLE001
+        import traceback as _tb
+        try:
+            e2e_mark("start-failed:" + _tb.format_exc()[:1500])
+        except Exception:                            # noqa: BLE001, S110
+            pass
+        raise
     finally:
         pump = pump_holder.get("pump")
         if pump:
