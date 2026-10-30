@@ -59,7 +59,9 @@ await page.screenshot({ path: join(work, 'e2e.png') })
 
 // 磁盘为准
 const fs = await import('node:fs/promises')
-const read = (p) => fs.readFile(join(fixture.pack, p), 'utf8')
+// Windows 上夹具是 CRLF，比较前统一换行符
+const read = async (p) =>
+  (await fs.readFile(join(fixture.pack, p), 'utf8')).replace(/\r\n/g, '\n')
 check((await read('mods/old.jar')) === 'NEW', 'mods 已替换')
 check((await read('mods/added.jar')) === 'ADDED', '新增文件已落地')
 check(!(await fs.stat(join(fixture.pack, 'mods/gone.jar')).then(() => true).catch(() => false)), '本地多余文件已删除')
