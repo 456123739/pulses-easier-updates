@@ -103,18 +103,32 @@ def run(argv: list[str] | None = None) -> int:
         hidden=True,
     )
     api.bind_window(window)
+
+    def e2e_mark(stage: str) -> None:
+        path = os.environ.get("PULSES_E2E_STAGE", "")
+        if not path:
+            return
+        try:
+            Path(path).write_text(stage, encoding="utf-8")
+        except Exception:                            # noqa: BLE001, S110
+            pass
+
+    e2e_mark("window-created")
+    if os.environ.get("PULSES_E2E", "").strip() in ("1", "true", "yes"):
+        # 不等 loaded：页面没加载出来时也要有报告，否则 CI 只能看到"没拿到报告"
+        try:
+            from .e2e_driver import launch_if_requested
+            launch_if_requested(window, controller, bus, delay=2.0)
+            e2e_mark("driver-launched")
+        except Exception as exc:                     # noqa: BLE001
+            bus.log(f"e2e 驱动启动失败：{exc}", "ERROR")
     pump_holder: dict[str, EventPump] = {}
 
     def on_loaded():
         bind_drop(window, api, bus)
         pump = EventPump(bus, window, logger=bus.log).start()
         pump_holder["pump"] = pump
-        # CI 的真机端到端：在真页面里点按钮（见 e2e_driver.py）
-        try:
-            from .e2e_driver import launch_if_requested
-            launch_if_requested(window, controller, bus)
-        except Exception as exc:                     # noqa: BLE001, S110
-            bus.log(f"e2e 驱动未启动：{exc}", "WARNING")
+        e2e_mark("page-loaded")
         try:
             window.show()
         except Exception:                            # noqa: BLE001, S110

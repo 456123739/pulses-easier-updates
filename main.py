@@ -27,8 +27,24 @@ import os
 
 # 新界面（React + pywebview）在灰度阶段：显式 PULSES_UI=web 才启用。
 if os.environ.get("PULSES_UI", "").strip().lower() == "web":
-    from app.ui_web import host as _web_host
-    raise SystemExit(_web_host.run(sys.argv[1:]))
+    _stage = os.environ.get("PULSES_E2E_STAGE", "")
+    if _stage:
+        try:
+            Path(_stage).write_text("main-web", encoding="utf-8")
+        except Exception:                          # noqa: BLE001, S110
+            pass
+    try:
+        from app.ui_web import host as _web_host
+        raise SystemExit(_web_host.run(sys.argv[1:]))
+    except SystemExit:
+        raise
+    except Exception:                              # noqa: BLE001
+        _err = os.environ.get("PULSES_E2E_REPORT", "") + ".err"
+        try:
+            Path(_err).write_text(traceback.format_exc(), encoding="utf-8")
+        except Exception:                          # noqa: BLE001, S110
+            pass
+        raise
 
 import customtkinter as ctk
 

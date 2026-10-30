@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # 直接 `python tests/xxx.py` 时 sys.path[0] 是 tests/，要显式把仓库根加回来
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-TIMEOUT = float(os.environ.get("PULSES_E2E_TIMEOUT", "300"))
+TIMEOUT = float(os.environ.get("PULSES_E2E_TIMEOUT", "240"))
 
 
 def log(msg: str) -> None:
@@ -102,6 +102,7 @@ def main() -> int:
             "PULSES_E2E_PACK": str(pack),
             "PULSES_E2E_UPDATE": str(update),
             "PULSES_E2E_REPORT": str(report),
+            "PULSES_E2E_STAGE": str(tmp / "stage.txt"),
             "HOME": str(home),
             "USERPROFILE": str(home),
         }
@@ -131,8 +132,10 @@ def main() -> int:
         if out.strip():
             log("程序输出：\n" + out[-4000:])
 
+        stage = tmp / "stage.txt"
         if not report.is_file():
-            log("没有拿到 e2e 报告（程序没跑到驱动阶段）")
+            log("没有拿到 e2e 报告；阶段："
+                + (stage.read_text(encoding="utf-8") if stage.is_file() else "未启动"))
             return 1
         data = json.loads(report.read_text(encoding="utf-8"))
         for s in data.get("steps", []):

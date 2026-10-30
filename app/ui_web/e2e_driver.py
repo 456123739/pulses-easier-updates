@@ -43,7 +43,10 @@ def run(window, controller, bus, cfg: dict) -> None:
     report = {"ok": False, "steps": [], "error": ""}
 
     def js(code: str):
-        return window.evaluate_js(code)
+        try:
+            return window.evaluate_js(code)
+        except Exception:                             # noqa: BLE001
+            return None
 
     def invoke(method: str, params: dict, timeout: float = 60.0):
         """evaluate_js 不会等 Promise：发起后轮询一个全局变量拿结果。"""
@@ -88,7 +91,7 @@ def run(window, controller, bus, cfg: dict) -> None:
         raise RuntimeError(f"等不到界面出现：{substr}")
 
     try:
-        wait_text("定位整合包", 60)
+        wait_text("定位整合包", 120)
         step("界面渲染", True)
 
         res = invoke("app.pick_pack", {"path": cfg["pack"]})
@@ -128,7 +131,7 @@ def run(window, controller, bus, cfg: dict) -> None:
             pass
 
 
-def launch_if_requested(window, controller, bus) -> None:
+def launch_if_requested(window, controller, bus, delay: float = 1.5) -> None:
     if os.environ.get("PULSES_E2E", "").strip() not in ("1", "true", "yes"):
         return
     cfg = {
@@ -138,10 +141,10 @@ def launch_if_requested(window, controller, bus) -> None:
     }
     if not (cfg["pack"] and cfg["update"]):
         return
-    threading.Thread(target=_delayed, args=(window, controller, bus, cfg),
+    threading.Thread(target=_delayed, args=(window, controller, bus, cfg, delay),
                      daemon=True).start()
 
 
-def _delayed(window, controller, bus, cfg) -> None:
-    time.sleep(1.5)                    # 等前端首帧 + 事件泵就绪
+def _delayed(window, controller, bus, cfg, delay: float) -> None:
+    time.sleep(max(0.0, delay))        # 等窗口与事件泵就绪
     run(window, controller, bus, cfg)
