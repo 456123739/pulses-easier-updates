@@ -10,6 +10,8 @@ import PreferencesSheet from '@/components/PreferencesSheet'
 import Cover from '@/components/Cover'
 import PendingSheet from '@/components/PendingSheet'
 import ChangelogSheet from '@/components/ChangelogSheet'
+import WhitelistSheet from '@/components/WhitelistSheet'
+import DbSheet from '@/components/DbSheet'
 import ToastHost from '@/components/ToastHost'
 
 export default function App() {
@@ -57,6 +59,8 @@ export default function App() {
       <PreferencesSheet />
       <PendingSheet />
       <ChangelogSheet />
+      <WhitelistSheet />
+      <DbSheet />
       <DialogHost />
       <ToastHost />
     </>

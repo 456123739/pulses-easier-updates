@@ -54,6 +54,19 @@ jobs:
       - name: 单元测试（失败即阻断）
         run: python -m unittest discover -s tests -p "test_*.py"
 
+      # 真机端到端：真的 WebView2 + 真前端 + 真桥，在真页面里点完整流程
+      # （第一次失败重试一次，避免 runner 冷启动把它抖红）
+      - name: 真机端到端（新界面）
+        shell: pwsh
+        run: |
+          python tests/web_e2e_windows.py
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "第一次失败，重试一次…"
+            Start-Sleep -Seconds 8
+            python tests/web_e2e_windows.py
+          }
+          if ($LASTEXITCODE -ne 0) { throw "真机端到端失败" }
+
       # 真实 Tk 窗口：动画 / 文字刷新 / 列表增量 / 滚动位置
       # （没有桌面时脚本自己跳过，不会误伤）
       - name: 真实 GUI 冒烟（失败即阻断）
@@ -61,6 +74,14 @@ jobs:
 
       - name: PyInstaller 打包
         run: python -m PyInstaller --clean --noconfirm pulses-easier.spec
+
+      - name: 保存端到端截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e-windows.png
+          if-no-files-found: ignore
 
       - name: 组装发布目录 + 压缩
         shell: pwsh

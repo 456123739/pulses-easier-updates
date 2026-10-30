@@ -63,6 +63,24 @@ class Api:
                 p.get("name", ""), p.get("value", ""), p.get("checked")),
             "update.strategy.setAll": lambda p: self.controller.flow.set_all(
                 p.get("value", ""), p.get("checked"), p.get("names")),
+            "update.resume": lambda p: self.controller.flow.resume(),
+            # ---- 开发者：制作更新包 ----
+            "dev.pick": lambda p: self.controller.dev.import_zip(p.get("path", "")),
+            "dev.state": lambda p: self.controller.dev.snapshot(),
+            "dev.clear": lambda p: self.controller.dev.clear(),
+            "dev.option.set": lambda p: self.controller.dev.set_option(
+                p.get("key", ""), bool(p.get("value"))),
+            "dev.changelog.set": lambda p: self.controller.dev.set_changelog(
+                p.get("text", "")),
+            "dev.strategy.set": lambda p: self.controller.dev.set_strategy(
+                p.get("name", ""), p.get("value", ""), p.get("excluded")),
+            "dev.export": lambda p: self.controller.dev.start_export(p.get("path", "")),
+            # ---- 白名单 / 数据库 ----
+            "app.whitelist.get": lambda p: self.controller.whitelist(),
+            "app.whitelist.set": lambda p: self.controller.set_whitelist(
+                p.get("items") or []),
+            "app.db.get": lambda p: self.controller.db_path(),
+            "app.db.set": lambda p: self.controller.set_db_path(p.get("path", "")),
         }
 
     def bind_window(self, window) -> None:

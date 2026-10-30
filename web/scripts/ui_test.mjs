@@ -53,6 +53,14 @@ check(await page.getByText('无需更新').first().isVisible(), '「无需更新
 await page.getByRole('button', { name: '开发者', exact: true }).click()
 await page.waitForTimeout(700)
 check(await page.getByText('导出选项').first().isVisible(), '开发者视图有导出选项')
+check(await page.getByText('更新范围').first().isVisible(), '开发者视图有更新范围表')
+check(
+  await page.getByText('开始制作更新包').first().isVisible(),
+  '开发者主按钮可见',
+)
+// 导出选项：默认前三项开着（后端默认值）
+const switchesOn = await page.locator('[class*="switch"][data-on="true"]').count()
+check(switchesOn >= 3, '导出选项默认启用三项', String(switchesOn))
 if (SHOTS) await page.screenshot({ path: 'shots/ui-dev.png' })
 
 // 5) 回到玩家页 + 首选项抽屉
@@ -68,7 +76,26 @@ if (SHOTS) await page.screenshot({ path: 'shots/ui-preferences.png' })
 await page.keyboard.press('Escape')
 await page.waitForTimeout(300)
 
-// 6) 受阻提示条（注入状态模拟"需要补入"）
+// 6) 白名单 / 数据库抽屉
+await page.getByText('更多').first().click()
+await page.waitForTimeout(240)
+await page.getByText('白名单').first().click()
+await page.waitForTimeout(360)
+check(
+  await page.getByPlaceholder('目录名，例如 mods').isVisible(),
+  '白名单抽屉可打开',
+)
+await page.keyboard.press('Escape')
+await page.waitForTimeout(240)
+await page.getByText('更多').first().click()
+await page.waitForTimeout(200)
+await page.getByText('数据库位置').first().click()
+await page.waitForTimeout(360)
+check(await page.getByText('数据库位置').first().isVisible(), '数据库抽屉可打开')
+await page.keyboard.press('Escape')
+await page.waitForTimeout(240)
+
+// 7) 受阻提示条（注入状态模拟"需要补入"）
 await page.evaluate(() => {
   const s = window.__pe
   s.usePlayer.setState({ pendingCount: 2, pendingMode: 'wait' })
@@ -77,7 +104,7 @@ await page.waitForTimeout(420)
 check(await page.getByText(/还差 2 个文件/).first().isVisible(), '受阻提示条出现')
 if (SHOTS) await page.screenshot({ path: 'shots/ui-pending.png' })
 
-// 7) 下载态：主按钮变「取消下载」，进度条出现
+// 8) 下载态：主按钮变「取消下载」，进度条出现
 await page.evaluate(() => {
   const s = window.__pe
   s.usePlayer.setState({

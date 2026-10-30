@@ -86,6 +86,28 @@ export interface FlowSnapshot {
   report: { applied: number; deleted: number; failed: number } | null;
   error: string | null;
   changelog: boolean;
+  resume?: { update: string; completed: number; total: number } | null;
+}
+
+export interface DevStrategy {
+  name: string;
+  current: string;
+  excluded: boolean;
+  isFile: boolean;
+}
+
+export interface DevSnapshot {
+  phase: 'idle' | 'exporting' | 'done' | 'error';
+  source: { path: string; name: string } | null;
+  name: string;
+  version: string;
+  files: number;
+  strategies: DevStrategy[];
+  changelog: string;
+  options: Record<string, boolean>;
+  outPath: string;
+  error: string | null;
+  progress: { done?: number; total?: number; label?: string };
 }
 
 export interface AppState {
@@ -97,6 +119,7 @@ export interface AppState {
   busy: boolean;
   job: JobInfo | null;
   flow?: FlowSnapshot;
+  dev?: DevSnapshot;
 }
 
 export interface PackInfo {

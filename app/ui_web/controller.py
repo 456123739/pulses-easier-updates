@@ -19,6 +19,7 @@ from ..core import __version__ as APP_VERSION
 from ..core import database, engines, pack_info, pack_locator, recent
 from .api import ApiError
 from .events import EventBus
+from .dev import DevFlow
 from .flow import Flow
 
 
@@ -32,6 +33,7 @@ class AppController:
         self._dialogs: dict[str, dict] = {}
         self._dialog_seq = 0
         self.flow = Flow(self, bus)
+        self.dev = DevFlow(self, bus)
 
     # ------------------------------------------------------------------
     # 快照
@@ -44,9 +46,10 @@ class AppController:
                 "pack": dict(self._pack) if self._pack else None,
                 "recent": self._recent_list(),
                 "settings": self.settings(),
-                "busy": self._busy or self.flow.busy(),
+                "busy": self._busy or self.flow.busy() or self.dev.busy(),
                 "job": None,
                 "flow": self.flow.snapshot(),
+                "dev": self.dev.snapshot(),
             }
 
     def bootstrap(self) -> dict:
@@ -184,6 +187,49 @@ class AppController:
         if detail:
             spec["detail"] = detail
         self.bus.dialog(spec)
+
+    # ------------------------------------------------------------------
+    # 白名单 / 数据库位置
+    # ------------------------------------------------------------------
+    def whitelist(self) -> dict:
+        try:
+            items = database.get_whitelist()
+        except Exception:                              # noqa: BLE001
+            items = []
+        return {"whitelist": list(items)}
+
+    def set_whitelist(self, items) -> dict:
+        clean = []
+        for raw in items or []:
+            name = str(raw).strip().strip("/\\")
+            if name and "/" not in name and name not in clean:
+                clean.append(name)
+        try:
+            database.set_whitelist(clean)
+        except Exception as exc:                       # noqa: BLE001
+            raise ApiError("DB_WRITE", f"保存白名单失败：{exc}") from exc
+        self.push_state()
+        return {"whitelist": clean}
+
+    def db_path(self) -> dict:
+        try:
+            raw = database.get_db_path()
+        except Exception:                              # noqa: BLE001
+            raw = None
+        return {"path": str(raw) if raw else ""}
+
+    def set_db_path(self, raw: str) -> dict:
+        path = Path(str(raw)).expanduser()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                database.create_database(path)
+            database.set_db_path(path)
+        except Exception as exc:                       # noqa: BLE001
+            raise ApiError("DB_OPEN", f"无法使用这个位置：{exc}") from exc
+        self.bus.log(f"数据库位置：{path}", "INFO")
+        self.push_state()
+        return {"path": str(path)}
 
     def clear_log(self) -> dict:
         return {"cleared": True}

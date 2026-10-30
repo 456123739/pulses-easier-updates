@@ -21,6 +21,7 @@ export default function PlayerView() {
   const applyFlow = usePlayer((s) => s.applyFlow)
   const pushToast = useApp((s) => s.pushToast)
   const openSheet = useUi((s) => s.openSheet)
+  const progress = useApp((s) => s.progress)
 
   // 后端快照是唯一事实来源：连上桥就覆盖本地演示态
   useEffect(() => {
@@ -82,6 +83,11 @@ export default function PlayerView() {
   }
 
   const hasDiff = showTree && groups.some((g) => g.items.length > 0)
+  // 后端进度文案优先：玩家看到的"正在下载/正在应用/更新完成"都来自这里
+  const liveHint =
+    phase !== 'idle' || (progress?.percent ?? 0) >= 1
+      ? progress?.message || hint
+      : hint
 
   return (
     <div className={styles.page}>
@@ -170,9 +176,9 @@ export default function PlayerView() {
           )}
         </AnimatePresence>
 
-        {hint && (
+        {liveHint && (
           <div className={styles.hint} data-level={hintLevel}>
-            {hint}
+            {liveHint}
           </div>
         )}
 

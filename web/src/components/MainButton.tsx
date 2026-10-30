@@ -67,7 +67,12 @@ export default function MainButton({ onScanToggle }: Props) {
         await call('pack.scan')
         return
       }
-      if (btn === 'confirm' || btn === 'resume') {
+      if (btn === 'resume') {
+        setHint('正在继续上次的更新…')
+        await call('update.resume')
+        return
+      }
+      if (btn === 'confirm') {
         setHint('准备开始…')
         await call('update.apply')
         return

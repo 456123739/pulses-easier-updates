@@ -109,6 +109,12 @@ def run(argv: list[str] | None = None) -> int:
         bind_drop(window, api, bus)
         pump = EventPump(bus, window, logger=bus.log).start()
         pump_holder["pump"] = pump
+        # CI 的真机端到端：在真页面里点按钮（见 e2e_driver.py）
+        try:
+            from .e2e_driver import launch_if_requested
+            launch_if_requested(window, controller, bus)
+        except Exception as exc:                     # noqa: BLE001, S110
+            bus.log(f"e2e 驱动未启动：{exc}", "WARNING")
         try:
             window.show()
         except Exception:                            # noqa: BLE001, S110

@@ -16,6 +16,7 @@ Tk 界面那套流程（player_view.py，约 3000 行）把"流程"和"控件"�
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import threading
@@ -81,6 +82,8 @@ class Flow:
         self._temp: Path | None = None
         self._thread: threading.Thread | None = None
         self._abort = threading.Event()
+        self._resume_pending = False
+        self._done_paths: set[str] = set()
 
     # ------------------------------------------------------------------
     # 状态
@@ -103,6 +106,7 @@ class Flow:
                 "report": dict(self.report) if self.report else None,
                 "error": self.error,
                 "changelog": bool(self.changelog),
+                "resume": self.resume_info(),
             }
 
     def strategy_rows(self) -> list[dict]:
@@ -280,6 +284,9 @@ class Flow:
                 f"比对完成：+{len(diff.added)} ~{len(diff.modified)} "
                 f"-{len(diff.deleted)}", "INFO")
             self.controller.push_state()
+            if self._resume_pending:
+                self._resume_pending = False
+                self.start_apply()
         except Exception as exc:                            # noqa: BLE001
             self.phase = PHASE_IDLE
             self.error = str(exc)
@@ -364,6 +371,8 @@ class Flow:
             if will_skip(ch, self.checked, self.strategies,
                          checked_default=True):
                 continue
+            if rel.as_posix() in self._done_paths and (cache / rel).is_file():
+                continue                                    # 上次已经下好了
             local = src / rel
             if local.is_file():                             # 包里自带 → 不用下载
                 continue
@@ -390,7 +399,10 @@ class Flow:
             raise FlowError("请先比对")
         self.error = None
         self.report = {}
+        if not self._done_paths:
+            self._done_paths = set()
         self.phase = PHASE_DOWNLOAD if self.collect_tasks() else PHASE_APPLY
+        self._write_resume()
         self._thread = threading.Thread(target=self._apply_worker, daemon=True)
         self._thread.start()
         return {"started": True, "tasks": len(self.tasks)}
@@ -410,6 +422,7 @@ class Flow:
                     log=lambda level, msg: self.bus.log(msg, level.upper()),
                     byte_progress=lambda rel, got, total: self.bus.emit(
                         "bytes", {"key": rel, "done": got, "total": total}),
+                    on_file_done=self._note_done,
                     should_abort=self._abort.is_set)
                 self.results = results
                 failed = [r for r in results if not getattr(r, "ok", True)]
@@ -438,6 +451,8 @@ class Flow:
                            "deleted": report.get("deleted", 0),
                            "failed": len(failed)}
             self.phase = PHASE_DONE
+            self._done_paths.clear()
+            self._clear_resume()
             self.bus.progress("apply", "更新完成", 1.0)
             self.bus.log(
                 f"更新完成：新增 {self.report['applied']}，"
@@ -451,6 +466,70 @@ class Flow:
             self.bus.log(f"更新失败：{exc}", "ERROR")
         finally:
             self.controller.push_state()
+
+    # ------------------------------------------------------------------
+    # 续传
+    # ------------------------------------------------------------------
+    def _resume_file(self) -> Path:
+        return self.controller.cache_root() / "resume.json"
+
+    def resume_info(self) -> dict | None:
+        try:
+            path = self._resume_file()
+            if not path.is_file():
+                return None
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not Path(data.get("update", "")).is_file():
+                return None
+            if not Path(data.get("pack", "")).is_dir():
+                return None
+            return {"update": Path(data["update"]).name,
+                    "completed": len(data.get("completed") or []),
+                    "total": int(data.get("total", 0) or 0)}
+        except Exception:                                  # noqa: BLE001
+            return None
+
+    def _write_resume(self) -> None:
+        try:
+            payload = {
+                "update": str(self.update_zip or ""),
+                "pack": str(self.pack_root or ""),
+                "strategies": dict(self.strategies),
+                "checked": dict(self.checked),
+                "completed": sorted(self._done_paths),
+                "total": len(self.tasks),
+            }
+            self._resume_file().write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:                           # noqa: BLE001
+            self.bus.log(f"续传记录写入失败：{exc}", "WARNING")
+
+    def _clear_resume(self) -> None:
+        try:
+            self._resume_file().unlink(missing_ok=True)
+        except Exception:                                  # noqa: BLE001, S110
+            pass
+
+    def resume(self) -> dict:
+        """继续上次没做完的更新：恢复策略/勾选，重新比对后自动应用。"""
+        if self.busy():
+            raise FlowError("正在处理中")
+        info = self.resume_info()
+        if info is None:
+            raise FlowError("没有可继续的更新")
+        try:
+            data = json.loads(self._resume_file().read_text(encoding="utf-8"))
+        except Exception as exc:                           # noqa: BLE001
+            raise FlowError(f"续传记录损坏：{exc}") from exc
+        self.pack_root = Path(data.get("pack") or "")
+        self.import_update(data.get("update") or "")
+        self.strategies.update(data.get("strategies") or {})
+        self.checked.update(data.get("checked") or {})
+        self._done_paths = set(data.get("completed") or [])
+        self._resume_pending = True
+        self.bus.log("继续上次未完成的更新", "INFO")
+        self.start_scan()
+        return {"started": True}
 
     # ------------------------------------------------------------------
     # 策略（前端改一格就回推一份新快照）
@@ -504,6 +583,12 @@ class Flow:
             self.bus.log(f"{rel_path} 仍然失败", "ERROR")
         self.controller.push_state()
         return {"ok": ok, "pending": list(self.pending)}
+
+    def _note_done(self, task) -> None:
+        rel = getattr(task, "rel_path", "")
+        if rel:
+            self._done_paths.add(rel)
+            self._write_resume()
 
     def abort(self) -> dict:
         self._abort.set()
