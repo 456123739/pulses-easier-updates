@@ -68,10 +68,12 @@ if __name__ == "__main__" and _ui in ("web", "auto", ""):
             raise RuntimeError("本机没有 WebView2 运行时")
         if _ui == "web":
             raise SystemExit(_start_web_ui())
-        _rc = launch.run_supervised(str(Path(__file__).resolve()))
-        if _rc is not None:
-            raise SystemExit(_rc)
-        raise RuntimeError("新界面没能加载（受监督启动超时）")
+        # auto：直接在本进程里跑（子进程里 WebView2 就绪不了，已实测）；
+        # 页面 25s 内没就绪由 host 自己收摊并返回非 0，于是这里退回 Tk
+        _rc = _start_web_ui()
+        if _rc == 0:
+            raise SystemExit(0)
+        raise RuntimeError(f"新界面没就绪（退出码 {_rc}），退回旧界面")
     except SystemExit:
         raise
     except Exception:                              # noqa: BLE001

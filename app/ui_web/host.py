@@ -317,8 +317,25 @@ def run(argv: list[str] | None = None) -> int:
 
     threading.Thread(target=_poll_ready, daemon=True).start()
 
+    def _boot_timeout():
+        import time as _t
+        _t.sleep(25.0)
+        if did_setup[0]:
+            return
+        _note("25s 内页面没就绪：关掉新界面，交给 Tk")
+        boot_failed[0] = True
+        try:
+            window.destroy()
+        except Exception as exc:                     # noqa: BLE001
+            _note(f"destroy 失败：{exc}")
+
+    boot_failed = [False]
+    threading.Thread(target=_boot_timeout, daemon=True).start()
+
     # 关闭守卫：交给控制器判断（更新中不许关）
     def on_closing():
+        if boot_failed[0]:                           # 就绪超时：必须允许关，好退回 Tk
+            return True
         try:
             if not controller.can_close():
                 return False
@@ -382,6 +399,8 @@ def run(argv: list[str] | None = None) -> int:
         raise
     finally:
         _note("start-returned")
+        if not did_setup[0]:
+            boot_failed[0] = True
         pump = pump_holder.get("pump")
         if pump:
             pump.stop()
@@ -389,7 +408,7 @@ def run(argv: list[str] | None = None) -> int:
             controller.shutdown()
         except Exception:                            # noqa: BLE001, S110
             pass
-    return 0
+    return 3 if boot_failed[0] else 0
 
 
 if __name__ == "__main__":
