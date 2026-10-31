@@ -26,7 +26,23 @@ from .events import EventBus, EventPump
 
 WINDOW_TITLE = "Pulses Easier"
 WINDOW_W, WINDOW_H = 1440, 860
-WINDOW_MIN = (1000, 620)
+WINDOW_MIN = (900, 560)
+
+
+def fit_to_screen() -> tuple[tuple[int, int], tuple[int, int]]:
+    """按屏幕大小收一下窗口：小屏笔记本上 1440 宽会被裁掉右半边。"""
+    w, h = WINDOW_W, WINDOW_H
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            sw, sh = int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+            if sw > 200 and sh > 200:
+                w = min(w, max(900, sw - 80))
+                h = min(h, max(560, sh - 100))
+        except Exception:                            # noqa: BLE001, S110
+            pass
+    return (w, h), (min(WINDOW_MIN[0], w), min(WINDOW_MIN[1], h))
 BG = "#101011"          # 与新界面底色一致，避免启动时闪一下浅灰
 
 
@@ -153,13 +169,14 @@ def run(argv: list[str] | None = None) -> int:
     controller = AppController(bus)
     api = Api(controller, bus)
 
+    size, min_size = fit_to_screen()
     window = webview.create_window(
         WINDOW_TITLE,
         target,
         js_api=api,
-        width=WINDOW_W,
-        height=WINDOW_H,
-        min_size=WINDOW_MIN,
+        width=size[0],
+        height=size[1],
+        min_size=min_size,
         background_color=BG,
         text_select=True,
         confirm_close=False,
