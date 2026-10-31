@@ -117,13 +117,6 @@ def _log_path() -> Path:
 
 def _note(text: str) -> None:
     """启动过程留痕：窗口起不来时，这是唯一的现场证据。"""
-    if text == "page-loaded":
-        ready = os.environ.get("PULSES_WEB_READY", "")
-        if ready:
-            try:
-                Path(ready).write_text("ok", encoding="utf-8")
-            except Exception:                        # noqa: BLE001, S110
-                pass
     stamp = f"[{__import__('time').strftime('%H:%M:%S')}] {text}"
     paths = [os.environ.get("PULSES_WEB_LOG", ""), os.environ.get("PULSES_E2E_STAGE", "")]
     try:
@@ -251,19 +244,61 @@ def run(argv: list[str] | None = None) -> int:
     except Exception:                                # noqa: BLE001, S110
         pass
 
-    def on_loaded():
-        _note("page-loaded")
-        bind_drop(window, api, bus)
-        pump = EventPump(bus, window, logger=bus.log).start()
-        pump_holder["pump"] = pump
+    setup_lock = threading.Lock()
+    did_setup = [False]
+
+    def _setup_ui(reason: str) -> None:
+        """页面可用之后要做的事（拖放绑定 / 事件泵 / 首帧状态）。
+
+        幂等：loaded 事件与轮询谁先到就谁做——打包环境里见过 loaded 一直不触发、
+        页面其实已经渲染完的情况，不能把整个界面吊在这一个事件上。
+        """
+        with setup_lock:
+            if did_setup[0]:
+                return
+            did_setup[0] = True
+        _note(f"page-ready({reason})")
         loaded_flag[0] = True
-        e2e_mark("page-loaded")
+        ready = os.environ.get("PULSES_WEB_READY", "")
+        if ready:                                    # 受监督启动：告诉父进程可以交棒
+            try:
+                Path(ready).write_text("ok", encoding="utf-8")
+            except Exception:                        # noqa: BLE001, S110
+                pass
         try:
-            window.show()
-        except Exception:                            # noqa: BLE001, S110
+            bind_drop(window, api, bus)
+        except Exception as exc:                     # noqa: BLE001
+            _note(f"bind_drop 失败：{exc}")
+        try:
+            pump_holder["pump"] = EventPump(bus, window, logger=bus.log).start()
+        except Exception as exc:                     # noqa: BLE001
+            _note(f"事件泵启动失败：{exc}")
+        try:                                          # 让界面拿到第一帧完整状态
+            controller.push_state()
+        except Exception:                             # noqa: BLE001, S110
             pass
 
+    def on_loaded():
+        e2e_mark("page-loaded")
+        _setup_ui("loaded")
+
     window.events.loaded += on_loaded
+
+    def _poll_ready():
+        import time as _t
+        for _ in range(100):                          # 最长 ~30s
+            _t.sleep(0.3)
+            if did_setup[0]:
+                return
+            try:
+                if window.evaluate_js("1+1") == 2:
+                    _note("loaded 事件没来，但页面已就绪（轮询确认）")
+                    _setup_ui("poll")
+                    return
+            except Exception:                         # noqa: BLE001, S110
+                continue
+
+    threading.Thread(target=_poll_ready, daemon=True).start()
 
     # 关闭守卫：交给控制器判断（更新中不许关）
     def on_closing():
