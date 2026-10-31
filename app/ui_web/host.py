@@ -252,6 +252,9 @@ def run(argv: list[str] | None = None) -> int:
             http_server=True,
             private_mode=True,
         )
+        if not loaded_flag[0]:
+            # start() 自己退了但页面从没加载（WebView2 起不来）：交给上层退回 Tk
+            raise RuntimeError("新界面没能加载（WebView2 启动失败）")
     except Exception:                                # noqa: BLE001
         import traceback as _tb
         _note("start-failed:" + _tb.format_exc()[:1500])

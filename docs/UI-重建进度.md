@@ -71,6 +71,16 @@
 - 策略表：待更新条数来自后端；「统一策略」浮层可一次改全部；策略配置可导入/导出
 - 更新完成后主按钮回到「开始更新」，不再是停在「确认更新」
 
+## CI 结论：GitHub Windows runner 起不了 WebView2
+
+- 源码运行与打包运行都一样：`webview.start()` 后窗口报 `Main window failed to start`，
+  页面从未 loaded（`tests/web_e2e_windows.py` 与打包冒烟都能复现）。
+- 因此 CI 里能自动验证的是：类型检查、构建、474 项单元测试、**浏览器里的真前端 + 真 Api 端到端**
+ （`scripts/dev/run_ui_e2e.py`，12 项断言）、Tk GUI 冒烟、PyInstaller 打包、**打包后 exe 起窗**。
+- 真正的 WebView2 渲染只能在用户 Windows 机器上验证。
+- 程序侧兜底：`runtime_available()` 找不到 `msedgewebview2.exe` 就直接用 Tk；
+  `webview.start()` 返回而页面没加载 → 抛错 → main.py 的 auto 分支退回 Tk。
+
 ## 未完成（按优先级）
 
 1. **Tk 完整对齐**：检查点/中断残留恢复（`recover`）、应用阶段的"最低空间"提示、
