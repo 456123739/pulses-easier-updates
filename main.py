@@ -25,8 +25,18 @@ if len(sys.argv) >= 3 and sys.argv[1] == "--preview-worker":
 
 import os
 
-# 新界面（React + pywebview）在灰度阶段：显式 PULSES_UI=web 才启用。
-if os.environ.get("PULSES_UI", "").strip().lower() == "web":
+# 界面选择：
+#   默认（auto）→ 先试新界面（WebView2），起不来就自动退回 Tk，玩家永远不会看到黑屏
+#   PULSES_UI=tk   → 强制旧界面
+#   PULSES_UI=web  → 强制新界面（起不来就报错，方便排查）
+def _start_web_ui() -> int:
+    """跑新界面，返回进程退出码（0 = 正常关闭）。"""
+    from app.ui_web import host as _web_host
+    return int(_web_host.run(sys.argv[1:]) or 0)
+
+
+_ui = os.environ.get("PULSES_UI", "auto").strip().lower()
+if _ui in ("web", "auto", ""):
     _stage = os.environ.get("PULSES_E2E_STAGE", "")
     if _stage:
         try:
@@ -34,17 +44,26 @@ if os.environ.get("PULSES_UI", "").strip().lower() == "web":
         except Exception:                          # noqa: BLE001, S110
             pass
     try:
-        from app.ui_web import host as _web_host
-        raise SystemExit(_web_host.run(sys.argv[1:]))
+        import webview                             # noqa: F401
+        raise SystemExit(_start_web_ui())
     except SystemExit:
         raise
     except Exception:                              # noqa: BLE001
-        _err = os.environ.get("PULSES_E2E_REPORT", "") + ".err"
+        import traceback as _tb
+        _txt = _tb.format_exc()
+        _log = Path(os.environ.get("PULSES_E2E_REPORT", "") + ".err") \
+            if os.environ.get("PULSES_E2E_REPORT") else None
         try:
-            Path(_err).write_text(traceback.format_exc(), encoding="utf-8")
+            if _log is not None:
+                _log.write_text(_txt, encoding="utf-8")
+            else:
+                print("[warn] 新界面启动失败，退回 Tk：\n" + _txt,
+                      file=sys.stderr)
         except Exception:                          # noqa: BLE001, S110
             pass
-        raise
+        if _ui == "web":
+            raise
+        # auto：继续往下走 Tk
 
 import customtkinter as ctk
 
