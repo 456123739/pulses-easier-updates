@@ -36,7 +36,8 @@ def _start_web_ui() -> int:
 
 
 _ui = os.environ.get("PULSES_UI", "auto").strip().lower()
-if _ui in ("web", "auto", ""):
+# 只有"当作脚本运行"才启动界面：测试/CI 里 import main 不能顺手拉起一个窗口
+if __name__ == "__main__" and _ui in ("web", "auto", ""):
     _stage = os.environ.get("PULSES_E2E_STAGE", "")
     if _stage:
         try:
