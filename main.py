@@ -46,6 +46,9 @@ if __name__ == "__main__" and _ui in ("web", "auto", ""):
             pass
     try:
         import webview                             # noqa: F401
+        from app.ui_web.host import runtime_available
+        if not runtime_available():
+            raise RuntimeError("本机没有 WebView2 运行时")
         raise SystemExit(_start_web_ui())
     except SystemExit:
         raise

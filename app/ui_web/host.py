@@ -43,6 +43,27 @@ def web_dist_dir() -> Path:
     return bundle_dir() / "web" / "dist"
 
 
+def runtime_available() -> bool:
+    """本机有没有 WebView2 运行时（没有就别起新界面，否则只会卡在黑窗口）。"""
+    if sys.platform != "win32":
+        return True                                  # macOS/Linux 交给 GTK/WebKit 自己报错
+    bases = [os.environ.get("ProgramFiles(x86)", ""),
+             os.environ.get("ProgramFiles", "")]
+    for base in bases:
+        if not base:
+            continue
+        root = Path(base) / "Microsoft" / "EdgeWebView" / "Application"
+        if not root.is_dir():
+            continue
+        try:
+            for sub in root.iterdir():
+                if (sub / "msedgewebview2.exe").is_file():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def _web_target() -> str:
     dev = os.environ.get("PULSES_WEB_DEV", "").strip()
     if dev:
