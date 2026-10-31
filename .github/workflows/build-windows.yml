@@ -73,6 +73,17 @@ jobs:
       - name: PyInstaller 打包
         run: python -m PyInstaller --clean --noconfirm pulses-easier.spec
 
+      - name: 打包产物结构（诊断用）
+        shell: pwsh
+        run: |
+          Get-ChildItem "dist/Pulses Easier" -Force | Select-Object Name | Format-Table
+          if (Test-Path "dist/Pulses Easier/web") {
+            Get-ChildItem "dist/Pulses Easier/web" -Recurse -Depth 2 | Select-Object FullName
+          }
+          if (Test-Path "dist/Pulses Easier/_internal/web") {
+            Get-ChildItem "dist/Pulses Easier/_internal/web" -Recurse -Depth 2 | Select-Object FullName
+          }
+
       # 打包后的壳：真的 exe + 真 WebView2 + 真流程（驱动在包内跑）
       - name: 打包后真机端到端（新界面）
         run: |

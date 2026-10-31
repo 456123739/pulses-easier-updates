@@ -119,6 +119,15 @@ def run(argv: list[str] | None = None) -> int:
         except Exception:                            # noqa: BLE001, S110
             pass
 
+    if os.environ.get("PULSES_E2E_STAGE"):
+        try:
+            probes = []
+            for base in (bundle_dir(), exe_dir(), project_root()):
+                cand = base / "web" / "dist"
+                probes.append(f"{cand}={cand.is_dir()}")
+            e2e_mark("target:" + str(target) + " | " + " ; ".join(probes))
+        except Exception:                            # noqa: BLE001, S110
+            pass
     e2e_mark("window-created:" + str(target))
     try:
         import webview as _wv
