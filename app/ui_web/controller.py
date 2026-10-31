@@ -206,8 +206,13 @@ class AppController:
                 clean.append(name)
         try:
             database.set_whitelist(clean)
+            got = database.get_whitelist()
         except Exception as exc:                       # noqa: BLE001
             raise ApiError("DB_WRITE", f"保存白名单失败：{exc}") from exc
+        if got != clean:
+            # 写盘失败必须报出来，不能"界面显示已保存、实际没存"
+            raise ApiError("DB_WRITE",
+                           f"白名单没有写进去（读到 {got}，期望 {clean}）")
         self.push_state()
         return {"whitelist": clean}
 
