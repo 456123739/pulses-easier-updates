@@ -522,6 +522,13 @@ def main() -> int:
             check(str(row.var.get()) == "0", "禁用时值被强制为关",
                   str(row.var.get()))
 
+        from app.core import database as _db
+        check(getattr(dlg, "_ui_switch", None) is not None,
+              "首选项里有「界面」切换（旧界面 / 新界面）")
+        check(_db.get_ui_mode() in ("tk", "web", "auto"),
+              "界面选择可读且合法", _db.get_ui_mode())
+        check(_db.get_ui_mode() == "tk", "默认用旧界面（新界面需手动开）")
+
         num = dlg._rows.get("multi_slots")
         check(num is not None and not getattr(num, "is_bool", True),
               "数值项（并行槽位）仍是输入框")

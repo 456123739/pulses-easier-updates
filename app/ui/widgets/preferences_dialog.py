@@ -516,6 +516,8 @@ class PreferencesDialog(ctk.CTkToplevel):
                              command=self._on_ui_mode, height=32)
         sw.set(dict(choices).get(cur, "旧界面"))
         sw.pack(anchor="w", padx=14, pady=(0, 14))
+        self._ui_switch = sw
+        self._ui_choices = choices
 
     def _on_ui_mode(self, label: str):
         mode = {"旧界面": "tk", "新界面": "web"}.get(str(label), "tk")
