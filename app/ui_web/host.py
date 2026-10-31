@@ -111,6 +111,13 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
 
 def _note(text: str) -> None:
     """启动过程留痕：CI 里窗口起不来时，这是唯一的现场证据。"""
+    if text == "page-loaded":
+        ready = os.environ.get("PULSES_WEB_READY", "")
+        if ready:
+            try:
+                Path(ready).write_text("ok", encoding="utf-8")
+            except Exception:                        # noqa: BLE001, S110
+                pass
     stamp = f"[{__import__('time').strftime('%H:%M:%S')}] {text}"
     for key in ("PULSES_E2E_STAGE", "PULSES_WEB_LOG"):
         path = os.environ.get(key, "")

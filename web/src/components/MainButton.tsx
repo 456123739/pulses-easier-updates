@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { invoke } from '@/bridge'
 import { useApp } from '@/store/app'
@@ -18,8 +19,13 @@ export default function MainButton({ onScanToggle }: Props) {
   const pushLog = usePlayer((s) => s.pushLog)
 
   const downloading = phase === 'download'
+  const [aborting, setAborting] = useState(false)
+  // 点过"取消"后按钮要立刻变成"取消中…"，直到下载态结束（否则像没点上）
+  useEffect(() => {
+    if (!downloading) setAborting(false)
+  }, [downloading])
   const label = downloading
-    ? '取消下载'
+    ? (aborting ? '取消中…' : '取消下载')
     : {
         disabled: '开始更新',
         ready: '开始更新',
@@ -59,7 +65,9 @@ export default function MainButton({ onScanToggle }: Props) {
   const onClick = async () => {
     if (connected) {
       if (downloading) {
-        await call('update.abort')
+        setAborting(true)
+        const ok = await call('update.abort')
+        if (!ok) setAborting(false)
         return
       }
       if (btn === 'ready' || btn === 'rescan') {

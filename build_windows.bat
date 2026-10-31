@@ -10,7 +10,7 @@ rem        解压后有 Pulses Easier.exe、assets\（logo）、logs\
 rem ============================================================
 cd /d "%~dp0"
 
-set VERSION=0.9.2
+set VERSION=0.10.0
 set OUTNAME=pulses-easier-%VERSION%-beta-win64
 
 echo [1/5] 安装依赖...

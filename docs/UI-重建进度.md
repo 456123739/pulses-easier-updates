@@ -81,6 +81,13 @@
 - 程序侧兜底：`runtime_available()` 找不到 `msedgewebview2.exe` 就直接用 Tk；
   `webview.start()` 返回而页面没加载 → 抛错 → main.py 的 auto 分支退回 Tk。
 
+## 交付前的兜底
+
+- 默认启动顺序：受监督子进程跑新界面 → 页面 `loaded` 写就绪文件 → 交棒；
+  25s 未就绪或子进程异常退出 → 杀掉子进程、退回 Tk（`app/ui_web/launch.py`）。
+- 本机没有 WebView2（找不到 `msedgewebview2.exe`）→ 直接用 Tk。
+- `PULSES_UI=tk` / `web` 可强制；`PULSES_WEB_LOG` 写启动留痕，方便排查。
+
 ## 未完成（按优先级）
 
 1. **Tk 完整对齐**：检查点/中断残留恢复（`recover`）、应用阶段的"最低空间"提示、

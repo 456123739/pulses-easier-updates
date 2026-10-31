@@ -134,3 +134,47 @@ class BridgeContract(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SupervisedLaunchCase(unittest.TestCase):
+    """受监督启动：加载成功交棒、超时/崩溃都要退回 Tk。"""
+
+    def setUp(self):
+        from app.ui_web import launch
+        self.launch = launch
+
+    def test_child_command_source_mode(self):
+        cmd = self.launch.child_command("/tmp/x.ready", "/tmp/main.py")
+        self.assertEqual(cmd[1:], ["/tmp/main.py", "--web-host", "/tmp/x.ready"])
+
+    def test_timeout_falls_back(self):
+        from unittest import mock
+        with mock.patch.object(self.launch, "BOOT_TIMEOUT", 0.3), \
+             mock.patch.object(self.launch.subprocess, "Popen") as popen:
+            popen.return_value.poll.return_value = None
+            self.assertIsNone(self.launch.run_supervised(entry="/tmp/x.py"))
+            popen.return_value.kill.assert_called_once()
+
+    def test_ready_file_hands_over(self):
+        from unittest import mock
+        from pathlib import Path as _P
+        with mock.patch.object(self.launch, "BOOT_TIMEOUT", 3.0), \
+             mock.patch.object(self.launch.subprocess, "Popen") as popen:
+            popen.return_value.poll.return_value = None
+            popen.return_value.wait.return_value = 7
+
+            def _spawn(cmd, **kw):
+                _P(cmd[-1]).write_text("ok", encoding="utf-8")
+                return popen.return_value
+
+            popen.side_effect = _spawn
+            self.assertEqual(
+                self.launch.run_supervised(entry="/tmp/x.py"), 7)
+
+    def test_early_crash_falls_back(self):
+        from unittest import mock
+        with mock.patch.object(self.launch, "BOOT_TIMEOUT", 3.0), \
+             mock.patch.object(self.launch.subprocess, "Popen") as popen:
+            popen.return_value.poll.return_value = 3
+            popen.return_value.returncode = 3
+            self.assertIsNone(self.launch.run_supervised(entry="/tmp/x.py"))
