@@ -78,13 +78,22 @@ def run_supervised(entry: str | None = None,
         time.sleep(0.1)
     _cleanup(ready_path)
     if not ready:
-        try:
-            proc.kill()
-            proc.wait(timeout=5)
-        except Exception:                            # noqa: BLE001, S110
-            pass
+        _kill_tree(proc)
         return None
     return proc.wait()
+
+
+def _kill_tree(proc) -> None:
+    """子进程可能带着 WebView2 的子进程，必须连树一起杀，否则会留在后台空转。"""
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],  # noqa: S603,S607
+                           capture_output=True, timeout=10, check=False)
+        else:
+            proc.kill()
+        proc.wait(timeout=5)
+    except Exception:                                # noqa: BLE001, S110
+        pass
 
 
 def _cleanup(path: str) -> None:

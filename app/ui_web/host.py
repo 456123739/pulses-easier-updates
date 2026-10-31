@@ -111,7 +111,7 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
 
 def _note(text: str) -> None:
     """启动过程留痕：CI 里窗口起不来时，这是唯一的现场证据。"""
-    if text == "page-loaded":
+    if text == "page-shown":
         ready = os.environ.get("PULSES_WEB_READY", "")
         if ready:
             try:
@@ -202,6 +202,16 @@ def run(argv: list[str] | None = None) -> int:
         except Exception as exc:                     # noqa: BLE001
             bus.log(f"e2e 驱动启动失败：{exc}", "ERROR")
     pump_holder: dict[str, EventPump] = {}
+
+    def on_shown():
+        # 只有"窗口真的出现在屏幕上"才通知父进程交棒：
+        # 页面加载了但窗口没显示，父进程会超时、退回 Tk（0.10.0 卡后台的教训）
+        _note("page-shown")
+
+    try:
+        window.events.shown += on_shown
+    except Exception:                                # noqa: BLE001, S110
+        pass
 
     def on_loaded():
         _note("page-loaded")

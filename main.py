@@ -33,16 +33,16 @@ if len(sys.argv) >= 2 and sys.argv[1] == "--web-host":
     sys.exit(_host_child.run([]))
 
 # 界面选择：
-#   默认（auto）→ 先试新界面（WebView2），起不来就自动退回 Tk，玩家永远不会看到黑屏
-#   PULSES_UI=tk   → 强制旧界面
-#   PULSES_UI=web  → 强制新界面（起不来就报错，方便排查）
+#   默认（tk）    → 旧界面（稳定版；0.10.0 的"先试新界面"在部分机器上会卡成后台进程）
+#   PULSES_UI=web → 强制新界面（调试/尝鲜）
+#   PULSES_UI=auto→ 先试新界面、失败退回 Tk（实验，未默认开启）
 def _start_web_ui() -> int:
     """在本进程里跑新界面，返回进程退出码（0 = 正常关闭）。"""
     from app.ui_web import host as _web_host
     return int(_web_host.run(sys.argv[1:]) or 0)
 
 
-_ui = os.environ.get("PULSES_UI", "auto").strip().lower()
+_ui = os.environ.get("PULSES_UI", "tk").strip().lower()
 # 只有"当作脚本运行"才启动界面：测试/CI 里 import main 不能顺手拉起一个窗口
 if __name__ == "__main__" and _ui in ("web", "auto", ""):
     _stage = os.environ.get("PULSES_E2E_STAGE", "")
@@ -209,6 +209,30 @@ def main():
             app.on_boot_done()
         except Exception:  # noqa: BLE001, S110
             pass
+
+    def _show_watchdog():
+        """兜底：启动页/预热卡住时也要把主窗口亮出来，不能只在后台跑。"""
+        try:
+            if app.winfo_viewable():
+                return
+            print("[warn] 15s 内没看到窗口，强制显示主界面", file=sys.stderr)
+            try:
+                app.deiconify()
+                app.lift()
+                app.focus_force()
+            except Exception:                      # noqa: BLE001, S110
+                pass
+            try:
+                app.on_boot_done()
+            except Exception:                      # noqa: BLE001
+                traceback.print_exc()
+        except Exception:                          # noqa: BLE001
+            traceback.print_exc()
+
+    try:
+        app.after(15000, _show_watchdog)
+    except Exception:                              # noqa: BLE001, S110
+        pass
 
     try:
         app.mainloop()
