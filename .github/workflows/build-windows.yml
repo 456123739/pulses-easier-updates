@@ -61,6 +61,18 @@ jobs:
           python scripts/dev/run_ui_e2e.py
 
       # 外壳冒烟：真 WebView2 起窗并加载页面（失败不阻断发布，留证据）
+      # GitHub 的 runner 镜像里没有 WebView2 运行时（只有 Edge 浏览器），
+      # 新界面的窗口验证需要它；装上之后下面那条"新界面起窗验证"才有意义
+      - name: 安装 WebView2 运行时（尽力而为）
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "MicrosoftEdgeWebView2Setup.exe"
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe
+          Start-Process -FilePath $exe -ArgumentList "/silent", "/install" -Wait
+          Get-ChildItem "$env:ProgramFiles(x86)\Microsoft\EdgeWebView\Application" -ErrorAction SilentlyContinue |
+            Select-Object Name
+
       - name: 外壳冒烟（WebView2）
         continue-on-error: true
         run: python tests/web_e2e_windows.py
@@ -83,18 +95,6 @@ jobs:
           if (Test-Path "dist/Pulses Easier/_internal/web") {
             Get-ChildItem "dist/Pulses Easier/_internal/web" -Recurse -Depth 2 | Select-Object FullName
           }
-
-      # GitHub 的 runner 镜像里没有 WebView2 运行时（只有 Edge 浏览器），
-      # 新界面的窗口验证需要它；装上之后下面那条"新界面起窗验证"才有意义
-      - name: 安装 WebView2 运行时（尽力而为）
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $exe = Join-Path $env:RUNNER_TEMP "MicrosoftEdgeWebView2Setup.exe"
-          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe
-          Start-Process -FilePath $exe -ArgumentList "/silent", "/install" -Wait
-          Get-ChildItem "$env:ProgramFiles(x86)\Microsoft\EdgeWebView\Application" -ErrorAction SilentlyContinue |
-            Select-Object Name
 
       # 打包后的壳：真 exe 起窗（Windows 版默认先试新界面，无 WebView2 运行时则退回 Tk）
       - name: 打包后起窗冒烟（新界面）

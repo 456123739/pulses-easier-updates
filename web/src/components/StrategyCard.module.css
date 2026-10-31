@@ -45,8 +45,9 @@
 .row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 2px 0;
+  gap: 8px;
+  padding: 0;
+  min-height: 26px;
 }
 .row[data-dim='true'] {
   opacity: 0.72;
@@ -54,10 +55,10 @@
 
 .nameBtn {
   flex: 0 0 auto;
-  min-width: 132px;
-  max-width: 210px;
-  height: 30px;
-  padding: 0 11px;
+  min-width: 88px;
+  max-width: 172px;
+  height: 26px;
+  padding: 0 9px;
   border-radius: 10px;
   text-align: left;
   font-size: var(--fs-body);
@@ -84,14 +85,23 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-small);
+  font-size: 11px;
 }
 
 .chips {
   display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
+  gap: 3px;
+  flex-wrap: nowrap;
   min-width: 0;
+  overflow: hidden;
+}
+
+/* 策略胶囊再压一档：四颗排一行、行高和名称按钮齐平 */
+.chips :global(.chip) {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 7px;
+  font-size: 11px;
 }
 
 .section {
