@@ -7,9 +7,9 @@ on:
   workflow_dispatch:            # 手动触发：Actions 页面点一下，或 gh 命令
     inputs:
       version:
-        description: 版本号（用于 zip 文件名，如 0.9.2）
+        description: 版本号（用于 zip 文件名，如 0.10.0）
         required: false
-        default: "0.9.2"
+        default: "0.10.0"
   push:
     tags: ["v*"]                # 推 tag 时自动出包并上传到对应 Release
 
@@ -30,15 +30,40 @@ jobs:
         with:
           python-version: "3.11"      # 与开发/测试一致的版本
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
+      # 新界面（React）：先装依赖并做类型检查，再构建产物给 PyInstaller 收进去
+      - name: 构建新界面（类型检查 + 产物）
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit
+          npm run build
+
       # 交付版本：测试失败必须挡住出包（以前是 continue-on-error，
       # 绿勾不代表测试通过，出现过"测试挂了照样发版"的情况）
       - name: 单元测试（失败即阻断）
         run: python -m unittest discover -s tests -p "test_*.py"
+
+      # 端到端：真前端 + 真 Api + 真流程（Playwright 在真页面里点，Python 干活）
+      - name: 端到端（真前端 + 真 Api）
+        run: |
+          npx --prefix web playwright install chromium
+          python scripts/dev/run_ui_e2e.py
+
+      # 外壳冒烟：真 WebView2 起窗并加载页面（失败不阻断发布，留证据）
+      - name: 外壳冒烟（WebView2）
+        continue-on-error: true
+        run: python tests/web_e2e_windows.py
 
       # 真实 Tk 窗口：动画 / 文字刷新 / 列表增量 / 滚动位置
       # （没有桌面时脚本自己跳过，不会误伤）
@@ -47,6 +72,69 @@ jobs:
 
       - name: PyInstaller 打包
         run: python -m PyInstaller --clean --noconfirm pulses-easier.spec
+
+      - name: 打包产物结构（诊断用）
+        shell: pwsh
+        run: |
+          Get-ChildItem "dist/Pulses Easier" -Force | Select-Object Name | Format-Table
+          if (Test-Path "dist/Pulses Easier/web") {
+            Get-ChildItem "dist/Pulses Easier/web" -Recurse -Depth 2 | Select-Object FullName
+          }
+          if (Test-Path "dist/Pulses Easier/_internal/web") {
+            Get-ChildItem "dist/Pulses Easier/_internal/web" -Recurse -Depth 2 | Select-Object FullName
+          }
+
+      # 打包后的壳：真 exe 起窗（Windows 版默认先试新界面，无 WebView2 运行时则退回 Tk）
+      - name: 打包后起窗冒烟（新界面）
+        shell: pwsh
+        run: |
+          $exe = "dist/Pulses Easier/Pulses Easier.exe"
+          if (-not (Test-Path $exe)) { throw "没找到打包产物" }
+          $log = Join-Path $env:RUNNER_TEMP "web-start.log"
+          $env:PULSES_WEB_LOG = $log
+          # runner 里 WebView2 起不来（见下一条），这里验证"exe 本体能起窗"
+          $env:PULSES_UI = "tk"
+          $p = Start-Process -FilePath $exe -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+            if ($p.MainWindowTitle) { $ok = $true; break }
+          }
+          $title = $p.MainWindowTitle
+          $alive = -not $p.HasExited
+          if (Test-Path $log) { Write-Host "--- 启动留痕 ---"; Get-Content $log | Write-Host }
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          if (-not $ok) { throw "窗口没起来（alive=$alive, title='$title'）" }
+          Write-Host "窗口标题：$title"
+
+      # WebView2 在 GitHub 的 Windows runner 里起不来（Main window failed to start），
+      # 这条路只在用户真机上验证；这里只保留现场证据，不阻断发布
+      - name: 打包后起窗冒烟（强制新界面，仅供参考）
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = "dist/Pulses Easier/Pulses Easier.exe"
+          $env:PULSES_UI = "web"
+          $log = Join-Path $env:RUNNER_TEMP "web-force.log"
+          $env:PULSES_WEB_LOG = $log
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 25
+          $p.Refresh()
+          if ($p.MainWindowTitle) { Write-Host "窗口标题：$($p.MainWindowTitle)" }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          if (Test-Path $log) { Get-Content $log | Write-Host }
+
+      - name: 保存端到端截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: |
+            e2e-ui.png
+            e2e-windows.png
+          if-no-files-found: ignore
 
       - name: 组装发布目录 + 压缩
         shell: pwsh

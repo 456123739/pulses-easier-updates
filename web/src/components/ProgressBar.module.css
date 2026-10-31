@@ -1,0 +1,34 @@
+.wrap {
+  width: 100%;
+  padding: 6px 2px;
+  display: block;
+}
+
+.track {
+  position: relative;
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--c-accent);
+}
+
+.fileFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 2px;
+  top: 2px;
+  border-radius: 999px;
+  background: rgba(233, 233, 236, 0.55);
+}
+
+.wrap:hover .track {
+  background: rgba(255, 255, 255, 0.09);
+}

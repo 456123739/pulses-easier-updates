@@ -30,6 +30,12 @@ NAME = "Pulses Easier"
 
 # ---- 数据文件 ----
 datas = [(str(ROOT / "assets"), "assets")]
+# 新界面是 React 构建产物：不进版本库，但要进安装包
+_web_dist = ROOT / "web" / "dist"
+if _web_dist.is_dir():
+    datas.append((str(_web_dist), "web/dist"))
+else:
+    print("[warn] 缺少 web/dist：新界面（PULSES_UI=web）将不可用")
 for pkg in ("customtkinter", "tkinterdnd2"):
     try:
         datas += collect_data_files(pkg)
@@ -42,10 +48,22 @@ hiddenimports = [
     "multimark", "markdown", "tkhtmlview",
     "darkdetect",
 ]
+binaries = []
 try:
     import webview                                # noqa: F401
     hiddenimports += ["webview", "webview.platforms.edgechromium",
-                      "clr_loader"]
+                      "webview.platforms.winforms", "clr_loader", "clr",
+                      "pythonnet"]
+    # pythonnet / clr_loader 带 .NET 运行时与 dll，静态分析收不全 → 整包收
+    from PyInstaller.utils.hooks import collect_all
+    for _pkg in ("webview", "pythonnet", "clr_loader"):
+        try:
+            _d, _b, _h = collect_all(_pkg)
+            datas += _d
+            binaries += _b
+            hiddenimports += _h
+        except Exception as _exc:                 # noqa: BLE001
+            print(f"[warn] collect_all({_pkg}) 失败：{_exc}")
 except Exception:                                 # noqa: BLE001
     print("[info] 未安装 pywebview，更新日志预览将降级为系统浏览器")
 
@@ -67,7 +85,7 @@ excludes = ["matplotlib", "numpy", "scipy", "pytest", "pydoc_data"]
 a = Analysis(
     ["main.py"],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

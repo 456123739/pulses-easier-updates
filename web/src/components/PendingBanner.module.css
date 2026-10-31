@@ -1,0 +1,39 @@
+.banner {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 10px;
+  border-color: rgba(207, 207, 160, 0.22);
+  background: #20201d;
+}
+
+.bar {
+  width: 3px;
+  align-self: stretch;
+  border-radius: 999px;
+  background: var(--c-warn);
+
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--c-warn);
+}
+
+.sub {
+  font-size: var(--fs-tiny);
+  color: var(--c-text-2);
+  margin-top: 2px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}

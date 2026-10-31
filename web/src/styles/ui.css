@@ -1,0 +1,248 @@
+/* 原语 v3：哑光表面 + 发丝线 + 极浅投影。 */
+
+.glass {
+  background: var(--c-card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-2);
+}
+
+.glass-thick {
+  background: #1d1d20;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-3);
+}
+
+/* 卡片：一层实心近黑 + 极轻的顶部提亮（不是高光，只是材质的"受光面"） */
+.card {
+  position: relative;
+  background: linear-gradient(180deg, #202023 0%, #1d1d20 100%);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-1);
+}
+
+.card-flat {
+  background: #1c1c1f;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+}
+
+/* ---------- 文字 ---------- */
+.t-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-title);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.005em;
+  color: var(--c-text);
+}
+
+.t-body {
+  font-size: var(--fs-body);
+  color: var(--c-text);
+}
+
+.t-small {
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+}
+
+.t-muted {
+  font-size: var(--fs-small);
+  color: var(--c-muted);
+}
+
+/* ---------- 按钮 ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--r-btn);
+  font-size: var(--fs-body);
+  color: var(--c-text);
+  background: var(--mat-2);
+  border: 1px solid var(--hairline);
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast), border-color var(--dur-fast);
+}
+.btn:hover {
+  background: var(--mat-3);
+}
+.btn:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+.btn:disabled {
+  color: var(--c-muted);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.btn-primary {
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  font-weight: var(--fw-bold);
+  border: 1px solid transparent;
+}
+.btn-primary:hover {
+  background: var(--c-accent-hover);
+}
+.btn-primary:not(:disabled):active {
+  background: var(--c-accent-press);
+}
+.btn-primary:disabled {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--c-muted);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--c-text-2);
+}
+.btn-ghost:hover {
+  background: var(--mat-2);
+  color: var(--c-text);
+}
+
+/* ---------- 输入 ---------- */
+.input {
+  height: 32px;
+  padding: 0 11px;
+  border-radius: var(--r-input);
+  background: var(--c-input);
+  border: 1px solid var(--hairline);
+  color: var(--c-text);
+  transition: border-color var(--dur-fast);
+}
+.input:focus {
+  border-color: var(--c-accent-line);
+}
+
+/* ---------- 分段控件 ---------- */
+.seg {
+  position: relative;
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--hairline);
+}
+.seg-item {
+  position: relative;
+  z-index: 1;
+  height: 26px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+  transition: color var(--dur-base) var(--ease-out);
+  white-space: nowrap;
+}
+.seg-item[data-active='true'] {
+  color: var(--c-text);
+}
+.seg-thumb {
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  border-radius: var(--r-pill);
+  background: #34343a;
+  border: 1px solid var(--hairline);
+}
+
+/* ---------- 策略胶囊 ---------- */
+.chip {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast), border-color var(--dur-fast);
+  white-space: nowrap;
+}
+.chip:hover {
+  background: var(--mat-2);
+  color: var(--c-text);
+}
+.chip[data-on='true'] {
+  color: var(--c-accent-text);
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent-line);
+}
+.chip:disabled {
+  color: var(--c-muted);
+  background: transparent;
+}
+
+/* ---------- 滚动区 ---------- */
+.scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: content-box;
+}
+
+/* ---------- 分隔线 ---------- */
+.divider {
+  height: 1px;
+  background: var(--hairline);
+}
+
+/* ---------- 滑杆：细轨 + 实心圆点，跟主色一致 ---------- */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border-radius: 999px;
+  background: var(--c-text);
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+input[type='range']:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+input[type='range']::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+input[type='range']::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: none;
+  border-radius: 999px;
+  background: var(--c-text);
+}

@@ -40,3 +40,8 @@ _verify/
 
 # AI 协作交接 / 记忆继承文档（内部协作用，本仓库是 public，不进版本库）
 docs/AI-*
+
+# Web 前端（依赖与构建产物不入库，CI 里 npm ci && npm run build）
+web/node_modules/
+web/dist/
+.pytest_cache/

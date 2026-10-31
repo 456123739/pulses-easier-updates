@@ -1,0 +1,101 @@
+.page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 12px;
+  padding: 18px;
+}
+
+.left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 46%;
+  min-width: 0;
+}
+
+.right {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 54%;
+  min-width: 0;
+}
+
+.dropWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.clearRow {
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 2px;
+}
+
+.treeArea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+/* 提示条按内容高度，剩下的全给变更树 —— 两者不能抢宽度 */
+.pendingSlot {
+  flex: 0 0 auto;
+  display: flex;
+}
+
+.treeSlot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-body);
+  color: var(--c-muted);
+  padding: 24px;
+  text-align: center;
+}
+
+.progressRow {
+  padding: 0 2px;
+}
+
+.hint {
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+  padding: 0 2px;
+  min-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hint[data-level='warn'] {
+  color: var(--c-warn);
+}
+.hint[data-level='error'] {
+  color: var(--c-error);
+}
+
+.footRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.packHint {
+  font-size: var(--fs-tiny);
+  color: var(--c-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

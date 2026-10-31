@@ -10,7 +10,7 @@ rem        解压后有 Pulses Easier.exe、assets\（logo）、logs\
 rem ============================================================
 cd /d "%~dp0"
 
-set VERSION=0.9.2
+set VERSION=0.10.0
 set OUTNAME=pulses-easier-%VERSION%-beta-win64
 
 echo [1/5] 安装依赖...
@@ -21,7 +21,18 @@ if exist build rmdir /s /q build
 if exist "dist\Pulses Easier" rmdir /s /q "dist\Pulses Easier"
 if exist "dist\%OUTNAME%" rmdir /s /q "dist\%OUTNAME%"
 
-echo [3/5] PyInstaller 打包...
+where node >nul 2>nul
+if errorlevel 1 (
+    echo [warn] 未找到 node，跳过新界面构建（PULSES_UI=web 将不可用）
+) else (
+    echo [3/5] 构建新界面...
+    pushd web
+    if not exist node_modules call npm ci --no-audit --no-fund
+    call npm run build || goto :fail
+    popd
+)
+
+echo [4/5] PyInstaller 打包...
 python -m PyInstaller --clean --noconfirm pulses-easier.spec || goto :fail
 
 echo [4/5] 组装发布目录...

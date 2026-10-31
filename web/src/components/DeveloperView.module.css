@@ -1,0 +1,225 @@
+.page {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 12px;
+  padding: 18px;
+}
+
+.left {
+  flex: 0 0 62%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.right {
+  flex: 1;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+
+.panel:first-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.count {
+  font-size: var(--fs-tiny);
+  color: var(--c-muted);
+}
+
+.editor {
+  flex: 1;
+  min-height: 160px;
+  height: auto;
+  padding: 12px 14px;
+  resize: none;
+  line-height: 1.7;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 14px;
+}
+
+.opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  text-align: left;
+}
+.opt:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.switch {
+  flex: 0 0 auto;
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  transition: background var(--dur-base) var(--ease-out);
+}
+.switch[data-on='true'] {
+  background: var(--c-accent);
+}
+
+.knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--dur-base) var(--ease-spring);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.switch[data-on='true'] .knob {
+  transform: translateX(16px);
+}
+
+.optText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.optLabel {
+  font-size: var(--fs-body);
+  color: var(--c-text);
+}
+
+.optDesc {
+  font-size: var(--fs-tiny);
+  color: var(--c-muted);
+}
+
+/* ---------- 更新范围表 ---------- */
+.table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+}
+
+.tableHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 2px 10px;
+}
+
+.rows {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 4px;
+  border-radius: 8px;
+  /* 长列表：浏览器只渲染视口附近的行 */
+  content-visibility: auto;
+  contain-intrinsic-size: 32px;
+}
+.row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+.row[data-off='true'] {
+  opacity: 0.42;
+}
+
+.rowName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 118px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--c-text);
+  background: rgba(78, 201, 176, 0.1);
+  font-size: var(--fs-body);
+}
+.rowName:hover {
+  background: rgba(78, 201, 176, 0.16);
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 导出进度 ---------- */
+.progressCard {
+  padding: 10px 14px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.progressHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  background: var(--c-accent);
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+.actions {
+  align-items: center;
+}

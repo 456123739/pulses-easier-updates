@@ -1,0 +1,36 @@
+.seg {
+  display: flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--hairline);
+}
+
+.item {
+  position: relative;
+  flex: 1;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+}
+
+.thumb {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: #313136;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.label {
+  position: relative;
+  z-index: 1;
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+  transition: color var(--dur-base) var(--ease-out);
+}
+.item[data-active='true'] .label {
+  color: var(--c-text);
+}

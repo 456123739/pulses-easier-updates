@@ -13,6 +13,8 @@ database.py — 数据库路径与配置管理
 
 import json
 import os
+import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -26,11 +28,25 @@ def _atomic_write_text(path: Path, text: str) -> bool:
     """tmp + os.replace：避免断电/崩溃留下半截 JSON（读侧会静默回默认值）。"""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001
+        return False
+    tmp = path.with_name(path.name + ".tmp")
+    last: Exception | None = None
+    # Windows：目标被占用（索引/杀软/别的进程）时 os.replace 会 PermissionError，
+    # 重试几次再退化成直写——绝不能静默丢写（白名单/设置丢了是"看起来生效其实没存"）
+    for _ in range(5):
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            time.sleep(0.05)
+    try:
+        path.write_text(text, encoding="utf-8")
         return True
     except Exception:  # noqa: BLE001
+        print(f"[warn] 写入失败：{path}（{last}）", file=sys.stderr)
         return False
 
 DEFAULT_WHITELIST = ["mods", "resourcepacks", "shaderpacks"]

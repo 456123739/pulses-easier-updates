@@ -11,6 +11,7 @@ Pulses Easier 程序入口
   5. boot 完成 → on_boot_done() → deiconify → 主界面
 """
 
+import os
 import sys
 import time
 import traceback
@@ -22,6 +23,63 @@ from pathlib import Path
 if len(sys.argv) >= 3 and sys.argv[1] == "--preview-worker":
     from app.core.preview_worker import main as _preview_main
     sys.exit(_preview_main(sys.argv[2:]))
+
+# 新界面的"受监督子进程"入口：由父进程拉起，页面加载完成后写一个就绪文件，
+# 父进程超时没等到就杀掉它、退回 Tk——WebView2 卡死时玩家也不会看到黑屏。
+if len(sys.argv) >= 2 and sys.argv[1] == "--web-host":
+    if len(sys.argv) >= 3:
+        os.environ["PULSES_WEB_READY"] = sys.argv[2]
+    from app.ui_web import host as _host_child
+    sys.exit(_host_child.run([]))
+
+# 界面选择：
+#   默认（auto）→ 先试新界面（WebView2），起不来就自动退回 Tk，玩家永远不会看到黑屏
+#   PULSES_UI=tk   → 强制旧界面
+#   PULSES_UI=web  → 强制新界面（起不来就报错，方便排查）
+def _start_web_ui() -> int:
+    """在本进程里跑新界面，返回进程退出码（0 = 正常关闭）。"""
+    from app.ui_web import host as _web_host
+    return int(_web_host.run(sys.argv[1:]) or 0)
+
+
+_ui = os.environ.get("PULSES_UI", "auto").strip().lower()
+# 只有"当作脚本运行"才启动界面：测试/CI 里 import main 不能顺手拉起一个窗口
+if __name__ == "__main__" and _ui in ("web", "auto", ""):
+    _stage = os.environ.get("PULSES_E2E_STAGE", "")
+    if _stage:
+        try:
+            Path(_stage).write_text("main-web", encoding="utf-8")
+        except Exception:                          # noqa: BLE001, S110
+            pass
+    try:
+        import webview                             # noqa: F401
+        from app.ui_web import launch
+        if not launch.runtime_available():
+            raise RuntimeError("本机没有 WebView2 运行时")
+        if _ui == "web":
+            raise SystemExit(_start_web_ui())
+        _rc = launch.run_supervised(str(Path(__file__).resolve()))
+        if _rc is not None:
+            raise SystemExit(_rc)
+        raise RuntimeError("新界面没能加载（受监督启动超时）")
+    except SystemExit:
+        raise
+    except Exception:                              # noqa: BLE001
+        import traceback as _tb
+        _txt = _tb.format_exc()
+        _log = Path(os.environ.get("PULSES_E2E_REPORT", "") + ".err") \
+            if os.environ.get("PULSES_E2E_REPORT") else None
+        try:
+            if _log is not None:
+                _log.write_text(_txt, encoding="utf-8")
+            else:
+                print("[warn] 新界面启动失败，退回 Tk：\n" + _txt,
+                      file=sys.stderr)
+        except Exception:                          # noqa: BLE001, S110
+            pass
+        if _ui == "web":
+            raise
+        # auto：继续往下走 Tk
 
 import customtkinter as ctk
 
