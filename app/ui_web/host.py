@@ -289,7 +289,17 @@ def run(argv: list[str] | None = None) -> int:
                 url = window.get_current_url()
             except Exception as exc:                 # noqa: BLE001
                 url = f"<{exc}>"
-            _note(f"watchdog {int(wait)}s loaded={loaded_flag[0]} url={url}")
+            try:
+                state = window.evaluate_js("document.readyState")
+            except Exception as exc:                 # noqa: BLE001
+                state = f"<{exc}>"
+            try:
+                head = str(window.evaluate_js(
+                    "(document.body && document.body.innerText || '').slice(0,80)"))
+            except Exception as exc:                 # noqa: BLE001
+                head = f"<{exc}>"
+            _note(f"watchdog {int(wait)}s loaded={loaded_flag[0]} url={url} "
+                  f"readyState={state} body={head!r}")
             if loaded_flag[0]:
                 return
 

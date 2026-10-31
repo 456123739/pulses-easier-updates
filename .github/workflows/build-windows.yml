@@ -137,6 +137,18 @@ jobs:
             if ($p.MainWindowTitle) { $ok = $true; break }
           }
           Write-Host "新界面窗口：ok=$ok title='$($p.MainWindowTitle)'"
+          # 截一张桌面图：CI 里唯一能"看到"新界面渲染结果的办法
+          try {
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
+            $shot = Join-Path $env:RUNNER_TEMP "web-preview.png"
+            $bmp.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
+            Write-Host "截图：$shot ($($b.Width)x$($b.Height))"
+            Copy-Item $shot "web-preview.png" -Force
+          } catch { Write-Host "截图失败：$_" }
           if (Test-Path $env:PULSES_WEB_LOG) { Get-Content $env:PULSES_WEB_LOG | Write-Host }
           if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
 
@@ -156,6 +168,14 @@ jobs:
           if ($p.MainWindowTitle) { Write-Host "窗口标题：$($p.MainWindowTitle)" }
           if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           if (Test-Path $log) { Get-Content $log | Write-Host }
+
+      - name: 上传新界面截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-preview
+          path: web-preview.png
+          if-no-files-found: ignore
 
       - name: 保存端到端截图
         if: always()
