@@ -92,6 +92,9 @@ jobs:
           $exe = "dist/Pulses Easier/Pulses Easier.exe"
           if (-not (Test-Path $exe)) { throw "没找到打包产物" }
           $env:PULSES_UI = "web"
+          $log = Join-Path $env:RUNNER_TEMP "web-start.log"
+          $env:PULSES_WEB_LOG = $log
+          if (Test-Path $log) { Remove-Item $log }
           $p = Start-Process -FilePath $exe -PassThru
           $ok = $false
           for ($i = 0; $i -lt 60; $i++) {
@@ -103,8 +106,8 @@ jobs:
           $title = $p.MainWindowTitle
           $alive = -not $p.HasExited
           if ($alive) { Stop-Process -Id $p.Id -Force }
+          if (Test-Path $log) { Write-Host "--- 启动留痕 ---"; Get-Content $log | Write-Host }
           if (-not $ok) {
-            Get-ChildItem "dist/Pulses Easier" -Force | Select-Object Name | Out-String | Write-Host
             throw "窗口没起来（alive=$alive, title='$title'）"
           }
           Write-Host "窗口标题：$title"

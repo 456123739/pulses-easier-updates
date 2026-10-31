@@ -88,10 +88,30 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
         bus.log(f"拖放绑定失败：{exc}", "WARNING")
 
 
+def _note(text: str) -> None:
+    """启动过程留痕：CI 里窗口起不来时，这是唯一的现场证据。"""
+    stamp = f"[{__import__('time').strftime('%H:%M:%S')}] {text}"
+    for key in ("PULSES_E2E_STAGE", "PULSES_WEB_LOG"):
+        path = os.environ.get(key, "")
+        if not path:
+            continue
+        try:
+            if key == "PULSES_E2E_STAGE":
+                Path(path).write_text(text, encoding="utf-8")
+            else:
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(stamp + "\n")
+        except Exception:                            # noqa: BLE001, S110
+            pass
+
+
 def run(argv: list[str] | None = None) -> int:
+    _note(f"run: frozen={getattr(sys, 'frozen', False)} exe={sys.executable}")
     import webview
+    _note(f"webview {getattr(webview, '__version__', '?')}")
 
     target = _web_target()
+    _note(f"target={target}")
     bus = EventBus()
     controller = AppController(bus)
     api = Api(controller, bus)
@@ -109,6 +129,7 @@ def run(argv: list[str] | None = None) -> int:
         hidden=True,
     )
     api.bind_window(window)
+    _note("window-created")
 
     def e2e_mark(stage: str) -> None:
         path = os.environ.get("PULSES_E2E_STAGE", "")
@@ -155,9 +176,11 @@ def run(argv: list[str] | None = None) -> int:
     pump_holder: dict[str, EventPump] = {}
 
     def on_loaded():
+        _note("page-loaded")
         bind_drop(window, api, bus)
         pump = EventPump(bus, window, logger=bus.log).start()
         pump_holder["pump"] = pump
+        loaded_flag[0] = True
         e2e_mark("page-loaded")
         try:
             window.show()
@@ -181,6 +204,22 @@ def run(argv: list[str] | None = None) -> int:
         pass
 
     e2e_mark("starting")
+
+    def _watchdog():
+        import time as _t
+        for wait in (10.0, 20.0, 30.0):
+            _t.sleep(10.0)
+            try:
+                url = window.get_current_url()
+            except Exception as exc:                 # noqa: BLE001
+                url = f"<{exc}>"
+            _note(f"watchdog {int(wait)}s loaded={loaded_flag[0]} url={url}")
+            if loaded_flag[0]:
+                return
+
+    loaded_flag = [False]
+    threading.Thread(target=_watchdog, daemon=True).start()
+
     try:
         try:
             import webview as _wv
@@ -194,12 +233,14 @@ def run(argv: list[str] | None = None) -> int:
         )
     except Exception:                                # noqa: BLE001
         import traceback as _tb
+        _note("start-failed:" + _tb.format_exc()[:1500])
         try:
             e2e_mark("start-failed:" + _tb.format_exc()[:1500])
         except Exception:                            # noqa: BLE001, S110
             pass
         raise
     finally:
+        _note("start-returned")
         pump = pump_holder.get("pump")
         if pump:
             pump.stop()
