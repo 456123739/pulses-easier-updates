@@ -10,7 +10,12 @@ export default function Shell() {
   const role = useApp((s) => s.state?.role ?? 'player')
 
   return (
-    <div className={styles.shell}>
+    <motion.div
+      className={styles.shell}
+      initial={{ opacity: 0, scale: 0.986 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.19, ease: [0.2, 0.8, 0.2, 1] }}
+    >
       <Sidebar />
       <main className={styles.workspace}>
         <motion.div
@@ -23,6 +28,6 @@ export default function Shell() {
           {role === 'player' ? <PlayerView /> : <DeveloperView />}
         </motion.div>
       </main>
-    </div>
+    </motion.div>
   )
 }
