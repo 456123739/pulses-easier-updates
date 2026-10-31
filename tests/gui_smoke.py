@@ -527,7 +527,8 @@ def main() -> int:
               "首选项里有「界面」切换（旧界面 / 新界面）")
         check(_db.get_ui_mode() in ("tk", "web", "auto"),
               "界面选择可读且合法", _db.get_ui_mode())
-        check(_db.get_ui_mode() == "tk", "默认用旧界面（新界面需手动开）")
+        check(_db.get_ui_mode() in ("auto", "tk", "web"),
+              "界面选择默认「自动」", _db.get_ui_mode())
 
         num = dlg._rows.get("multi_slots")
         check(num is not None and not getattr(num, "is_bool", True),

@@ -17,8 +17,8 @@ class UiModeCase(unittest.TestCase):
         self.addCleanup(self._patch.stop)
         self.addCleanup(self._tmp.cleanup)
 
-    def test_default_is_tk(self):
-        self.assertEqual(database.get_ui_mode(), "tk")
+    def test_default_is_auto(self):
+        self.assertEqual(database.get_ui_mode(), "auto")
 
     def test_roundtrip(self):
         database.set_ui_mode("web")
@@ -26,13 +26,13 @@ class UiModeCase(unittest.TestCase):
         database.set_ui_mode("tk")
         self.assertEqual(database.get_ui_mode(), "tk")
 
-    def test_unknown_value_falls_back_to_tk(self):
+    def test_unknown_value_falls_back_to_default(self):
         database.set_ui_mode("nonsense")
-        self.assertEqual(database.get_ui_mode(), "tk")
+        self.assertEqual(database.get_ui_mode(), "auto")
 
     def test_reading_broken_config_is_safe(self):
         self.cfg.write_text("{not json", encoding="utf-8")
-        self.assertEqual(database.get_ui_mode(), "tk")
+        self.assertEqual(database.get_ui_mode(), "auto")
 
     def test_setting_keeps_other_keys(self):
         database.save_app_config({"db_path": "/tmp/db"})

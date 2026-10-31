@@ -50,8 +50,8 @@ def _atomic_write_text(path: Path, text: str) -> bool:
         return False
 
 DEFAULT_WHITELIST = ["mods", "resourcepacks", "shaderpacks"]
-# 界面：tk（默认，稳定）/ web（新界面 WebView2，重启生效）
-DEFAULT_UI_MODE = "tk"
+# 界面：auto（先试新界面，起不来自动退回 Tk，默认）/ tk / web，重启生效
+DEFAULT_UI_MODE = "auto"
 DEFAULT_SCAN_LIST = DEFAULT_WHITELIST
 DEFAULT_BLACKLIST: list[str] = []
 

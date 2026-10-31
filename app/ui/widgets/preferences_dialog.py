@@ -500,27 +500,27 @@ class PreferencesDialog(ctk.CTkToplevel):
             .pack(anchor="w", padx=14, pady=(12, 2))
         ctk.CTkLabel(
             box,
-            text=("新界面用 WebView2 渲染，外观是哑光深色那套；"
-                  "需要系统里的 WebView2 运行时（Win11 自带）。\n"
-                  "切换后重启程序生效；新界面起不来会自动回到旧界面。"),
+            text=("「自动」= 先试新界面（WebView2 渲染，哑光深色那套），"
+                  "起不来自动回到旧界面；\n也可以钉死用哪一个。"
+                  "切换后重启程序生效。"),
             font=Font.SMALL, text_color=Color.TEXT_SECONDARY,
             justify="left", fg_color=Color.TRANSPARENT)\
             .pack(anchor="w", padx=14, pady=(0, 10))
 
-        choices = [("tk", "旧界面"), ("web", "新界面")]
+        choices = [("auto", "自动"), ("tk", "旧界面"), ("web", "新界面")]
         try:
             cur = db.get_ui_mode()
         except Exception:  # noqa: BLE001
             cur = "tk"
         sw = SegmentedSwitch(box, values=[t for _k, t in choices],
                              command=self._on_ui_mode, height=32)
-        sw.set(dict(choices).get(cur, "旧界面"))
+        sw.set(dict(choices).get(cur, "自动"))
         sw.pack(anchor="w", padx=14, pady=(0, 14))
         self._ui_switch = sw
         self._ui_choices = choices
 
     def _on_ui_mode(self, label: str):
-        mode = {"旧界面": "tk", "新界面": "web"}.get(str(label), "tk")
+        mode = {"自动": "auto", "旧界面": "tk", "新界面": "web"}.get(str(label), "auto")
         try:
             db.set_ui_mode(mode)
         except Exception:  # noqa: BLE001, S110
