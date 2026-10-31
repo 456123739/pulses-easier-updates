@@ -92,8 +92,8 @@ jobs:
           if (-not (Test-Path $exe)) { throw "没找到打包产物" }
           $log = Join-Path $env:RUNNER_TEMP "web-start.log"
           $env:PULSES_WEB_LOG = $log
-          # runner 里 WebView2 起不来（见下一条），这里验证"exe 本体能起窗"
-          $env:PULSES_UI = "tk"
+          # 不设 PULSES_UI：走玩家真实的默认路径（旧界面）
+          Remove-Item Env:PULSES_UI -ErrorAction SilentlyContinue
           $p = Start-Process -FilePath $exe -PassThru
           $ok = $false
           for ($i = 0; $i -lt 90; $i++) {
