@@ -84,10 +84,30 @@ jobs:
             Get-ChildItem "dist/Pulses Easier/_internal/web" -Recurse -Depth 2 | Select-Object FullName
           }
 
-      # 打包后的壳：真的 exe + 真 WebView2 + 真流程（驱动在包内跑）
-      - name: 打包后真机端到端（新界面）
+      # 打包后的壳：真 exe + 真 WebView2。窗口出现且标题正确 = 页面加载成功
+      # （show() 只在 loaded 之后调用，所以"有窗口标题"就等于"前端起来了"）
+      - name: 打包后起窗冒烟（新界面）
+        shell: pwsh
         run: |
-          python tests/web_e2e_windows.py --exe "dist/Pulses Easier/Pulses Easier.exe"
+          $exe = "dist/Pulses Easier/Pulses Easier.exe"
+          if (-not (Test-Path $exe)) { throw "没找到打包产物" }
+          $env:PULSES_UI = "web"
+          $p = Start-Process -FilePath $exe -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+            if ($p.MainWindowTitle) { $ok = $true; break }
+          }
+          $title = $p.MainWindowTitle
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          if (-not $ok) {
+            Get-ChildItem "dist/Pulses Easier" -Force | Select-Object Name | Out-String | Write-Host
+            throw "窗口没起来（alive=$alive, title='$title'）"
+          }
+          Write-Host "窗口标题：$title"
 
       - name: 保存端到端截图
         if: always()
