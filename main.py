@@ -42,7 +42,17 @@ def _start_web_ui() -> int:
     return int(_web_host.run(sys.argv[1:]) or 0)
 
 
-_ui = os.environ.get("PULSES_UI", "tk").strip().lower()
+def _saved_ui_mode() -> str:
+    """首选项里选的界面（默认旧界面）。读配置失败一律当旧界面。"""
+    try:
+        from app.core import database
+        return database.get_ui_mode()
+    except Exception:  # noqa: BLE001
+        return "tk"
+
+
+_ui = (os.environ.get("PULSES_UI", "").strip().lower()
+       or _saved_ui_mode())
 # 只有"当作脚本运行"才启动界面：测试/CI 里 import main 不能顺手拉起一个窗口
 if __name__ == "__main__" and _ui in ("web", "auto", ""):
     _stage = os.environ.get("PULSES_E2E_STAGE", "")

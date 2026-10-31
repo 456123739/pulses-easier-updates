@@ -7,9 +7,9 @@ on:
   workflow_dispatch:            # 手动触发：Actions 页面点一下，或 gh 命令
     inputs:
       version:
-        description: 版本号（用于 zip 文件名，如 0.10.1）
+        description: 版本号（用于 zip 文件名，如 0.10.2）
         required: false
-        default: "0.10.1"
+        default: "0.10.2"
   push:
     tags: ["v*"]                # 推 tag 时自动出包并上传到对应 Release
 
@@ -84,6 +84,18 @@ jobs:
             Get-ChildItem "dist/Pulses Easier/_internal/web" -Recurse -Depth 2 | Select-Object FullName
           }
 
+      # GitHub 的 runner 镜像里没有 WebView2 运行时（只有 Edge 浏览器），
+      # 新界面的窗口验证需要它；装上之后下面那条"新界面起窗验证"才有意义
+      - name: 安装 WebView2 运行时（尽力而为）
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "MicrosoftEdgeWebView2Setup.exe"
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe
+          Start-Process -FilePath $exe -ArgumentList "/silent", "/install" -Wait
+          Get-ChildItem "$env:ProgramFiles(x86)\Microsoft\EdgeWebView\Application" -ErrorAction SilentlyContinue |
+            Select-Object Name
+
       # 打包后的壳：真 exe 起窗（Windows 版默认先试新界面，无 WebView2 运行时则退回 Tk）
       - name: 打包后起窗冒烟（新界面）
         shell: pwsh
@@ -108,6 +120,25 @@ jobs:
           if ($alive) { Stop-Process -Id $p.Id -Force }
           if (-not $ok) { throw "窗口没起来（alive=$alive, title='$title'）" }
           Write-Host "窗口标题：$title"
+
+      - name: 新界面起窗验证（参考）
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = "dist/Pulses Easier/Pulses Easier.exe"
+          $env:PULSES_UI = "web"
+          $env:PULSES_WEB_LOG = Join-Path $env:RUNNER_TEMP "web-only.log"
+          $p = Start-Process -FilePath $exe -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+            if ($p.MainWindowTitle) { $ok = $true; break }
+          }
+          Write-Host "新界面窗口：ok=$ok title='$($p.MainWindowTitle)'"
+          if (Test-Path $env:PULSES_WEB_LOG) { Get-Content $env:PULSES_WEB_LOG | Write-Host }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
 
       # WebView2 在 GitHub 的 Windows runner 里起不来（Main window failed to start），
       # 这条路只在用户真机上验证；这里只保留现场证据，不阻断发布

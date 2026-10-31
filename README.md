@@ -8,7 +8,7 @@ CustomTkinter，目标平台 Windows 10。
 > **Aster（星驰引擎）** —— 单线程起步、按剩余量自适应增片、源逐个降级，
 > 移植自 PCL2 的 NetTask 策略。
 >
-> 当前版本 **v0.10.1（默认旧界面，新界面用 `PULSES_UI=web` 开启）**。
+> 当前版本 **v0.10.2（默认旧界面；首选项里可切到新界面，重启生效）**。
 > 从 v0.5.0 起不再提供"替换几个文件"的增量包 —— 整个项目按原目录结构打包，
 > 解压即是完整可用工程。改动明细见 [`CHANGELOG.md`](CHANGELOG.md)，
 > 审查与修复状态见 [`docs/Easier-流程审查报告.md`](docs/Easier-流程审查报告.md)。
@@ -16,10 +16,10 @@ CustomTkinter，目标平台 Windows 10。
 ## 下载
 
 * **Windows 免安装绿色版（推荐）**：
-  [`pulses-easier-0.10.1-beta-win64.zip`](https://github.com/456123739/pulses-easier-updates/releases/latest)
+  [`pulses-easier-0.10.2-beta-win64.zip`](https://github.com/456123739/pulses-easier-updates/releases/latest)
   —— 解压后双击 `Pulses Easier.exe`，**不需要装 Python**。
 * **完整项目包（源码）**：
-  [`release/pulses-easier-v0.10.1-full.zip`](release/pulses-easier-v0.10.1-full.zip)
+  [`release/pulses-easier-v0.10.2-full.zip`](release/pulses-easier-v0.10.2-full.zip)
   —— 解压后可直接 `python main.py`。
 * 历史增量包（只含 8 个文件，v0.3.0 下载引擎聚合更新）：
   [`release/pulses-easier-download-engine-v0.3.0-aggregate.zip`](release/pulses-easier-download-engine-v0.3.0-aggregate.zip)

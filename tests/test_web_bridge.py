@@ -150,10 +150,11 @@ class SupervisedLaunchCase(unittest.TestCase):
     def test_timeout_falls_back(self):
         from unittest import mock
         with mock.patch.object(self.launch, "BOOT_TIMEOUT", 0.3), \
-             mock.patch.object(self.launch.subprocess, "Popen") as popen:
+             mock.patch.object(self.launch.subprocess, "Popen") as popen, \
+             mock.patch.object(self.launch, "_kill_tree") as kill:
             popen.return_value.poll.return_value = None
             self.assertIsNone(self.launch.run_supervised(entry="/tmp/x.py"))
-            popen.return_value.kill.assert_called_once()
+            kill.assert_called_once()
 
     def test_ready_file_hands_over(self):
         from unittest import mock

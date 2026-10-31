@@ -109,9 +109,15 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
         bus.log(f"拖放绑定失败：{exc}", "WARNING")
 
 
+def _log_path() -> Path:
+    """新界面的启动日志：固定落盘，出问题时不用再让用户设环境变量。"""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base) / "Pulses Easier" / "web-start.log"
+
+
 def _note(text: str) -> None:
-    """启动过程留痕：CI 里窗口起不来时，这是唯一的现场证据。"""
-    if text == "page-shown":
+    """启动过程留痕：窗口起不来时，这是唯一的现场证据。"""
+    if text == "page-loaded":
         ready = os.environ.get("PULSES_WEB_READY", "")
         if ready:
             try:
@@ -119,14 +125,17 @@ def _note(text: str) -> None:
             except Exception:                        # noqa: BLE001, S110
                 pass
     stamp = f"[{__import__('time').strftime('%H:%M:%S')}] {text}"
-    for key in ("PULSES_E2E_STAGE", "PULSES_WEB_LOG"):
-        path = os.environ.get(key, "")
-        if not path:
-            continue
+    paths = [os.environ.get("PULSES_WEB_LOG", ""), os.environ.get("PULSES_E2E_STAGE", "")]
+    try:
+        paths.append(str(_log_path()))
+    except Exception:                                # noqa: BLE001, S110
+        pass
+    for path in filter(None, paths):
         try:
-            if key == "PULSES_E2E_STAGE":
+            if os.environ.get("PULSES_E2E_STAGE") == path:
                 Path(path).write_text(text, encoding="utf-8")
             else:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
                 with open(path, "a", encoding="utf-8") as fh:
                     fh.write(stamp + "\n")
         except Exception:                            # noqa: BLE001, S110
@@ -134,6 +143,13 @@ def _note(text: str) -> None:
 
 
 def run(argv: list[str] | None = None) -> int:
+    try:                                            # 每次启动重写，避免日志越滚越大
+        _log_path().parent.mkdir(parents=True, exist_ok=True)
+        _log_path().write_text(
+            f"===== {__import__('time').strftime('%Y-%m-%d %H:%M:%S')} =====\n",
+            encoding="utf-8")
+    except Exception:                                # noqa: BLE001, S110
+        pass
     _note(f"run: frozen={getattr(sys, 'frozen', False)} exe={sys.executable}")
     import webview
     _note(f"webview {getattr(webview, '__version__', '?')}")
@@ -154,7 +170,9 @@ def run(argv: list[str] | None = None) -> int:
         background_color=BG,
         text_select=True,
         confirm_close=False,
-        hidden=True,
+        # 建窗即可见：0.10.0 用 hidden=True + loaded 里 show()，在真机上出现过
+        # "进程在跑、CPU 在转、窗口不出现"，干脆不要这个依赖
+        hidden=False,
     )
     api.bind_window(window)
     _note("window-created")
@@ -183,6 +201,27 @@ def run(argv: list[str] | None = None) -> int:
         e2e_mark("window-created:" + str(target) + " pywebview=" + getattr(_wv, "__version__", "?"))
     except Exception:                                # noqa: BLE001, S110
         pass
+    def _ensure_visible():
+        import time as _t
+        for attempt in (6.0, 12.0):
+            _t.sleep(attempt)
+            try:
+                _note(f"visible-check {int(attempt)}s "
+                      f"shown={shown_flag[0]} viewable={window.is_visible() if hasattr(window, 'is_visible') else '?'}")
+            except Exception as exc:                 # noqa: BLE001
+                _note(f"visible-check {int(attempt)}s 出错：{exc}")
+            if shown_flag[0]:
+                return
+            try:
+                window.show()
+                window.restore()
+                _note("force-show 已调用")
+            except Exception as exc:                 # noqa: BLE001
+                _note(f"force-show 失败：{exc}")
+
+    shown_flag = [False]
+    threading.Thread(target=_ensure_visible, daemon=True).start()
+
     if os.environ.get("PULSES_E2E", "").strip() in ("1", "true", "yes"):
         # 不等 loaded：页面没加载出来时也要有报告，否则 CI 只能看到"没拿到报告"
         try:
@@ -204,8 +243,7 @@ def run(argv: list[str] | None = None) -> int:
     pump_holder: dict[str, EventPump] = {}
 
     def on_shown():
-        # 只有"窗口真的出现在屏幕上"才通知父进程交棒：
-        # 页面加载了但窗口没显示，父进程会超时、退回 Tk（0.10.0 卡后台的教训）
+        shown_flag[0] = True
         _note("page-shown")
 
     try:

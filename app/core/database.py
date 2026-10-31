@@ -50,6 +50,8 @@ def _atomic_write_text(path: Path, text: str) -> bool:
         return False
 
 DEFAULT_WHITELIST = ["mods", "resourcepacks", "shaderpacks"]
+# 界面：tk（默认，稳定）/ web（新界面 WebView2，重启生效）
+DEFAULT_UI_MODE = "tk"
 DEFAULT_SCAN_LIST = DEFAULT_WHITELIST
 DEFAULT_BLACKLIST: list[str] = []
 
@@ -424,6 +426,21 @@ def save_db_config(cfg: dict):
 # ----------------------------------------------------------------------
 # 白名单
 # ----------------------------------------------------------------------
+def get_ui_mode() -> str:
+    """读"用哪个界面"（写在 ~/.pulses_easier/config.json）。"""
+    try:
+        mode = str(load_app_config().get("ui_mode") or DEFAULT_UI_MODE).lower()
+    except Exception:  # noqa: BLE001
+        return DEFAULT_UI_MODE
+    return mode if mode in ("tk", "web", "auto") else DEFAULT_UI_MODE
+
+
+def set_ui_mode(mode: str) -> None:
+    cfg = load_app_config()
+    cfg["ui_mode"] = mode if mode in ("tk", "web", "auto") else DEFAULT_UI_MODE
+    save_app_config(cfg)
+
+
 def get_whitelist() -> list[str]:
     cfg = load_db_config()
     return list(cfg.get("whitelist", DEFAULT_WHITELIST))

@@ -381,6 +381,7 @@ class PreferencesDialog(ctk.CTkToplevel):
         self._mirror_ok = True          # 还没测之前不拦保存
         if key == "download":
             self._build_engine_row(current)
+            self._build_ui_row()
         hidden = db._HIDDEN_DOWNLOAD_KEYS if key == "download" else set()
         for opt_key, opt_label, desc, example in meta:
             if opt_key in hidden:
@@ -484,6 +485,45 @@ class PreferencesDialog(ctk.CTkToplevel):
         sw.set(dict(self._engine_choices).get(cur, labels[0]))
         sw.pack(anchor="w", padx=14, pady=(0, 14))
         self._engine_switch = sw
+
+    def _build_ui_row(self):
+        """界面选择：旧界面（Tk，默认） / 新界面（WebView2）。"""
+        from .segmented_switch import SegmentedSwitch
+
+        box = ctk.CTkFrame(self.form_scroll, fg_color=Color.LOG_BG,
+                           corner_radius=Size.RADIUS_CARD)
+        box.pack(fill="x", padx=16, pady=(0, 14))
+
+        ctk.CTkLabel(box, text="界面", font=Font.SUBTITLE,
+                     text_color=Color.TEXT_PRIMARY,
+                     fg_color=Color.TRANSPARENT)\
+            .pack(anchor="w", padx=14, pady=(12, 2))
+        ctk.CTkLabel(
+            box,
+            text=("新界面用 WebView2 渲染，外观是哑光深色那套；"
+                  "需要系统里的 WebView2 运行时（Win11 自带）。\n"
+                  "切换后重启程序生效；新界面起不来会自动回到旧界面。"),
+            font=Font.SMALL, text_color=Color.TEXT_SECONDARY,
+            justify="left", fg_color=Color.TRANSPARENT)\
+            .pack(anchor="w", padx=14, pady=(0, 10))
+
+        choices = [("tk", "旧界面"), ("web", "新界面")]
+        try:
+            cur = db.get_ui_mode()
+        except Exception:  # noqa: BLE001
+            cur = "tk"
+        sw = SegmentedSwitch(box, values=[t for _k, t in choices],
+                             command=self._on_ui_mode, height=32)
+        sw.set(dict(choices).get(cur, "旧界面"))
+        sw.pack(anchor="w", padx=14, pady=(0, 14))
+
+    def _on_ui_mode(self, label: str):
+        mode = {"旧界面": "tk", "新界面": "web"}.get(str(label), "tk")
+        try:
+            db.set_ui_mode(mode)
+        except Exception:  # noqa: BLE001, S110
+            return
+        self._ui_mode_hint = mode
 
     def _build_about(self):
         frame = ctk.CTkFrame(self.form_scroll, fg_color=Color.CARD_BG)
