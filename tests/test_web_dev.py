@@ -25,6 +25,12 @@ class DevExportCase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="pe-dev-"))
         dbdir = self.tmp / "db"
         db.create_database(dbdir)
+        # 隔离应用配置：别的用例的后台线程不能改到我们用的库
+        from unittest import mock
+        self._appcfg = mock.patch.object(
+            db, "_APP_CFG", self.tmp / "app-config.json")
+        self._appcfg.start()
+        self.addCleanup(self._appcfg.stop)
         db.set_db_path(dbdir)
 
         src = self.tmp / "src"
@@ -87,6 +93,12 @@ class SettingsAndResumeCase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="pe-misc-"))
         dbdir = self.tmp / "db"
         db.create_database(dbdir)
+        # 隔离应用配置：别的用例的后台线程不能改到我们用的库
+        from unittest import mock
+        self._appcfg = mock.patch.object(
+            db, "_APP_CFG", self.tmp / "app-config.json")
+        self._appcfg.start()
+        self.addCleanup(self._appcfg.stop)
         db.set_db_path(dbdir)
         self.pack = self.tmp / "pack"
         _write(self.pack / "mods" / "a.jar", "A")

@@ -394,12 +394,30 @@ def is_valid_database(db_root: Path) -> bool:
         return False
 
 
+def _read_json_retry(path: Path, tries: int = 6) -> dict | None:
+    """读 JSON 带重试：Windows 上刚写完的文件可能被杀软/索引短暂占住，
+    一次读失败就回默认值会让"写进去了却读不出来"（白名单丢过好几次）。"""
+    last: Exception | None = None
+    for i in range(tries):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            time.sleep(0.02 * (i + 1))
+    print(f"[warn] 读配置失败（已重试 {tries} 次）：{path}（{last}）",
+          file=sys.stderr)
+    return None
+
+
 def load_db_config() -> dict:
     db = get_db_path()
     if not db:
         return {}
-    try:
-        cfg = json.loads((db / "config.json").read_text(encoding="utf-8"))
+    raw = _read_json_retry(db / "config.json")
+    if raw is not None:
+        cfg = raw
         cfg.setdefault("format_version", DB_FORMAT_VERSION)
         if "whitelist" not in cfg and "scan_list" in cfg:
             cfg["whitelist"] = cfg["scan_list"]
@@ -410,15 +428,14 @@ def load_db_config() -> dict:
         cfg.setdefault("compare", dict(DEFAULT_COMPARE_OPTIONS))
         cfg.setdefault("ui", dict(DEFAULT_UI_OPTIONS))
         return cfg
-    except Exception:  # noqa: BLE001
-        return {}
+    return {}
 
 
-def save_db_config(cfg: dict):
+def save_db_config(cfg: dict) -> bool:
     db = get_db_path()
     if not db:
-        return
-    _atomic_write_text(
+        return False
+    return _atomic_write_text(
         db / "config.json",
         json.dumps(cfg, ensure_ascii=False, indent=2))
 
@@ -446,7 +463,7 @@ def get_whitelist() -> list[str]:
     return list(cfg.get("whitelist", DEFAULT_WHITELIST))
 
 
-def set_whitelist(items: list[str]):
+def set_whitelist(items: list[str]) -> bool:
     cfg = load_db_config()
     clean: list[str] = []
     seen: set[str] = set()
@@ -457,7 +474,7 @@ def set_whitelist(items: list[str]):
         seen.add(s)
         clean.append(s)
     cfg["whitelist"] = clean
-    save_db_config(cfg)
+    return save_db_config(cfg)
 
 
 def get_scan_list() -> list[str]:
