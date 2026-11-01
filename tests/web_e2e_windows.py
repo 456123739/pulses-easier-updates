@@ -1,8 +1,13 @@
-"""真机端到端（Windows CI）：启动新界面 → 在真页面里跑完整套件 → 查磁盘。
+"""真机端到端（Windows CI）：起新界面 → 页面内驱动自己跑完 → 查磁盘。
 
-怎么做到"无人值守"：`app/ui_web/e2e_driver.py` 在真实 WebView2 页面里用
-`evaluate_js` 点按钮、读文本（和玩家操作同一条路径），结果写 JSON。
-这个脚本只负责：搭夹具 → 起服务 → 起进程 → 等报告 → 核对磁盘。
+驱动在页面里（`web/src/e2e/harness.ts`，只有 `?e2e=1` 才会被动态 import）：
+它点的是真按钮，后端动作全走 `invoke`，跑完用 `api.e2e_report` 回传结果，
+Python 侧只负责写报告、关窗。**不再有 Python 线程 evaluate_js**——那条路在
+Windows/WinForms 上会卡住整个进程（见 `app/ui_web/api.py` 与 harness 顶部说明）。
+
+所以这个脚本只做四件事：搭夹具 → 起服务/起进程 → 等报告 → 按 steps 打
+PASS/FAIL 并复核磁盘与导出的 `.eapack`。等报告期间每 15 秒打一次心跳，
+超时或失败时把 `web-start.log`（或 `PULSES_WEB_LOG` 指定的文件）打出来。
 
 夹具与服务都复用 `scripts/dev/` 下那套（与 `run_ui_e2e.py` 同一份），
 避免"浏览器里一套、真机上一套"漂移。非 Windows 直接跳过（返回 0）。
@@ -15,10 +20,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -27,58 +32,74 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 DEV = ROOT / "scripts" / "dev"
-TIMEOUT = float(os.environ.get("PULSES_E2E_TIMEOUT", "600"))
+if str(DEV) not in sys.path:                 # 复用夹具/复核（与浏览器套件同一份断言）
+    sys.path.insert(0, str(DEV))
+
+import run_ui_e2e as base                    # noqa: E402
+
+log = base.log
+check = base.check
+TIMEOUT = float(os.environ.get("PULSES_E2E_TIMEOUT", "900"))
+HEARTBEAT = 15.0
 
 
-def log(msg: str) -> None:
-    print(f"[e2e] {msg}", flush=True)
+def local_appdata_log() -> Path:
+    """新界面固定落盘的启动日志（host._log_path 同一规则）。"""
+    base_dir = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base_dir) / "Pulses Easier" / "web-start.log"
 
 
-def wait_port(port: int, timeout: float = 30.0) -> bool:
-    end = time.time() + timeout
-    while time.time() < end:
+def dump_logs(log_path: Path) -> None:
+    """超时/失败时打印现场：日志文件是唯一能看出卡在哪儿的证据。"""
+    seen: set[str] = set()
+    for path in (log_path, local_appdata_log()):
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return True
+            key = str(path.resolve())
         except OSError:
-            time.sleep(0.3)
-    return False
+            continue
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        log(f"--- {path}（最后 80 行）---")
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            log(f"读不了：{exc}")
+            continue
+        for line in lines[-80:]:
+            print("  " + line, flush=True)
 
 
-def free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def pump_output(proc: subprocess.Popen, sink: list[str]) -> None:
+    """把子进程输出实时打出来：卡住时至少知道走到哪一步了。"""
+    stream = proc.stdout
+    if stream is None:
+        return
+    try:
+        for line in stream:
+            text = line.rstrip()
+            if not text:
+                continue
+            sink.append(text)
+            if len(sink) > 400:
+                del sink[:200]
+            print(f"[app] {text}", flush=True)
+    except Exception:                                   # noqa: BLE001
+        pass
 
 
-def build_fixture(script: Path, out_dir: Path, env: dict,
-                  *args: str) -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
-        [sys.executable, str(script), str(out_dir), *args],
-        cwd=str(ROOT), env=env, capture_output=True, text=True,
-        encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        raise RuntimeError(f"夹具失败：{script.name}\n"
-                           f"{(proc.stderr or proc.stdout)[-3000:]}")
-    path = out_dir / "fixture.json"
-    if not path.is_file():
-        raise RuntimeError(f"夹具没有写 fixture.json：{out_dir}")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def verify_exported(path: Path) -> None:
-    """磁盘为准：导出的更新包必须真的能被 core 读回来。"""
-    from app.core import eapack as eapack_mod
-
-    settings = eapack_mod.read_settings(path) or {}
-    manifest = eapack_mod.read_manifest(path) or {}
-    hashes = eapack_mod.read_hashes(path) or {}
-    assert (settings.get("recommended_strategies") or {}).get("mods") == "替换重名"
-    assert "config" in (manifest.get("excluded_folders") or [])
-    assert "mods/old.jar" in (hashes.get("files") or {})
-    assert "开发者端" in (eapack_mod.read_changelog(path) or "")
-    log("导出包可被 app.core.eapack 读回（策略/排除/哈希/更新日志都在）")
+def verify_disk(basic: dict, dl: dict, report: dict) -> bool:
+    """磁盘为准（界面说完成不算），导出的 .eapack 只有 Python 读得懂。"""
+    ok = True
+    ok &= base.verify_pack_disk(Path(basic["pack"]))
+    artifacts = report.get("artifacts") or {}
+    exported = str(artifacts.get("exported") or "")
+    if exported and Path(exported).is_file():
+        ok &= base.verify_exported(Path(exported))
+    else:
+        ok = check(False, "导出包存在", exported) and ok
+    ok &= base.verify_downloaded(dl)
+    return ok
 
 
 def main() -> int:
@@ -88,7 +109,7 @@ def main() -> int:
 
     # 要测的"壳"：显式 --exe 就是打包后的程序，否则跑源码
     exe_arg = ""
-    if "--exe" in sys.argv:
+    if "--exe" in sys.argv and sys.argv.index("--exe") + 1 < len(sys.argv):
         exe_arg = sys.argv[sys.argv.index("--exe") + 1]
     exe_path = Path(exe_arg).resolve() if exe_arg else None
     if exe_path is not None:
@@ -100,8 +121,9 @@ def main() -> int:
         return 1
 
     tmp = Path(tempfile.mkdtemp(prefix="pe-e2e-"))
-    proc = None
-    server = None
+    proc: subprocess.Popen | None = None
+    server: subprocess.Popen | None = None
+    log_path = tmp / "web-start.log"
     try:
         home = tmp / "home"
         home.mkdir()
@@ -110,13 +132,14 @@ def main() -> int:
                "USERPROFILE": str(home),
                "PYTHONUTF8": "1",
                "PYTHONIOENCODING": "utf-8"}
-        for key in ("PULSES_UI", "PULSES_E2E", "PULSES_E2E_CFG"):
+        for key in ("PULSES_UI", "PULSES_E2E", "PULSES_E2E_CFG",
+                    "PULSES_E2E_REPORT", "PULSES_E2E_PACK", "PULSES_E2E_UPDATE"):
             env.pop(key, None)
 
-        basic = build_fixture(DEV / "make_fixture.py", tmp / "basic", env)
-        file_port = free_port()
-        dl = build_fixture(DEV / "make_download_fixture.py", tmp / "download",
-                           env, "--port", str(file_port))
+        basic = base.run_fixture(DEV / "make_fixture.py", tmp / "basic", env)
+        file_port = base.free_port()
+        dl = base.run_fixture(DEV / "make_download_fixture.py",
+                              tmp / "download", env, "--port", str(file_port))
 
         server = subprocess.Popen(
             [sys.executable, str(DEV / "file_server.py"),
@@ -124,12 +147,12 @@ def main() -> int:
              "--delay-ms", "60"],
             cwd=str(ROOT), env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if not wait_port(file_port):
+        if not base.wait_port(file_port):
             log("file server 没起来")
             return 1
 
-        cfg = {"work": str(tmp), "basic": basic, "download": dl,
-               "report": str(tmp / "report.json")}
+        report = tmp / "report.json"
+        cfg = {"work": str(tmp), "suite": "all", "basic": basic, "download": dl}
         cfg_path = tmp / "e2e-cfg.json"
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
                             encoding="utf-8")
@@ -138,7 +161,8 @@ def main() -> int:
                    "PULSES_UI": "web",
                    "PULSES_E2E": "1",
                    "PULSES_E2E_CFG": str(cfg_path),
-                   "PULSES_E2E_REPORT": cfg["report"]}
+                   "PULSES_E2E_REPORT": str(report),
+                   "PULSES_WEB_LOG": str(log_path)}
         if exe_path is not None:
             cmd = [str(exe_path)]
         else:
@@ -148,53 +172,46 @@ def main() -> int:
         log("启动：" + " ".join(cmd))
         proc = subprocess.Popen(cmd, cwd=str(ROOT), env=run_env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace")
+                                text=True, encoding="utf-8", errors="replace",
+                                bufsize=1)
+        sink: list[str] = []
+        threading.Thread(target=pump_output, args=(proc, sink),
+                         daemon=True).start()
 
-        report = Path(cfg["report"])
-        end = time.time() + TIMEOUT
-        while time.time() < end:
-            if report.is_file():
+        # 等报告：每 15 秒一次心跳，绝不无声无息地等到超时
+        started = time.time()
+        last = 0.0
+        while time.time() - started < TIMEOUT:
+            if report.is_file() or proc.poll() is not None:
                 break
-            if proc.poll() is not None:
-                break
+            if time.time() - last >= HEARTBEAT:
+                last = time.time()
+                log(f"等报告：已 {int(time.time() - started)}s / {int(TIMEOUT)}s，"
+                    f"进程{'在跑' if proc.poll() is None else '已退出'}")
             time.sleep(0.5)
 
-        output = ""
-        if proc.poll() is None:
-            proc.terminate()
-        try:
-            output = proc.communicate(timeout=20)[0] or ""
-        except Exception:                               # noqa: BLE001
-            proc.kill()
-        if output.strip():
-            log("程序输出：\n" + output[-4000:])
-
         if not report.is_file():
-            log("没有拿到 e2e 报告")
+            log(f"{int(TIMEOUT)}s 内没拿到报告（进程退出码 {proc.poll()}）")
+            dump_logs(log_path)
             return 1
+
         data = json.loads(report.read_text(encoding="utf-8"))
         for item in data.get("steps", []):
-            log(f"{'PASS' if item['ok'] else 'FAIL'}  {item['name']}"
-                + (f"  → {item['detail']}" if not item["ok"] else ""))
+            ok = bool(item.get("ok"))
+            print(f"{'PASS' if ok else 'FAIL'}  {item.get('name')}"
+                  + ("" if ok or not item.get("detail")
+                     else f"  →  {item['detail']}"), flush=True)
+        log(f"页面内驱动：{len(data.get('steps') or [])} 条断言，"
+            f"{'通过' if data.get('ok') else '失败'}（{data.get('ms', 0)} ms）")
         if not data.get("ok"):
             log("失败：" + str(data.get("error")))
+            dump_logs(log_path)
             return 1
 
-        # 磁盘为准（界面说完成不算）
-        pack = Path(basic["pack"])
-        assert (pack / "mods" / "old.jar").read_text(encoding="utf-8") == "NEW"
-        assert (pack / "mods" / "added.jar").read_text(encoding="utf-8") == "ADDED"
-        assert not (pack / "mods" / "gone.jar").exists()
-        assert (pack / "config" / "mine.toml").read_text(encoding="utf-8") == "mine = 1\n"
-        assert (pack / "config" / "sodium-options.json").read_text(
-            encoding="utf-8") == '{"render_distance": 8}\n'
-        log("磁盘结果正确（含智能剔除保护）")
-
-        exported = (data.get("artifacts") or {}).get("exported") or ""
-        if exported:
-            verify_exported(Path(exported))
-        aborted = (data.get("artifacts") or {}).get("aborted") or ""
-        assert aborted and Path(aborted).is_file()
+        if not verify_disk(basic, dl, data):
+            log("磁盘复核失败")
+            dump_logs(log_path)
+            return 1
 
         try:                                            # 截图留给 CI 产物
             from PIL import ImageGrab
@@ -206,10 +223,15 @@ def main() -> int:
     except Exception:                                   # noqa: BLE001
         import traceback
         traceback.print_exc()
+        dump_logs(log_path)
         return 1
     finally:
         if proc is not None and proc.poll() is None:
-            proc.kill()
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except Exception:                           # noqa: BLE001
+                proc.kill()
         if server is not None and server.poll() is None:
             server.kill()
         shutil.rmtree(tmp, ignore_errors=True)

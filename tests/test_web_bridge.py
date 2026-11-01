@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from app.core import database as db
 from app.core import eapack as eapack_mod
@@ -179,3 +181,143 @@ class SupervisedLaunchCase(unittest.TestCase):
             popen.return_value.poll.return_value = 3
             popen.return_value.returncode = 3
             self.assertIsNone(self.launch.run_supervised(entry="/tmp/x.py"))
+
+
+class E2eBridgeCase(unittest.TestCase):
+    """端到端专用口子（e2e.config / e2e.fs / e2e.can_close / e2e_report）。
+
+    它们只在 PULSES_E2E=1 时注册：产品里既没有这些方法，也读不到夹具目录
+    以外的任何文件。
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="pe-e2e-api-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.work = self.tmp / "work"
+        self.pack = self.work / "versions" / "E2EPack"
+        _write(self.pack / "mods" / "old.jar", "OLD")
+        dbdir = self.tmp / "db"
+        db.create_database(dbdir)
+        db.set_db_path(dbdir)
+        self.cfg = self.tmp / "cfg.json"
+        self.cfg.write_text(json.dumps({
+            "work": str(self.work),
+            "suite": "all",
+            "basic": {"pack": str(self.pack),
+                      "update": str(self.work / "E2EPack-3.0.0.eapack")},
+        }), encoding="utf-8")
+        self.report = self.tmp / "report.json"
+        self.bus = EventBus()
+        self.ctl = AppController(self.bus)
+
+    def _env(self, **extra):
+        env = {"PULSES_E2E": "1",
+               "PULSES_E2E_CFG": str(self.cfg),
+               "PULSES_E2E_REPORT": str(self.report)}
+        env.update(extra)
+        return mock.patch.dict(os.environ, env)
+
+    def test_methods_are_absent_without_flag(self):
+        api = Api(self.ctl, self.bus, e2e=False)
+        res = api.invoke("e2e.config", {})
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["error"]["code"], "UNKNOWN_METHOD")
+        self.assertFalse(hasattr(api, "e2e_report"))
+
+    def test_methods_are_registered_with_flag(self):
+        with self._env():
+            api = Api(self.ctl, self.bus)
+            self.assertTrue(api.e2e)
+            self.assertTrue(callable(getattr(api, "e2e_report", None)))
+            res = api.invoke("e2e.config", {})
+            self.assertTrue(res["ok"])
+            data = res["data"]
+            self.assertEqual(data["suite"], "all")
+            self.assertEqual(Path(data["work"]), self.work.resolve())
+            self.assertEqual(data["basic"]["pack"], str(self.pack))
+            # 报告路径只走环境变量，配置里不带（免得两个来源打架）
+            self.assertEqual(data["report"], str(self.report))
+
+    def test_config_without_cfg_is_an_error(self):
+        with mock.patch.dict(os.environ, {"PULSES_E2E": "1"}, clear=False):
+            os.environ.pop("PULSES_E2E_CFG", None)
+            os.environ.pop("PULSES_E2E_PACK", None)
+            os.environ.pop("PULSES_E2E_UPDATE", None)
+            api = Api(self.ctl, self.bus, e2e=True)
+            res = api.invoke("e2e.config", {})
+            self.assertFalse(res["ok"])
+            self.assertEqual(res["error"]["code"], "NO_CONFIG")
+
+    def test_fs_probe_reads_inside_and_rejects_escape(self):
+        with self._env():
+            api = Api(self.ctl, self.bus, e2e=True)
+            jar = str(self.pack / "mods" / "old.jar")
+            res = api.invoke("e2e.fs", {"paths": [jar], "text": True,
+                                        "sha256": True})
+            self.assertTrue(res["ok"])
+            item = res["data"]["files"][jar]
+            self.assertTrue(item["exists"])
+            self.assertEqual(item["text"], "OLD")
+            self.assertEqual(item["size"], 3)
+            self.assertEqual(len(item["sha256"]), 64)
+            # 目录之外的一律拒绝（防止探针变成任意文件读）
+            outside = api.invoke("e2e.fs", {"paths": [str(self.cfg)]})
+            self.assertFalse(outside["ok"])
+            self.assertEqual(outside["error"]["code"], "FORBIDDEN")
+
+    def test_can_close_mirrors_the_controller(self):
+        with self._env():
+            api = Api(self.ctl, self.bus, e2e=True)
+            res = api.invoke("e2e.can_close", {})
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["data"], {"canClose": True, "blocked": False})
+
+    def test_report_is_written_and_any_failed_step_fails_the_run(self):
+        with self._env():
+            api = Api(self.ctl, self.bus, e2e=True)
+            bad = api.e2e_report({"steps": "不是数组"})
+            self.assertFalse(bad["ok"])
+            self.assertFalse(self.report.exists())
+
+            res = api.e2e_report({
+                "ok": True,
+                "steps": [{"name": "a", "ok": True},
+                          {"name": "b", "ok": False, "detail": "x"}],
+                "artifacts": {"exported": "E"},
+                "suite": "all",
+            })
+            self.assertTrue(res["ok"])
+            self.assertTrue(self.report.is_file())
+            data = json.loads(self.report.read_text(encoding="utf-8"))
+            self.assertFalse(data["ok"])              # 有失败步 → 整体失败
+            self.assertEqual([s["name"] for s in data["steps"]], ["a", "b"])
+            self.assertEqual(data["artifacts"], {"exported": "E"})
+            self.assertTrue(api.e2e_done)             # 关窗守卫据此放行
+            self.assertFalse(self.report.with_name(
+                self.report.name + ".tmp").exists())
+
+    def test_report_ok_needs_steps(self):
+        with self._env():
+            api = Api(self.ctl, self.bus, e2e=True)
+            api.e2e_report({"ok": True, "steps": []})
+            data = json.loads(self.report.read_text(encoding="utf-8"))
+            self.assertFalse(data["ok"])
+
+
+class E2eHostUrlCase(unittest.TestCase):
+    """入口 URL 的 `?e2e=1`：只有端到端才加，而且不能破坏已有的查询串。"""
+
+    def test_adds_query_to_local_file(self):
+        from app.ui_web.host import with_e2e_flag
+        self.assertEqual(with_e2e_flag("C:/x/web/dist/index.html"),
+                         "C:/x/web/dist/index.html?e2e=1")
+
+    def test_keeps_existing_query(self):
+        from app.ui_web.host import with_e2e_flag
+        self.assertEqual(with_e2e_flag("http://127.0.0.1:5273/?a=1"),
+                         "http://127.0.0.1:5273/?a=1&e2e=1")
+
+    def test_dev_target_with_query(self):
+        from app.ui_web.host import with_e2e_flag
+        self.assertEqual(with_e2e_flag("http://127.0.0.1:5273/index.html?x=2"),
+                         "http://127.0.0.1:5273/index.html?x=2&e2e=1")

@@ -7,6 +7,8 @@ declare global {
       api: {
         invoke: (method: string, params?: Record<string, unknown>) => Promise<InvokeResult>
         pick_path?: (kind: string, filters?: string) => Promise<InvokeResult>
+        // 端到端专用（PULSES_E2E=1 才注册）：页面内驱动跑完一次性回传结果
+        e2e_report?: (payload: unknown) => Promise<unknown>
       }
     }
     __PE?: { push: (events: ServerEvent[]) => void }

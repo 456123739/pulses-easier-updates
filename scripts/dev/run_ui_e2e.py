@@ -180,6 +180,23 @@ def verify_downloaded(fixture: dict) -> bool:
     return ok
 
 
+def verify_pack_disk(pack: Path) -> bool:
+    """基本流程的落盘结果（界面说"更新完成"不算，磁盘为准）。"""
+    ok = True
+
+    def read(rel: str) -> str:
+        return (pack / rel).read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    ok &= check(read("mods/old.jar") == "NEW", "mods 已替换")
+    ok &= check(read("mods/added.jar") == "ADDED", "新增文件已落地")
+    ok &= check(not (pack / "mods/gone.jar").exists(), "本地多余文件已删除")
+    ok &= check(read("config/mine.toml") == "mine = 1\n", "玩家自己的配置没被动")
+    ok &= check(read("config/sodium-options.json") == '{"render_distance": 8}\n',
+                "智能剔除保护生效")
+    ok &= check(read("resourcepacks/keep.zip") == "PK-KEEP", "无需更新的文件没被重写")
+    return ok
+
+
 def copy_shot(work: Path, target: Path) -> None:
     for name in ("e2e.png", "download.png"):
         shot = work / name

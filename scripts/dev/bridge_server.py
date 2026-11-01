@@ -9,12 +9,16 @@ bridge_server.py — 给无头浏览器用的"桥 + 静态站点"
     POST /api/pick_path → 固定路径（测试里不要弹原生对话框）
     POST /api/pick_queue→ 预排一串"选择器返回值"，让点"选择"的按钮也能测
     POST /api/close_guard → 窗口关闭守卫（等价 WebView2 的 closing 事件）
+    POST /api/e2e_report  → 页面内驱动的结果（e2e 模式；同一个 api.e2e_report）
 
 所以 Playwright 点的是**真前端 + 真 Api + 真流程**，只有外壳（WebView2）不同。
 CI 用它做"真机端到端"的交互部分。
 
 用法：
     python scripts/dev/bridge_server.py --port 8123 --root <整合包> [--db <db>]
+    # 页面内驱动（?e2e=1）：夹具配置与报告落点
+    python scripts/dev/bridge_server.py --port 8124 --e2e-cfg <cfg.json> \
+        --e2e-report <report.json>
 """
 
 from __future__ import annotations
@@ -49,6 +53,8 @@ SHIM = """
     api: {
       invoke: (method, params) => post('/api/invoke', {method, params}),
       pick_path: (kind, filters) => post('/api/pick_path', {kind, filters}),
+      // 页面内驱动（web/src/e2e/harness.ts）跑完在这里回传结果
+      e2e_report: (payload) => post('/api/e2e_report', payload),
     },
   };
   // 前端在等这个事件；事件泵用轮询 /api/events 拉
@@ -120,6 +126,14 @@ class Handler(SimpleHTTPRequestHandler):
             ok = bool(self.controller.can_close())
             return self._json({"ok": True,
                                "data": {"canClose": ok, "blocked": not ok}})
+        if self.path.startswith("/api/e2e_report"):
+            # 页面内驱动跑完的自述：和真机同一条路（api.e2e_report 写文件）
+            handler = getattr(self.api, "e2e_report", None)
+            if handler is None:
+                return self._json({"ok": False,
+                                   "error": {"code": "FORBIDDEN",
+                                             "message": "e2e 未开启（缺 --e2e-cfg）"}})
+            return self._json(handler(self._read_json()))
         self._json({"ok": False, "error": {"message": "not found"}}, 404)
 
     def do_GET(self) -> None:                           # noqa: N802
@@ -170,12 +184,21 @@ def main() -> int:
     ap.add_argument("--dist", default=str(ROOT / "web" / "dist"))
     ap.add_argument("--db", default="")
     ap.add_argument("--pick", default="")
+    # 页面内驱动（run_harness_local.py 用）：给它夹具配置和报告落点
+    ap.add_argument("--e2e-cfg", default="")
+    ap.add_argument("--e2e-report", default="")
     args = ap.parse_args()
 
     dist = Path(args.dist).resolve()
     if not (dist / "index.html").is_file():
         print(f"缺少前端产物：{dist}", file=sys.stderr)
         return 2
+
+    if args.e2e_cfg:
+        os.environ["PULSES_E2E"] = "1"
+        os.environ["PULSES_E2E_CFG"] = str(Path(args.e2e_cfg).resolve())
+        os.environ["PULSES_E2E_REPORT"] = str(
+            Path(args.e2e_report or (ROOT / "e2e-report.json")).resolve())
 
     if args.db:
         from app.core import database as db

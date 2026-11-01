@@ -38,7 +38,8 @@
 | 截图 | `web/scripts/shot.mjs` + `ui_test.mjs --shots` | `web/shots/*.png` |
 | 端到端（Tk 真窗口） | `tests/e2e_flow.py`（Windows） | 未改，仍覆盖完整流程 |
 | 端到端（新界面，真前端 + 真 Api） | `scripts/dev/run_ui_e2e.py` | **A–H 全覆盖（133 条断言）**：定位 → 导入 → 策略/折叠/日志/首选项/白名单/数据库 → 应用 → 磁盘核对 → 开发者导出 → 真下载/中止/续传 |
-| 真机驱动的本地替身 | `scripts/dev/run_e2e_driver_local.py` | 在 Chromium 里跑一遍 Windows 驱动的点击与断言（真机前先自检） |
+| 端到端（页面内驱动） | `web/src/e2e/harness.ts` | **123 条断言**（+ Python 侧 21 条磁盘/导出复核）：真按钮、真桥；只有文件选择用替身。只在 `?e2e=1` 时动态 import |
+| 页面内驱动的本地运行 | `scripts/dev/run_harness_local.py` | 同一份 harness 在本机 Chromium 里跑（bridge_server 补 `window.pywebview`） |
 | 外壳冒烟（真 WebView2 起窗） | `tests/web_e2e_windows.py` / CI 打包后起窗 | CI 里跑，证据进 artifact |
 
 ## 已补完（第二轮）
@@ -51,8 +52,9 @@
 - 受阻条：打开补入抽屉、逐个重试、「放弃…」清空待补
 - 变更行/范围行 `content-visibility`，几千行滚动不再掉帧
 - 进度文案来自后端（正在下载 / 应用 12/40 / 更新完成）
-- 真机端到端：`app/ui_web/e2e_driver.py` 在真实 WebView2 页面里点按钮，
-  `tests/web_e2e_windows.py` 搭夹具核对磁盘；CI 里阻断并重试一次
+- 真机端到端：驱动在页面里（`web/src/e2e/harness.ts`，`?e2e=1` 才加载），
+  `api.e2e_report` 回传结果；`tests/web_e2e_windows.py` 搭夹具、等报告、核对磁盘。
+  Python 侧不再从线程里 `evaluate_js`（那条路在 WinForms 上会把整个进程吊死）
 
 ## 端到端是怎么做到"真机"的
 

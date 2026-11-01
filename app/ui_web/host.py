@@ -92,6 +92,15 @@ def _web_target() -> str:
     return str(index)
 
 
+def with_e2e_flag(url: str) -> str:
+    """给入口 URL 加 `?e2e=1`（已有查询串就接 `&`）。
+
+    页面只在带这个参数时才动态 import `web/src/e2e/harness.ts`：玩家路径既不会
+    加载它，也不会有任何端到端口子被注册。
+    """
+    return f"{url}{'&' if '?' in url else '?'}e2e=1"
+
+
 def bind_drop(window, api: Api, bus: EventBus) -> None:
     """把 DOM 的 drop 事件接到 Python（pywebview ≥5.0.1 提供文件全路径）。"""
     try:
@@ -164,10 +173,15 @@ def run(argv: list[str] | None = None) -> int:
     _note(f"webview {getattr(webview, '__version__', '?')}")
 
     target = _web_target()
+    e2e_on = os.environ.get("PULSES_E2E", "").strip().lower() in ("1", "true", "yes")
+    if e2e_on:
+        # 端到端：驱动在页面里（web/src/e2e/harness.ts），只有带 ?e2e=1 才加载。
+        # 夹具路径仍旧走环境变量，页面用 invoke('e2e.config') 取。
+        target = with_e2e_flag(target)
     _note(f"target={target}")
     bus = EventBus()
     controller = AppController(bus)
-    api = Api(controller, bus)
+    api = Api(controller, bus, e2e=True if e2e_on else None)
 
     size, min_size = fit_to_screen()
     window = webview.create_window(
@@ -232,24 +246,11 @@ def run(argv: list[str] | None = None) -> int:
     shown_flag = [False]
     threading.Thread(target=_ensure_visible, daemon=True).start()
 
-    if os.environ.get("PULSES_E2E", "").strip() in ("1", "true", "yes"):
-        # 不等 loaded：页面没加载出来时也要有报告，否则 CI 只能看到"没拿到报告"
-        try:
-            from .e2e_driver import launch_if_requested
-            launch_if_requested(window, controller, bus, delay=2.0)
-            e2e_mark("driver-launched")
-
-            def _force_show():
-                import time as _t
-                _t.sleep(4.0)
-                try:
-                    window.show()
-                except Exception:                    # noqa: BLE001, S110
-                    pass
-
-            threading.Thread(target=_force_show, daemon=True).start()
-        except Exception as exc:                     # noqa: BLE001
-            bus.log(f"e2e 驱动启动失败：{exc}", "ERROR")
+    if e2e_on:
+        # 驱动在页面里（?e2e=1 → web/src/e2e/harness.ts），Python 侧不再从线程里
+        # evaluate_js：页面跑完用 api.e2e_report 回传，api 写报告后自己关窗。
+        e2e_mark("harness-url:" + target)
+        _note("e2e: 页面内驱动（Python 侧不碰 evaluate_js）")
     pump_holder: dict[str, EventPump] = {}
 
     def on_shown():
@@ -335,6 +336,8 @@ def run(argv: list[str] | None = None) -> int:
     # 关闭守卫：交给控制器判断（更新中不许关）
     def on_closing():
         if boot_failed[0]:                           # 就绪超时：必须允许关，好退回 Tk
+            return True
+        if api.e2e_done:                             # e2e 报告已落盘：别再拦自己关窗
             return True
         try:
             if not controller.can_close():
