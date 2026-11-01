@@ -188,7 +188,10 @@ async function basicSuite() {
   check(await waitBody(new RegExp(fixture.pack.split(/[\\/]/).pop())),
         '定位整合包', fixture.pack)
   const packAfter = (await invoke('app.state'))?.data?.pack
-  check(packAfter?.path === fixture.pack, '整合包信息显示', JSON.stringify(packAfter))
+  // Windows 上前后端拿到的路径分隔符可能一个是 /、一个是 \，比之前先归一
+  const norm = (v) => String(v ?? '').replace(/\\/g, '/').toLowerCase()
+  check(norm(packAfter?.path) === norm(fixture.pack),
+        '整合包信息显示', JSON.stringify(packAfter))
 
   // ---- 2. 导入更新包（工作区拖入区 → pick_path）----
   await setPicks([fixture.update])
