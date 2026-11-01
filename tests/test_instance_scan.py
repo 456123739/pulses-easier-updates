@@ -72,8 +72,13 @@ class ScanCase(unittest.TestCase):
         outside = self.tmp.parent / (self.tmp.name + "-secret")
         outside.mkdir()
         (outside / "id_rsa").write_bytes(b"KEY")
-        _os.symlink(outside, self.tmp / "config" / "creds",
-                    target_is_directory=True)
+        try:
+            _os.symlink(outside, self.tmp / "config" / "creds",
+                        target_is_directory=True)
+        except (OSError, NotImplementedError):
+            import shutil as _sh
+            _sh.rmtree(outside, ignore_errors=True)
+            self.skipTest("这个平台不允许创建目录软链接")
         try:
             res = S.scan_instance(self.tmp, R.expand_rules())
             paths = {i["path"] for i in res["items"]}
@@ -117,7 +122,12 @@ class ScanCase(unittest.TestCase):
         (real / "linked.jar").write_bytes(b"L" * 16)
         import shutil as _sh
         _sh.rmtree(self.tmp / "mods")
-        _os.symlink(real, self.tmp / "mods", target_is_directory=True)
+        try:
+            _os.symlink(real, self.tmp / "mods", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            _sh.rmtree(real, ignore_errors=True)
+            make_tree(self.tmp)
+            self.skipTest("这个平台不允许创建目录软链接")
         try:
             res = S.scan_instance(self.tmp, R.expand_rules())
             paths = {i["path"] for i in res["items"]}
