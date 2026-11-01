@@ -853,6 +853,12 @@ export async function start(): Promise<void> {
   trapErrors()
   statusBox()
   startedAt = Date.now()
+  // 第一件事就往磁盘报一行：哪怕后面卡死，也能确认"驱动确实起来了"
+  try {
+    void bridgeInvoke('e2e.step', { name: 'harness 启动' }, 5000)
+  } catch {
+    /* 桥还没好就算了，后面 whenReady 会处理 */
+  }
   try {
     mark('等桌面桥就绪')
     const ready = await whenReady(20000)
