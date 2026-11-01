@@ -37,7 +37,8 @@
 | 界面交互（Playwright） | `web/scripts/ui_test.mjs` | 12 项全过：渲染/胶囊/折叠/换身份/首选项/受阻条/下载态/无控制台错误 |
 | 截图 | `web/scripts/shot.mjs` + `ui_test.mjs --shots` | `web/shots/*.png` |
 | 端到端（Tk 真窗口） | `tests/e2e_flow.py`（Windows） | 未改，仍覆盖完整流程 |
-| 端到端（新界面，真前端 + 真 Api） | `scripts/dev/run_ui_e2e.py` | **12 项**：定位 → 导入 → 比对 → 应用 → 磁盘校验 |
+| 端到端（新界面，真前端 + 真 Api） | `scripts/dev/run_ui_e2e.py` | **A–H 全覆盖（133 条断言）**：定位 → 导入 → 策略/折叠/日志/首选项/白名单/数据库 → 应用 → 磁盘核对 → 开发者导出 → 真下载/中止/续传 |
+| 真机驱动的本地替身 | `scripts/dev/run_e2e_driver_local.py` | 在 Chromium 里跑一遍 Windows 驱动的点击与断言（真机前先自检） |
 | 外壳冒烟（真 WebView2 起窗） | `tests/web_e2e_windows.py` / CI 打包后起窗 | CI 里跑，证据进 artifact |
 
 ## 已补完（第二轮）
@@ -96,3 +97,39 @@
 3. **槽位面板**：已按 `bytes` 事件渲染，但"磁盘策略限制后的有效并发"未显示
 4. **虚拟列表**：目前用 `content-visibility` 折中；上万行仍可能需要真虚拟化
 5. **主题**：只有深色；未做浅色/跟随系统
+
+## 端到端扩到覆盖所有功能（第四轮）
+
+原来只跑主流程（定位 → 导入 → 比对 → 应用 → 磁盘），现在按功能逐项断言：
+
+- **策略**：`mods` 从「完全匹配」切「跳过重名」→ 重新扫描 → 右栏出现「跳过 2」、
+  快照 `skipped=2` 且逐条标记，再切回来归零
+- **折叠区**：「无需更新（1）」/「已禁用（1）」展开收起时内容可见性真的变化
+- **更新日志**：抽屉里出现版本号与正文，Esc 关闭
+- **首选项**：「更多 → 首选项」抽屉里有「界面」（自动/旧界面/新界面），
+  选了会落到 `app.settings.ui_mode`（新界面以前漏了这一项，切不回旧界面）
+- **白名单**：写 `["mods","config"]` 回读一致；`["../x","","mods"]` 被清洗成 `["mods"]`；
+  跑完还原原值
+- **数据库**：`app.db.get` 路径存在 → 切到临时目录回读一致 → 还原
+- **开发者**：切身份 → 导入 zip → 排除 `config` → 改策略 → 开关选项 → 写日志 →
+  导出 `.eapack`；导出的包在 Python 侧用 `app.core.eapack` 读回校验
+  （策略/排除目录/哈希清单/签名/日志）
+- **真下载**：`make_download_fixture.py` 造"index 里带 http URL"的更新包
+  + `file_server.py`（支持 Range、可限速）→ 3 个文件真下载（5MiB 那个走文件内分片），
+  逐字节 sha256 一致；进度条与槽位面板确实动过
+- **中止/续传**：下载中点「取消下载」→ 不卡死、进"待补入"→ `update.resume` 续传完成
+- **关闭守卫**：下载中 `controller.can_close()` 为 False（bridge 的 `/api/close_guard` 等价
+  WebView2 的 closing 事件）
+
+顺带修掉的真 bug（都是由断言暴露出来的）：
+
+1. `Flow.collect_tasks` 把 `MRFile` 当 dict 调 `.get()`（异常被吞）→ 下载任务永远为空
+2. 同一个函数按 `dest/size/hashes` 造 `DownloadTask`（字段名全错）→ 一旦有任务就 TypeError
+3. 扫描不读更新包 index 里的哈希（只读从不被写入的 `ea_hashes["index"]`）
+   → index 声明的文件既不显示也不会下载
+4. `start_apply`/`_apply_worker` 进入下载/应用时不推状态 → 主按钮变不出「取消下载」
+5. `MainButton` 在下载态把自己 `disabled` → 取消按钮点了没反应
+6. `PlayerView` 从没把后端 `progress` 接到进度条 → 一直显示演示态的 100%
+7. `group_changes` 的 `skipped` 恒为 0 → 改策略后右栏毫无变化（"跳过 N"/"已跳过"是死 UI）
+8. `can_close()` 只看没人会设置的 `_busy` → 下载中点关闭会直接退出
+9. `app.settings` 没有 `ui_mode`、首选项没有「界面」→ 新界面里切不回旧界面

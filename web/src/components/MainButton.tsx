@@ -45,7 +45,9 @@ export default function MainButton({ onScanToggle }: Props) {
           ? 'ghost'
           : 'primary'
 
-  const disabled = btn === 'disabled' || btn === 'busy' || downloading
+  // 下载态的主按钮是「取消下载」，必须可点：以前 busy 把它一并禁用，
+  // 玩家在下载中点它没有任何反应（abort 永远发不出去）。
+  const disabled = !downloading && (btn === 'disabled' || btn === 'busy')
 
   const connected = useApp((s) => s.connected)
   const pushToast = useApp((s) => s.pushToast)

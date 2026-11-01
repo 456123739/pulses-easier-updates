@@ -22,11 +22,25 @@ export default function PlayerView() {
   const pushToast = useApp((s) => s.pushToast)
   const openSheet = useUi((s) => s.openSheet)
   const progress = useApp((s) => s.progress)
+  const setProgress = usePlayer((s) => s.setProgress)
 
   // 后端快照是唯一事实来源：连上桥就覆盖本地演示态
   useEffect(() => {
     if (flow) applyFlow(flow)
   }, [flow, applyFlow])
+
+  // 进度条只认后端推来的 progress：以前这里没人接，条一直停在演示态的 100%
+  useEffect(() => {
+    if (!progress) {
+      if (connected) setProgress(null)      // 真有桥但还没开始：不显示假进度
+      return
+    }
+    const pct =
+      progress.percent === null || progress.percent === undefined
+        ? null
+        : Math.round(Math.max(0, Math.min(1, progress.percent)) * 100)
+    setProgress(pct)
+  }, [progress, connected, setProgress])
   const pack = useApp((s) => s.state?.pack)
   const updatePack = usePlayer((s) => s.updatePack)
   const hint = usePlayer((s) => s.hint)

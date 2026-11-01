@@ -7,6 +7,8 @@ bridge_server.py — 给无头浏览器用的"桥 + 静态站点"
     GET  /*             → web/dist 静态文件（index.html 里注入 shim）
     POST /api/invoke    → 真正的 app/ui_web/api.py
     POST /api/pick_path → 固定路径（测试里不要弹原生对话框）
+    POST /api/pick_queue→ 预排一串"选择器返回值"，让点"选择"的按钮也能测
+    POST /api/close_guard → 窗口关闭守卫（等价 WebView2 的 closing 事件）
 
 所以 Playwright 点的是**真前端 + 真 Api + 真流程**，只有外壳（WebView2）不同。
 CI 用它做"真机端到端"的交互部分。
@@ -72,6 +74,8 @@ class Handler(SimpleHTTPRequestHandler):
     api: Api
     dist: Path
     pick: str = ""
+    picks: list[str] = []
+    lock = threading.Lock()
 
     def log_message(self, *args):                       # noqa: D401
         pass
@@ -84,19 +88,38 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_POST(self) -> None:                          # noqa: N802
+    def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         try:
-            payload = json.loads(raw or b"{}")
+            data = json.loads(raw or b"{}")
         except Exception:                               # noqa: BLE001
-            payload = {}
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def do_POST(self) -> None:                          # noqa: N802
         if self.path.startswith("/api/invoke"):
+            payload = self._read_json()
             res = self.api.invoke(payload.get("method", ""),
                                   payload.get("params") or {})
             return self._json(res)
+        if self.path.startswith("/api/pick_queue"):
+            # 预排选择器返回值：测试点"定位/选择"按钮时按顺序发下去
+            payload = self._read_json()
+            paths = [str(p) for p in (payload.get("paths") or [])]
+            with self.lock:
+                type(self).picks = paths
+            return self._json({"ok": True, "data": {"queued": len(paths)}})
         if self.path.startswith("/api/pick_path"):
-            return self._json({"ok": True, "data": {"path": self.pick}})
+            with self.lock:
+                path = type(self).picks.pop(0) if type(self).picks \
+                    else type(self).pick
+            return self._json({"ok": True, "data": {"path": path}})
+        if self.path.startswith("/api/close_guard"):
+            # 真机上这是 window.events.closing → controller.can_close()
+            ok = bool(self.controller.can_close())
+            return self._json({"ok": True,
+                               "data": {"canClose": ok, "blocked": not ok}})
         self._json({"ok": False, "error": {"message": "not found"}}, 404)
 
     def do_GET(self) -> None:                           # noqa: N802
@@ -171,6 +194,7 @@ def main() -> int:
     Handler.controller = controller
     Handler.api = api
     Handler.pick = args.pick
+    Handler.picks = []
 
     httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"bridge server on http://127.0.0.1:{args.port}", flush=True)

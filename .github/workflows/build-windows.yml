@@ -60,21 +60,22 @@ jobs:
           npx --prefix web playwright install chromium
           python scripts/dev/run_ui_e2e.py
 
-      # 外壳冒烟：真 WebView2 起窗并加载页面（失败不阻断发布，留证据）
-      # GitHub 的 runner 镜像里没有 WebView2 运行时（只有 Edge 浏览器），
-      # 新界面的窗口验证需要它；装上之后下面那条"新界面起窗验证"才有意义
-      - name: 安装 WebView2 运行时（尽力而为）
+      # GitHub 的 runner 镜像里没有 WebView2 运行时（只有 Edge 浏览器），先装上
+      - name: 安装 WebView2 运行时
         shell: pwsh
-        continue-on-error: true
         run: |
           $exe = Join-Path $env:RUNNER_TEMP "MicrosoftEdgeWebView2Setup.exe"
           Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe
           Start-Process -FilePath $exe -ArgumentList "/silent", "/install" -Wait
-          Get-ChildItem "$env:ProgramFiles(x86)\Microsoft\EdgeWebView\Application" -ErrorAction SilentlyContinue |
-            Select-Object Name
+          $app = "$env:ProgramFiles(x86)\Microsoft\EdgeWebView\Application"
+          if (-not (Test-Path $app)) { throw "WebView2 运行时没装上，后面的真机端到端跑不了" }
+          Get-ChildItem $app | Select-Object Name
 
-      - name: 外壳冒烟（WebView2）
-        continue-on-error: true
+      # 真机端到端（源码壳）：真 WebView2 + 真前端 + 真磁盘，覆盖全部功能
+      - name: 真机端到端（源码，失败即阻断）
+        timeout-minutes: 20
+        env:
+          PULSES_E2E_TIMEOUT: "900"
         run: python tests/web_e2e_windows.py
 
       # 真实 Tk 窗口：动画 / 文字刷新 / 列表增量 / 滚动位置
@@ -96,15 +97,20 @@ jobs:
             Get-ChildItem "dist/Pulses Easier/_internal/web" -Recurse -Depth 2 | Select-Object FullName
           }
 
-      # 打包后的壳：真 exe 起窗（Windows 版默认先试新界面，无 WebView2 运行时则退回 Tk）
-      - name: 打包后起窗冒烟（新界面）
+      # 真机端到端（打包壳）：和第 9 步同一套断言，跑的是 dist 里的 exe
+      - name: 打包后真机端到端（新界面，失败即阻断）
+        timeout-minutes: 20
+        env:
+          PULSES_E2E_TIMEOUT: "900"
+        run: python tests/web_e2e_windows.py --exe "dist/Pulses Easier/Pulses Easier.exe"
+
+      # 默认启动路径：不设 PULSES_UI，玩家双击就是这个行为（窗口必须出来）
+      - name: 打包后起窗冒烟（默认路径）
         shell: pwsh
         run: |
           $exe = "dist/Pulses Easier/Pulses Easier.exe"
-          if (-not (Test-Path $exe)) { throw "没找到打包产物" }
           $log = Join-Path $env:RUNNER_TEMP "web-start.log"
           $env:PULSES_WEB_LOG = $log
-          # 不设 PULSES_UI：走玩家真实的默认路径（旧界面）
           Remove-Item Env:PULSES_UI -ErrorAction SilentlyContinue
           $p = Start-Process -FilePath $exe -PassThru
           $ok = $false
@@ -116,58 +122,20 @@ jobs:
           }
           $title = $p.MainWindowTitle
           $alive = -not $p.HasExited
-          if (Test-Path $log) { Write-Host "--- 启动留痕 ---"; Get-Content $log | Write-Host }
-          if ($alive) { Stop-Process -Id $p.Id -Force }
-          if (-not $ok) { throw "窗口没起来（alive=$alive, title='$title'）" }
-          Write-Host "窗口标题：$title"
-
-      - name: 新界面起窗验证（参考）
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $exe = "dist/Pulses Easier/Pulses Easier.exe"
-          $env:PULSES_UI = "web"
-          $env:PULSES_WEB_LOG = Join-Path $env:RUNNER_TEMP "web-only.log"
-          $p = Start-Process -FilePath $exe -PassThru
-          $ok = $false
-          for ($i = 0; $i -lt 60; $i++) {
-            Start-Sleep -Seconds 1
-            $p.Refresh()
-            if ($p.HasExited) { break }
-            if ($p.MainWindowTitle) { $ok = $true; break }
-          }
-          Write-Host "新界面窗口：ok=$ok title='$($p.MainWindowTitle)'"
-          # 截一张桌面图：CI 里唯一能"看到"新界面渲染结果的办法
           try {
             Add-Type -AssemblyName System.Windows.Forms, System.Drawing
             $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
             $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.CopyFromScreen($b.X, $b.Y, 0, 0, $bmp.Size)
-            $shot = Join-Path $env:RUNNER_TEMP "web-preview.png"
-            $bmp.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
-            Write-Host "截图：$shot ($($b.Width)x$($b.Height))"
-            Copy-Item $shot "web-preview.png" -Force
+            $bmp.Save((Join-Path $env:RUNNER_TEMP "web-preview.png"),
+                      [System.Drawing.Imaging.ImageFormat]::Png)
+            Copy-Item (Join-Path $env:RUNNER_TEMP "web-preview.png") "web-preview.png" -Force
           } catch { Write-Host "截图失败：$_" }
-          if (Test-Path $env:PULSES_WEB_LOG) { Get-Content $env:PULSES_WEB_LOG | Write-Host }
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
-
-      # WebView2 在 GitHub 的 Windows runner 里起不来（Main window failed to start），
-      # 这条路只在用户真机上验证；这里只保留现场证据，不阻断发布
-      - name: 打包后起窗冒烟（强制新界面，仅供参考）
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $exe = "dist/Pulses Easier/Pulses Easier.exe"
-          $env:PULSES_UI = "web"
-          $log = Join-Path $env:RUNNER_TEMP "web-force.log"
-          $env:PULSES_WEB_LOG = $log
-          $p = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Seconds 25
-          $p.Refresh()
-          if ($p.MainWindowTitle) { Write-Host "窗口标题：$($p.MainWindowTitle)" }
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
-          if (Test-Path $log) { Get-Content $log | Write-Host }
+          if (Test-Path $log) { Write-Host "--- 启动留痕 ---"; Get-Content $log | Write-Host }
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          if (-not $ok) { throw "窗口没起来（alive=$alive, title='$title'）" }
+          Write-Host "窗口标题：$title"
 
       - name: 上传新界面截图
         if: always()

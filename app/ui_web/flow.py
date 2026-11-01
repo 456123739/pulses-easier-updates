@@ -35,7 +35,7 @@ from ..core.apply_rules import resolve_strategy, will_skip
 from ..core.differ import DiffResult, diff_from_manifest, diff_packs_parallel
 from ..core.downloader import DownloadTask
 from ..core.mrpack import (is_reserved_root_name, locate_content_root,
-                           parse_mrpack)
+                           merge_files, parse_mrpack)
 from ..core.pack_detector import PackKind, detect_pack_kind
 from ..core.packio import _extract_all_members, _extract_root_members, _zip_layout
 from ..core.updater import (PlanSource, SourceLayer, build_plan,
@@ -98,7 +98,8 @@ class Flow:
                 "phase": self.phase,
                 "update": dict(self.update_info) if self.update_info else None,
                 "strategies": self.strategy_rows(),
-                "groups": group_changes(self.diff, self.strategies),
+                "groups": group_changes(self.diff, self.strategies,
+                                        self.checked),
                 "counts": counts_of(self.diff),
                 "changeCounts": change_counts(self.diff),
                 "tasks": len(self.tasks),
@@ -248,7 +249,28 @@ class Flow:
             recorded = eapack_mod.read_hashes(zpath) or {}
             manifest = recorded.get("files") or {}
             folders = recorded.get("folders") or {}
-            index_hashes = recorded.get("index") or {}
+            index_hashes = dict(recorded.get("index") or {})
+            # "要下载的文件"（index 声明、包内没有）不在 ea_hashes 里，
+            # 只能从更新包的 modrinth.index.json 拿。少了这一步，它们既不会
+            # 出现在变更列表里、也永远不会被下载（Tk 版一直是这么补的）。
+            index_tops: set[str] = set()
+            try:
+                up_pack, _up_err = parse_mrpack(zpath)
+                for item in getattr(up_pack, "files", []) or []:
+                    rel = str(getattr(item, "path", "") or "")
+                    if not rel:
+                        continue
+                    if "/" in rel:
+                        index_tops.add(rel.split("/", 1)[0])
+                    if rel in index_hashes:
+                        continue
+                    hashes = {k: getattr(item, k, "")
+                              for k in ("sha1", "sha256", "sha512")}
+                    hashes = {k: v for k, v in hashes.items() if v}
+                    if hashes:
+                        index_hashes[rel] = hashes
+            except Exception:                               # noqa: BLE001
+                index_tops = set()
 
             def _prog(done: int, total: int, phase: str = "") -> None:
                 total = max(1, total)
@@ -266,6 +288,10 @@ class Flow:
                 self.bus.log(f"有 {len(bad)} 个文件与清单不一致（以解压内容为准）", "WARNING")
 
             whitelist = db.get_whitelist()
+            if index_tops:
+                # index 文件所在的目录必须逐文件比，否则会退化成"整目录级"，
+                # 那些要下载的文件就沉进目录级变更里了
+                whitelist = sorted(set(whitelist) | index_tops)
             threads = int(db.get_compare_options().get("hash_threads", 16) or 16)
             self.bus.progress("scan", "正在比对…", 0.55)
             diff = None
@@ -364,10 +390,14 @@ class Flow:
         if self.update_zip is not None:
             try:
                 pack, _err = parse_mrpack(self.update_zip)
-                for item in getattr(pack, "files", []) or []:
-                    p = str(item.get("path", ""))
-                    if p:
-                        merged[p] = item
+                if pack is not None:
+                    # parse_mrpack 给的是 MRFile 对象，下载链接/大小只在
+                    # merge_files 的 dict 里；以前这里对对象调 .get()，
+                    # 异常被吞掉 → merged 永远为空 → 一个文件都不会下载。
+                    for item in merge_files(pack):
+                        p = str(item.get("path", ""))
+                        if p:
+                            merged[p] = item
             except Exception:                               # noqa: BLE001
                 merged = {}
 
@@ -385,16 +415,20 @@ class Flow:
             local = src / rel
             if local.is_file():                             # 包里自带 → 不用下载
                 continue
-            item = merged.get(rel.as_posix())
-            urls = list((item or {}).get("downloads") or [])
+            item = merged.get(rel.as_posix()) or {}
+            urls = list(item.get("downloads") or [])
             if not urls:
                 continue
+            # DownloadTask 的字段是 sha1/sha256/sha512 + file_size：
+            # 以前这里按 dest/size/hashes 构造，一行就 TypeError，
+            # 于是"要下载的文件"直接让开始更新报错。
             tasks.append(DownloadTask(
                 rel_path=rel.as_posix(),
-                dest=cache / rel,
                 urls=urls,
-                size=int((item or {}).get("fileSize") or 0),
-                hashes=dict((item or {}).get("hashes") or {})))
+                sha1=str(item.get("sha1") or ""),
+                sha256=str(item.get("sha256") or ""),
+                sha512=str(item.get("sha512") or ""),
+                file_size=int(item.get("file_size") or 0)))
         self.tasks = tasks
         return tasks
 
@@ -412,6 +446,9 @@ class Flow:
             self._done_paths = set()
         self.phase = PHASE_DOWNLOAD if self.collect_tasks() else PHASE_APPLY
         self._write_resume()
+        # 先把"进入下载/应用"推给界面：主按钮靠这个变成「取消下载」。
+        # 少了这次推送，玩家在下载中根本点不到取消（界面还停在"确认更新"）。
+        self.controller.push_state()
         self._thread = threading.Thread(target=self._apply_worker, daemon=True)
         self._thread.start()
         return {"started": True, "tasks": len(self.tasks)}
@@ -445,6 +482,7 @@ class Flow:
                     return
 
             self.phase = PHASE_APPLY
+            self.controller.push_state()
             self.bus.progress("apply", "正在应用更新…", 0.0)
             src_layers = [SourceLayer(cache), SourceLayer(self.compare_root, consume=False)]
             source = PlanSource(src_layers)
@@ -684,8 +722,14 @@ def change_counts(diff: DiffResult | None) -> dict:
     return out
 
 
-def group_changes(diff: DiffResult | None, strategies: dict) -> list[dict]:
-    """按顶层目录分组的变更列表（右栏树）。"""
+def group_changes(diff: DiffResult | None, strategies: dict,
+                  checked: dict | None = None) -> list[dict]:
+    """按顶层目录分组的变更列表（右栏树）。
+
+    `skipped` 必须真的按当前策略算出来：否则玩家把某个目录改成「跳过重名」
+    之后，右栏看上去毫无变化（界面说会更新，实际不更新）。
+    判定统一走 apply_rules.will_skip —— 与实际执行是同一份规则。
+    """
     if diff is None:
         return []
     buckets: dict[str, dict] = {}
@@ -706,11 +750,15 @@ def group_changes(diff: DiffResult | None, strategies: dict) -> list[dict]:
             top = rel.parts[0]
             b = bucket(top)
             smart = strategies.get(top) == Strategy.SMART_EXCLUDE.value
+            skip = (will_skip(ch, checked, strategies, checked_default=True)
+                    if checked is not None else False)
             b["items"].append({"path": rel.as_posix(), "kind": kind,
-                               "smartExcluded": smart})
+                               "smartExcluded": smart, "skipped": skip})
             b["counts"][kind] += 1
             if smart:
                 b["smartExcluded"] += 1
+            if skip:
+                b["skipped"] += 1
     for b in buckets.values():
         b["items"].sort(key=lambda i: i["path"])
     return [buckets[k] for k in sorted(buckets)]

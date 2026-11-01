@@ -10,6 +10,7 @@ interface Settings {
   multi_slots?: number
   window_anim?: number
   log_max_lines?: number
+  ui_mode?: string
   [k: string]: unknown
 }
 
@@ -18,6 +19,13 @@ const EMPTY: Settings = {}
 const ENGINES = [
   { id: 'ridex', label: 'RideX' },
   { id: 'aster', label: 'Aster' },
+]
+
+// 与旧界面（Tk 首选项）保持一致：auto = 先试新界面，起不来自动退回
+const UI_MODES = [
+  { id: 'auto', label: '自动' },
+  { id: 'tk', label: '旧界面' },
+  { id: 'web', label: '新界面' },
 ]
 
 /** 首选项：只放真正影响行为的几项，其余留在开发者面板。 */
@@ -106,6 +114,29 @@ export default function PreferencesSheet() {
             on={Boolean(draft.window_anim)}
             onChange={(v) => void patch({ window_anim: v ? 1 : 0 })}
           />
+        </Row>
+
+        <Row label="界面" note="「自动」先试新界面、起不来自动退回旧界面；重启后生效">
+          <div className="seg">
+            {UI_MODES.map((m) => {
+              const active = (draft.ui_mode ?? 'auto') === m.id
+              return (
+                <button
+                  key={m.id}
+                  className="seg-item"
+                  data-active={active}
+                  onClick={() => void patch({ ui_mode: m.id })}
+                  style={
+                    active
+                      ? { background: 'rgba(255,255,255,0.12)', borderRadius: 999 }
+                      : undefined
+                  }
+                >
+                  {m.label}
+                </button>
+              )
+            })}
+          </div>
         </Row>
       </div>
     </Sheet>

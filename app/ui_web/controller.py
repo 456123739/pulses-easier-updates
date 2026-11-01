@@ -93,6 +93,9 @@ class AppController:
                 "multi_slots": dl.get("multi_slots", 8),
                 "window_anim": ui.get("window_anim", 1),
                 "log_max_lines": ui.get("log_max_lines", 500),
+                # 界面：auto / tk / web（重启生效）。旧界面早就有这一项，
+                # 新界面漏了它，玩家在新界面里没法把界面切回旧版。
+                "ui_mode": database.get_ui_mode(),
             })
         except Exception:                              # noqa: BLE001, S110
             pass
@@ -107,6 +110,9 @@ class AppController:
             database.set_download_options({**database.get_download_options(), **dl_patch})
         if ui_patch:
             database.set_ui_options({**database.get_ui_options(), **ui_patch})
+        if "ui_mode" in patch:
+            # set_ui_mode 自己会把非法值收回 auto
+            database.set_ui_mode(str(patch.get("ui_mode") or "auto"))
         self._push_state()
         return self.settings()
 
@@ -320,9 +326,13 @@ class AppController:
     # 生命周期
     # ------------------------------------------------------------------
     def can_close(self) -> bool:
-        """关闭守卫：更新流程进行中不允许直接关闭窗口。"""
-        with self._lock:
-            busy = self._busy
+        """关闭守卫：更新/导出进行中不允许直接关闭窗口。
+
+        必须在**不持本对象锁**的情况下问 flow/dev：它们推状态时会反过来
+        拿 controller 的锁，先拿锁再问会形成锁序反转。它们的 busy() 只读
+        一个枚举值，本身不需要锁。
+        """
+        busy = self._busy or self.flow.busy() or self.dev.busy()
         if not busy:
             return True
         self.ask("warn", "更新流程正在进行，暂时无法关闭。",
