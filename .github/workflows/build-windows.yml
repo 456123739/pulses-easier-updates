@@ -72,10 +72,22 @@ jobs:
             } catch { Write-Host "下载 WebView2 安装器失败（第 $i 次）：$_"; Start-Sleep -Seconds 5 }
           }
           if (-not (Test-Path $exe)) { throw "拿不到 WebView2 安装器" }
-          Start-Process -FilePath $exe -ArgumentList "/silent", "/install" -Wait
-          $app = "$env:ProgramFiles(x86)\Microsoft\EdgeWebView\Application"
-          if (-not (Test-Path $app)) { throw "WebView2 运行时没装上，后面的真机端到端跑不了" }
-          Get-ChildItem $app | Select-Object Name
+          $proc = Start-Process -FilePath $exe -ArgumentList "/silent", "/install" -Wait -PassThru
+          Write-Host "安装器退出码：$($proc.ExitCode)"
+          $found = @()
+          foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            if (-not $base) { continue }
+            $app = Join-Path $base "Microsoft\EdgeWebView\Application"
+            if (Test-Path $app) {
+              $found += $app
+              Get-ChildItem $app | Select-Object FullName
+            }
+          }
+          if ($found.Count -eq 0) {
+            Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\*" -ErrorAction SilentlyContinue |
+              Select-Object name, pv | Format-Table | Out-String | Write-Host
+            throw "WebView2 运行时没装上（两个 Program Files 下都没有 EdgeWebView\Application）"
+          }
 
       # 真机端到端（源码壳）：真 WebView2 + 真前端 + 真磁盘，覆盖全部功能
       - name: 真机端到端（源码，失败即阻断）
