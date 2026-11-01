@@ -68,12 +68,12 @@ if __name__ == "__main__" and _ui in ("web", "auto", ""):
             raise RuntimeError("本机没有 WebView2 运行时")
         if _ui == "web":
             raise SystemExit(_start_web_ui())
-        # auto：受监督子进程跑新界面（页面调桥 = 就绪 → 父进程交棒）。
-        # 25s 内没就绪就杀掉整个进程树、退回 Tk——WebView2 起不来时不会白屏卡死。
-        _rc = launch.run_supervised(str(Path(__file__).resolve()))
-        if _rc is not None:
-            raise SystemExit(_rc)
-        raise RuntimeError("新界面没能在 25s 内就绪，退回旧界面")
+        # auto：在本进程里起新界面。打包后的受监督子进程在这套环境里起不来
+        # （子进程里 WebView2 就绪不了），实测"本进程 + 失败退回 Tk"更稳。
+        _rc = _start_web_ui()
+        if _rc == 0:
+            raise SystemExit(0)
+        raise RuntimeError(f"新界面没就绪（退出码 {_rc}），退回旧界面")
     except SystemExit:
         raise
     except Exception:                              # noqa: BLE001
