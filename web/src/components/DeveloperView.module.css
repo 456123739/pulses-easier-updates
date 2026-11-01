@@ -28,14 +28,23 @@
   gap: 10px;
 }
 
+/* 卡片表面：哑光纯色（不用全局 .card 的渐变），层次只靠发丝线与极浅投影 */
+.surface {
+  background: var(--c-card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-1);
+}
+
 .panel {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 16px 16px;
+  padding: 16px;
 }
 
-.panel:first-child {
+/* 更新日志是右列唯一会长高的块（两列都不滚动时它吃掉余量） */
+.changelogPanel {
   flex: 1;
   min-height: 0;
 }
@@ -44,6 +53,220 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+}
+
+/* ---------- 来源切换 ---------- */
+.sourceBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+}
+
+/* 选中态只用中性提亮，强调色留给主按钮与勾选 */
+.segOn {
+  background: var(--c-card-2);
+  color: var(--c-text);
+}
+
+/* ---------- 实例摘要 ---------- */
+.instance {
+  gap: 12px;
+}
+
+.instHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.instIcon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  color: var(--c-text-2);
+  background: var(--mat-2);
+  border: 1px solid var(--hairline);
+}
+
+.instText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.instName {
+  font-family: var(--font-display);
+  font-size: var(--fs-title);
+  font-weight: var(--fw-bold);
+  color: var(--c-text);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.instPath {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: ltr;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.metaLabel {
+  font-size: var(--fs-tiny);
+  color: var(--c-muted);
+}
+
+.metaValue {
+  font-size: var(--fs-body);
+  color: var(--c-text);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  margin: 0;
+  font-size: var(--fs-small);
+  line-height: 1.6;
+  color: var(--c-text-2);
+}
+
+/* ---------- 导出内容（两级勾选） ---------- */
+.rules {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 232px;          /* 正好 8 行，避免切在行中间 */
+  min-height: 0;
+  padding-right: 2px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
+}
+
+.ruleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ruleGroup + .ruleGroup {
+  margin-top: 4px;
+}
+
+.rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 27px;
+  padding: 0 6px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: var(--fs-body);
+  color: var(--c-text);
+  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast);
+}
+
+.rule:hover {
+  background: var(--mat-2);
+}
+
+.rule[data-child='true'] {
+  margin-left: 22px;
+  min-height: 25px;
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+}
+
+.rule[data-pending='true'] {
+  opacity: 0.5;
+}
+
+.rule:disabled {
+  cursor: default;
+}
+
+.check {
+  position: relative;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 5px;
+  border: 1px solid var(--hairline-strong);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.check[data-on='true'] {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+}
+
+.check[data-on='true']::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 1.5px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--c-on-accent);
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(42deg);
+}
+
+.ruleTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ruleCount {
+  flex: 0 0 auto;
+  font-size: var(--fs-tiny);
+  color: var(--c-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- CurseForge API Key ---------- */
+.keyRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.saved {
+  font-size: var(--fs-small);
+  color: var(--c-accent-text);
 }
 
 .count {
@@ -133,14 +356,42 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 12px 14px;
+  padding: 16px;
+}
+
+/* 实例模式：左列上部挤了来源/摘要/导出内容，表格留出可读高度后整列可滚 */
+.page[data-mode='instance'] .table {
+  min-height: 172px;
+}
+
+.page[data-mode='instance'] .left,
+.page[data-mode='instance'] .right {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.page[data-mode='instance'] .left {
+  padding-right: 2px;
 }
 
 .tableHead {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 0 2px 10px;
+}
+
+.tableTools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clearBtn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: var(--fs-small);
 }
 
 .rows {
@@ -222,4 +473,26 @@
 
 .actions {
   align-items: center;
+}
+
+.cancel {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: var(--r-chip, 999px);
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--c-text-2);
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+.cancel:hover {
+  color: var(--c-text);
+  border-color: var(--hairline-strong);
+}
+
+.warnLine {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--fs-small);
+  color: var(--c-warn, #c4bd93);
 }

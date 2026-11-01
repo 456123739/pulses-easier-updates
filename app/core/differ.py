@@ -649,7 +649,8 @@ def diff_from_manifest(
                     rel_s[len(top) + 1:] not in per_top.get(top, {}):
                 return None
     for top in tops:
-        if top in wl_top:
+        if top in wl_top or top in per_top:
+            # 白名单目录，或者已经有逐文件清单 → 不需要 folder 哈希
             continue
         # 非白名单目录：既没有记录哈希、包里又确实有这个目录 → 判不了
         if top not in f_hashes and (top in (pack_tops or set())
@@ -673,8 +674,8 @@ def diff_from_manifest(
         entries = per_top.get(top, {})
         idx_entries = index_by_top.get(top, {})
 
-        if top not in wl_top:
-            # 非白名单：整目录级（和文件系统比对一致）
+        if top not in wl_top and top not in per_top:
+            # 非白名单、也没有逐文件清单：整目录级（和文件系统比对一致）
             recorded = f_hashes.get(top, "")
             if not has_local:
                 result.added.append(Change(Path(top), ChangeKind.ADDED,
@@ -690,7 +691,27 @@ def diff_from_manifest(
             continue
 
         # 白名单目录：逐文件（递归比，粒度比"子目录整体"更细也更准）
-        new_map: dict[str, tuple[str, str]] = dict(entries)
+        # 但"白名单目录里没有逐文件清单"时（导出端白名单与玩家端不一致，
+        # 常见于只按 folder_hash 记录的 overrides），不能当成"包是空的"：
+        # 退回该目录的 folder 级比对，且不判删除。
+        folder_only = (not entries) and bool(f_hashes.get(top))
+        if folder_only and compare_root is not None and \
+                (Path(compare_root) / top).is_dir():
+            # 有解压出来的实际文件 → 逐文件比（不判删除），比"整目录替换"安全
+            src_top = Path(compare_root) / top
+            new_map = {rel: ("sha1", _hash_file(path, "sha1"))
+                       for rel, path in _walk_rel_files(src_top).items()}
+        else:
+            new_map = dict(entries)
+            if folder_only:
+                recorded = f_hashes[top]
+                if not has_local:
+                    result.added.append(Change(Path(top), ChangeKind.ADDED,
+                                               is_folder_level=True))
+                elif folder_hash(local_top) != recorded:
+                    result.modified.append(Change(Path(top),
+                                                  ChangeKind.MODIFIED,
+                                                  is_folder_level=True))
         for full, hs in idx_entries.items():
             sub = full[len(top) + 1:]
             if sub and sub not in new_map:
@@ -713,9 +734,12 @@ def diff_from_manifest(
             else:
                 to_compare.append((f"{top}/{sub}", local, value, algo))
 
-        for sub in sorted(set(local_map) - set(new_map)):
-            result.deleted.append(
-                Change(Path(top) / sub, ChangeKind.DELETED))
+        # 只有"逐文件清单完整"的目录才判删除；只靠 folder 哈希或只是
+        # index 里列了几个文件的目录，绝不动玩家的其它文件。
+        if entries:
+            for sub in sorted(set(local_map) - set(new_map)):
+                result.deleted.append(
+                    Change(Path(top) / sub, ChangeKind.DELETED))
 
         if to_compare:
             counter = {"n": 0}

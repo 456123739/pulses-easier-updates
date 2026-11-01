@@ -9,7 +9,7 @@ on:
       version:
         description: 版本号（用于 zip 文件名，如 0.10.2）
         required: false
-        default: "0.10.5"
+        default: "0.11.0"
   push:
     tags: ["v*"]                # 推 tag 时自动出包并上传到对应 Release
 
@@ -59,6 +59,14 @@ jobs:
         run: |
           npx --prefix web playwright install chromium
           python scripts/dev/run_ui_e2e.py
+
+      # 一键制作更新包：真前端 + 真 Api + 真磁盘，从实例目录导出并读回产物
+      - name: 端到端（本地实例一键制作更新包）
+        env:
+          PYTHON: python
+        run: |
+          python scripts/dev/make_export_fixture.py export-fixture
+          node scripts/dev/e2e_export.mjs --instance export-fixture/DemoPack --out export-out/DemoPack.eapack --port 8141 --min-index 1
 
       # GitHub 的 runner 镜像里没有 WebView2 运行时（只有 Edge 浏览器），先装上
       - name: 安装 WebView2 运行时

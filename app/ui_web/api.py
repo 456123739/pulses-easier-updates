@@ -121,6 +121,12 @@ class Api:
                 p.get("path", "")),
             # ---- 开发者：制作更新包 ----
             "dev.pick": lambda p: self.controller.dev.import_zip(p.get("path", "")),
+            "dev.instance.pick": lambda p: self.controller.dev.import_instance(
+                p.get("path", "")),
+            "dev.rule.set": lambda p: self.controller.dev.set_rule(
+                p.get("key", ""), bool(p.get("value"))),
+            "dev.cfkey.set": lambda p: self.controller.dev.set_cf_key(
+                p.get("key", "")),
             "dev.state": lambda p: self.controller.dev.snapshot(),
             "dev.clear": lambda p: self.controller.dev.clear(),
             "dev.option.set": lambda p: self.controller.dev.set_option(
@@ -130,6 +136,7 @@ class Api:
             "dev.strategy.set": lambda p: self.controller.dev.set_strategy(
                 p.get("name", ""), p.get("value", ""), p.get("excluded")),
             "dev.export": lambda p: self.controller.dev.start_export(p.get("path", "")),
+            "dev.abort": lambda p: self.controller.dev.abort(),
             # ---- 白名单 / 数据库 ----
             "app.whitelist.get": lambda p: self.controller.whitelist(),
             "app.whitelist.set": lambda p: self.controller.set_whitelist(

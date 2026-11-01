@@ -52,6 +52,56 @@ class FlowError(RuntimeError):
     pass
 
 
+def _sha1_file(path: Path) -> str:
+    import hashlib
+    digest = hashlib.sha1()
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _merge_index_changes(diff, root: Path, content_root: Path,
+                         index_hashes: dict) -> None:
+    """把只在 index 里声明的文件补进 diff（added/modified，永不删）。"""
+    from ..config import ChangeKind
+    from ..core.differ import Change
+
+    known = {c.rel_path.as_posix() for c in diff.added}
+    known |= {c.rel_path.as_posix() for c in diff.modified}
+    for rel, hashes in (index_hashes or {}).items():
+        rel_s = str(rel).replace("\\", "/").strip("/")
+        if not rel_s or rel_s in known:
+            continue
+        try:
+            if (content_root / rel_s).exists():
+                continue                 # 包里有同路径文件，归普通比对管
+        except OSError:
+            continue
+        target = ""
+        algo = ""
+        for key in ("sha1", "sha256", "sha512"):
+            value = (hashes or {}).get(key)
+            if value:
+                target = str(value).lower()
+                algo = key
+                break
+        local = root / rel_s
+        try:
+            if not local.is_file():
+                diff.added.append(Change(Path(rel_s), ChangeKind.ADDED))
+                known.add(rel_s)
+                continue
+            if algo == "sha1" and target and _sha1_file(local) != target:
+                diff.modified.append(Change(Path(rel_s), ChangeKind.MODIFIED))
+                known.add(rel_s)
+        except OSError:
+            continue
+
+
 class Flow:
     """一次更新会话的全部状态。同一个实例串行执行，不并发。"""
 
@@ -254,6 +304,7 @@ class Flow:
             # 只能从更新包的 modrinth.index.json 拿。少了这一步，它们既不会
             # 出现在变更列表里、也永远不会被下载（Tk 版一直是这么补的）。
             index_tops: set[str] = set()
+            index_root_files: set[str] = set()
             try:
                 up_pack, _up_err = parse_mrpack(zpath)
                 for item in getattr(up_pack, "files", []) or []:
@@ -262,6 +313,8 @@ class Flow:
                         continue
                     if "/" in rel:
                         index_tops.add(rel.split("/", 1)[0])
+                    else:
+                        index_root_files.add(rel)
                     if rel in index_hashes:
                         continue
                     hashes = {k: getattr(item, k, "")
@@ -271,6 +324,9 @@ class Flow:
                         index_hashes[rel] = hashes
             except Exception:                               # noqa: BLE001
                 index_tops = set()
+                index_root_files = set()
+            self._index_tops = set(index_tops)
+            self._index_root_files = set(index_root_files)
 
             def _prog(done: int, total: int, phase: str = "") -> None:
                 total = max(1, total)
@@ -295,7 +351,9 @@ class Flow:
             threads = int(db.get_compare_options().get("hash_threads", 16) or 16)
             self.bus.progress("scan", "正在比对…", 0.55)
             diff = None
-            if manifest:
+            # 只有 index 声明、包里没有任何同名文件的更新包（模组全部走直链）
+            # 也必须走清单比对，否则那些文件既不可见也不会被下载。
+            if manifest or index_hashes:
                 try:
                     diff = diff_from_manifest(
                         root, manifest, index_hashes=index_hashes,
@@ -311,6 +369,9 @@ class Flow:
                     root, content_root, whitelist=whitelist,
                     folder_hashes=folders,
                     threads=max(1, min(64, threads)), progress=_prog)
+                # 兜底比对只看磁盘上解压出来的内容，index 声明的文件它不知道；
+                # 这里把"包内没有、只在 index 里"的文件补进去（不判删除）。
+                _merge_index_changes(diff, root, content_root, index_hashes)
             self.diff = diff
             self._build_tables(content_root)
             self.bus.progress("scan", "比对完成", 1.0)
@@ -342,6 +403,10 @@ class Flow:
         if content_root.is_dir():
             folders = sorted(e.name for e in content_root.iterdir()
                              if e.is_dir())
+        # index 声明、包内没有的目录/根文件也要出现在表里，
+        # 否则"只在 index 里"的 mods 既看不见也不会被下载。
+        files |= set(getattr(self, "_index_root_files", ()))
+        folders = sorted(set(folders) | set(getattr(self, "_index_tops", ())))
         self.root_files = sorted(files)
         self.tops = folders
 

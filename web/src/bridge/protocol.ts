@@ -96,8 +96,55 @@ export interface DevStrategy {
   isFile: boolean;
 }
 
+/** 「导出内容」勾选项：父项 + 子项（只有父项带 children）。 */
+export interface DevRuleNode {
+  key: string;
+  title: string;
+  checked: boolean;
+}
+
+export interface DevRuleGroup extends DevRuleNode {
+  children: DevRuleNode[];
+}
+
+/** 实例扫描结果里的二级条目（顶层目录下的一级子项）。 */
+export interface DevInstanceChild {
+  path: string;
+  files: number;
+  bytes: number;
+  candidates: number;
+}
+
+/** 实例扫描结果里的顶层条目（一个目录或一个根散文件）。 */
+export interface DevInstanceRow {
+  name: string;
+  isFile: boolean;
+  files: number;
+  bytes: number;
+  candidates: number;
+  children: DevInstanceChild[];
+}
+
+/** 本地整合包目录的扫描摘要（mode = "instance" 时才有）。 */
+export interface DevInstance {
+  root: string;
+  name: string;
+  minecraft: string;
+  loader: string;
+  loaderVersion: string;
+  totals: { files: number; bytes: number; candidates: number }
+  unsafeLinks?: string[]
+  badNames?: string[];
+  rows: DevInstanceRow[];
+}
+
 export interface DevSnapshot {
   phase: 'idle' | 'exporting' | 'done' | 'error';
+  /** zip = 导入启动器导出的整合包；instance = 直接读本地实例目录 */
+  mode: 'zip' | 'instance';
+  instance: DevInstance | null;
+  ruleOptions: DevRuleGroup[];
+  hasCfKey: boolean;
   source: { path: string; name: string } | null;
   name: string;
   version: string;

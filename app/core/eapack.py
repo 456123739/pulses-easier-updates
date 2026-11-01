@@ -61,6 +61,54 @@ def compute_signature(settings: dict, manifest: dict,
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _content_entries(zip_path: Path) -> list[tuple[str, int, str]]:
+    """逐条读包内文件算内容 sha1（签名 v2 用）。"""
+    out: list[tuple[str, int, str]] = []
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for info in zf.infolist():
+            if info.filename == MANIFEST_FILE:
+                continue
+            digest = hashlib.sha1()
+            with zf.open(info) as fh:
+                while True:
+                    chunk = fh.read(1 << 20)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            out.append((info.filename, info.file_size, digest.hexdigest()))
+    return out
+
+
+def _payload_v2(settings: dict, manifest: dict,
+                entries: list[tuple[str, int, str]]) -> str:
+    return json.dumps({
+        "settings": settings,
+        "manifest": {k: v for k, v in manifest.items() if k != "signature"},
+        "entries": [[n, int(s), h] for n, s, h in entries],
+        "scheme": "sha1-content",
+    }, ensure_ascii=False, sort_keys=True)
+
+
+def compute_signature_v2(settings: dict, manifest: dict,
+                         entries: list[tuple[str, int, str]]) -> str:
+    return hashlib.sha256(_payload_v2(settings, manifest, entries)
+                          .encode("utf-8")).hexdigest()
+
+
+def append_manifest_with_signature(zip_path: Path, settings: dict,
+                                   manifest: dict,
+                                   tamper_proof: bool) -> dict:
+    """写完内容后追加 ea_manifest.json；开启防篡改时用内容哈希签名（v2）。"""
+    if tamper_proof:
+        manifest["signature_version"] = 2   # 先定版本，签名载荷里要包含它
+        entries = _content_entries(zip_path)
+        manifest["signature"] = compute_signature_v2(settings, manifest, entries)
+    with zipfile.ZipFile(zip_path, "a", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(MANIFEST_FILE,
+                    json.dumps(manifest, ensure_ascii=False, indent=2))
+    return manifest
+
+
 def verify_signature(eapack_path: Path) -> tuple[bool, str]:
     """
     校验更新包完整性。
@@ -68,6 +116,9 @@ def verify_signature(eapack_path: Path) -> tuple[bool, str]:
       - 没有签名（未开启该选项）→ (True, "unsigned")
       - 校验通过 → (True, "")
       - 不通过 → (False, 原因)
+
+    v2（当前）：逐条读内容算 sha1 再签名，能挡住"同 CRC 改写"；
+    v1（0.10.x 及更早）：只签 CRC/size，仍按老算法校验，保证旧包可读。
     """
     eapack_path = Path(eapack_path)
     try:
@@ -82,14 +133,23 @@ def verify_signature(eapack_path: Path) -> tuple[bool, str]:
                 settings = json.loads(zf.read(SETTINGS_FILE).decode("utf-8"))
             except Exception:  # noqa: BLE001
                 settings = {}
+            version = int(manifest.get("signature_version") or 1)
             entries = [(i.filename, i.file_size, i.CRC)
                        for i in zf.infolist() if i.filename != MANIFEST_FILE]
-            got = compute_signature(settings or {}, manifest, entries)
-            if got != expected:
-                return False, "完整性校验不通过（包内容与签名不符）"
-            return True, ""
     except Exception as e:  # noqa: BLE001
         return False, f"无法读取更新包：{e}"
+
+    try:
+        if version >= 2:
+            got = compute_signature_v2(settings or {}, manifest,
+                                       _content_entries(eapack_path))
+        else:
+            got = compute_signature(settings or {}, manifest, entries)
+    except Exception as e:  # noqa: BLE001
+        return False, f"无法校验更新包：{e}"
+    if got != expected:
+        return False, "完整性校验不通过（包内容与签名不符）"
+    return True, ""
 
 
 def export_eapack(
@@ -276,18 +336,10 @@ def export_eapack(
                                 json.dumps(hashes_data, ensure_ascii=False,
                                            indent=2))
 
-                # 4.6) 签名（基于已写入条目的 CRC/大小 + settings/manifest）
-                if opts.get("tamper_proof"):
-                    entries = [(i.filename, i.file_size, i.CRC)
-                               for i in zf.filelist
-                               if i.filename != MANIFEST_FILE]
-                    manifest["signature"] = compute_signature(
-                        settings, manifest, entries)
-
-                # 4.7) ea_manifest.json
-                zf.writestr(MANIFEST_FILE,
-                            json.dumps(manifest, ensure_ascii=False,
-                                       indent=2))
+            # 4.6) 签名 + ea_manifest.json
+            # 签名在 zip 关闭后做：v2 要逐条读内容算 sha1（抗同 CRC 改写）
+            append_manifest_with_signature(tmp_path, settings, manifest,
+                                           bool(opts.get("tamper_proof")))
             step += 1
         except Exception:
             try:
