@@ -181,6 +181,7 @@ def main() -> int:
         # 等报告：每 15 秒一次心跳，绝不无声无息地等到超时
         started = time.time()
         last = 0.0
+        last_progress_at = time.time()
         while time.time() - started < TIMEOUT:
             if report.is_file() or proc.poll() is not None:
                 break
@@ -192,6 +193,11 @@ def main() -> int:
                     lines = progress.read_text(encoding="utf-8").splitlines()
                     if lines:
                         done = f"，最近一步：{lines[-1]}（共 {len(lines)} 步）"
+                        last_progress_at = progress.stat().st_mtime
+                # 进度 3 分钟没动、报告也没来：别干等到超时
+                if time.time() - last_progress_at > 180:
+                    log("进度 180s 没动，提前判定失败")
+                    break
                 log(f"等报告：已 {int(time.time() - started)}s / {int(TIMEOUT)}s，"
                     f"进程{'在跑' if proc.poll() is None else '已退出'}{done}")
             time.sleep(0.5)

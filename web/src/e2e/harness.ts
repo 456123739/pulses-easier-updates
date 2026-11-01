@@ -416,23 +416,17 @@ async function finish(): Promise<void> {
       suite: suiteName,
       ms: Date.now() - startedAt,
     }
-    const api = bridge()
-    if (api?.e2e_report) {
-      try {
-        const res = await withTimeout(api.e2e_report(payload), 15000,
-          'e2e_report 超时')
-        const accepted = res as { ok?: boolean; error?: { message?: string } } | null
-        if (accepted && accepted.ok === false) {
-          statusBox().fatal = `报告被拒绝：${accepted.error?.message ?? ''}`
-          console.log(`[e2e] ${statusBox().fatal}`)
-        }
-      } catch (err) {
-        // 报告可能已经落盘（Python 先写文件再关窗），别把控制台弄脏
-        statusBox().fatal = `回传报告失败：${String(err)}`
-        console.log(`[e2e] ${statusBox().fatal}`)
-      }
-    } else {
-      statusBox().fatal = '没有 e2e_report 入口（未以 PULSES_E2E=1 启动？）'
+    let res: unknown = null
+    try {
+      // 走 invoke（和前面上百次桥调用同一条路），比直接调 js_api 方法可靠
+      res = await bridgeInvoke('e2e.report', payload as unknown as Record<string, unknown>, 15000)
+    } catch (err) {
+      statusBox().fatal = `回传报告失败：${String(err)}`
+      console.log(`[e2e] ${statusBox().fatal}`)
+    }
+    const accepted = res as { ok?: boolean; error?: { message?: string } } | null
+    if (accepted && accepted.ok === false) {
+      statusBox().fatal = `报告被拒绝：${accepted.error?.message ?? ''}`
       console.log(`[e2e] ${statusBox().fatal}`)
     }
   } finally {
@@ -855,7 +849,7 @@ export async function start(): Promise<void> {
   startedAt = Date.now()
   // 第一件事就往磁盘报一行：哪怕后面卡死，也能确认"驱动确实起来了"
   try {
-    void bridgeInvoke('e2e.step', { name: 'harness 启动' }, 5000)
+    void bridgeInvoke('e2e.step', { name: 'harness 启动' }, 5000).catch(() => {})
   } catch {
     /* 桥还没好就算了，后面 whenReady 会处理 */
   }

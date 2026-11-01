@@ -143,6 +143,9 @@ class Api:
                 "e2e.fs": self._e2e_fs,
                 "e2e.can_close": self._e2e_can_close,
                 "e2e.step": self._e2e_step,
+                # 报告也走 invoke：这条通道被前面上百次调用证明是通的，
+                # 直接暴露成 js_api 方法在真机上没能把结果送回来
+                "e2e.report": self._e2e_report,
             })
             # 直接暴露成 js_api 方法：页面跑完后 `api.e2e_report(payload)`。
             # 平时不注册 → 产品里没有这个入口。
@@ -248,6 +251,13 @@ class Api:
         return {"canClose": ok, "blocked": not ok}
 
     def _e2e_report(self, payload=None) -> dict:
+        try:                                         # 先留一个"收到了"的凭证
+            mark = Path(os.environ.get(
+                "PULSES_E2E_REPORT", "e2e-report.json") + ".recv")
+            mark.parent.mkdir(parents=True, exist_ok=True)
+            mark.write_text("recv", encoding="utf-8")
+        except Exception:                            # noqa: BLE001, S110
+            pass
         """页面跑完回传结果：先落盘，再关窗。
 
         顺序很重要：pywebview 是把返回值再用 evaluate_js 送回页面的，这里若先
