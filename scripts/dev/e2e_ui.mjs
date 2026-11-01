@@ -482,7 +482,8 @@ async function downloadSuite() {
   check(await waitBody(/E2EPackDL-a\.eapack/), '导入更新包（带 URL 文件）')
 
   await clickText('开始更新', { exact: true })
-  check(await waitBody(/变更内容/, 120000), '比对完成')
+  const scan1 = await waitScanDone()
+  check(!!scan1 && (scan1.strategies?.length ?? 0) > 0, '比对完成', JSON.stringify(scan1?.phase))
   await waitBody(/e2e-big\.jar/, 30000)      // 等新条目真的画出来
   const snap = (await waitScanDone()) ?? (await flowState())
   check(snap?.counts?.added === 4, '比对出 4 个新增文件',
@@ -553,7 +554,9 @@ async function downloadSuite() {
   await clickStep('STEP 2')
   check(await waitBody(/E2EPackDL-b\.eapack/), '导入续传用更新包')
   await clickText('开始更新', { exact: true })
-  check(await waitBody(/变更内容/, 120000), '比对完成（续传包）')
+  const scan2 = await waitScanDone()
+  check(!!scan2 && (scan2.strategies?.length ?? 0) > 0, '比对完成（续传包）',
+        JSON.stringify(scan2?.phase))
   // 上一轮的变更树可能还没被替换掉：等这一轮独有的条目出现
   check(await waitBody(/e2e-abort-big\.jar/, 30000), '变更列表已换成续传包内容')
   await clickText('确认更新', { exact: true })
