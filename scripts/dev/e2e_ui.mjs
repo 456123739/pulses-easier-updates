@@ -190,8 +190,11 @@ async function basicSuite() {
   const packAfter = (await invoke('app.state'))?.data?.pack
   // Windows 上前后端拿到的路径分隔符可能一个是 /、一个是 \，比之前先归一
   const norm = (v) => String(v ?? '').replace(/\\/g, '/').toLowerCase()
-  check(norm(packAfter?.path) === norm(fixture.pack),
-        '整合包信息显示', JSON.stringify(packAfter))
+  // 后端会用 locate_modpack 把路径落成真正的实例根（可能比传进去的多/少一层），
+  // 这里只要求"认到了这个包"：名字对、路径里含目录名
+  check(packAfter?.name === 'E2EPack' && norm(packAfter?.path).includes('e2epack'),
+        '整合包信息显示',
+        `${JSON.stringify(packAfter)} expected=${fixture.pack}`)
 
   // ---- 2. 导入更新包（工作区拖入区 → pick_path）----
   await setPicks([fixture.update])

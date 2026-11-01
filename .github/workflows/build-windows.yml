@@ -65,7 +65,13 @@ jobs:
         shell: pwsh
         run: |
           $exe = Join-Path $env:RUNNER_TEMP "MicrosoftEdgeWebView2Setup.exe"
-          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe
+          for ($i = 1; $i -le 3; $i++) {
+            try {
+              Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe
+              break
+            } catch { Write-Host "下载 WebView2 安装器失败（第 $i 次）：$_"; Start-Sleep -Seconds 5 }
+          }
+          if (-not (Test-Path $exe)) { throw "拿不到 WebView2 安装器" }
           Start-Process -FilePath $exe -ArgumentList "/silent", "/install" -Wait
           $app = "$env:ProgramFiles(x86)\Microsoft\EdgeWebView\Application"
           if (-not (Test-Path $app)) { throw "WebView2 运行时没装上，后面的真机端到端跑不了" }
