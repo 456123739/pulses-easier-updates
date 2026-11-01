@@ -337,6 +337,26 @@ async function call<T>(
   return null
 }
 
+async function waitScanDone(timeout = 180000): Promise<FlowSnapshot | null> {
+  // 扫描完成的判据：phase 回到 idle 且策略表已经有行（策略来自 diff）。
+  // 只看界面出现「变更内容」是不行的——那张卡片在扫描开始前就存在。
+  const end = Date.now() + timeout
+  let last: FlowSnapshot | null = null
+  while (Date.now() < end) {
+    const snap = await flowSnap()
+    if (snap) {
+      last = snap
+      const phase = String((snap as { phase?: string }).phase ?? '')
+      const rows = (snap as { strategies?: unknown[] }).strategies
+      const hasRows = Array.isArray(rows) ? rows.length > 0 : false
+      if (phase === 'idle' && hasRows) return snap
+      if (phase === 'done') return snap
+    }
+    await sleep(250)
+  }
+  return last
+}
+
 async function flowSnap(): Promise<FlowSnapshot | null> {
   const res = await bridgeInvoke('flow.state', {}, 30000)
   return res && res.ok === true ? (res.data as FlowSnapshot) : null
@@ -477,8 +497,11 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
 
   // ---- 3. 开始更新（比对）----
   await clickText('开始更新', { exact: true })
-  need(await waitText(/变更内容/, 120000), '比对完成')
-  snap = await flowSnap()
+  // 「变更内容」这张卡片是一直在的，不能拿它当"扫描完成"的信号；
+  // 真正的判据是 phase 回 idle 且策略表已有行（见 waitScanDone）。
+  snap = await waitScanDone()
+  need(!!snap && ((snap.strategies?.length ?? 0) > 0),
+    '比对完成', JSON.stringify({ phase: snap?.phase, rows: snap?.strategies?.length }))
   const wantCounts = (s: { counts?: Record<string, number> } | null): boolean =>
     s?.counts?.added === 1 && s?.counts?.modified === 2 && s?.counts?.deleted === 1
   if (!wantCounts(snap)) {
@@ -486,10 +509,7 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
     // 记下现场并重扫一次——玩家遇到这种情况也是点「重新扫描」。
     artifacts['scan0'] = snap
     await clickText('重新扫描', { exact: true }).catch(() => {})
-    if (await waitText(/变更内容/, 120000)) {
-      await sleep(600)
-      snap = await flowSnap()
-    }
+    snap = (await waitScanDone()) ?? (await flowSnap())
     artifacts['scan1'] = snap
   }
   check(wantCounts(snap), '比对计数（+1 ~2 -1）', JSON.stringify(snap?.counts))
@@ -731,7 +751,7 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   await clickStep('STEP 2')
   need(await waitText(/E2EPackDL-a\.eapack/), '导入更新包（带 URL 文件）')
   await clickText('开始更新', { exact: true })
-  need(await waitText(/变更内容/, 120000), '比对完成（真下载）')
+  need(!!(await waitScanDone()), '比对完成（真下载）')
   await waitText(/e2e-big\.jar/, 30000)
   const snap = await flowSnap()
   check(snap?.counts?.added === 4, '比对出 4 个新增文件', JSON.stringify(snap?.counts))
@@ -811,7 +831,7 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   await clickStep('STEP 2')
   need(await waitText(/E2EPackDL-b\.eapack/), '导入续传用更新包')
   await clickText('开始更新', { exact: true })
-  need(await waitText(/变更内容/, 120000), '比对完成（续传包）')
+  need(!!(await waitScanDone()), '比对完成（续传包）')
   // 上一轮的变更树可能还没被替换掉：等这一轮独有的条目出现
   need(await waitText(/e2e-abort-big\.jar/, 30000), '变更列表已换成续传包内容')
   await clickText('确认更新', { exact: true })

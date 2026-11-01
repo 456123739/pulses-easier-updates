@@ -177,6 +177,23 @@ const sha256 = (path) => {
 // ----------------------------------------------------------------------
 // 基本流程套件
 // ----------------------------------------------------------------------
+
+/** 等扫描真的结束：phase 回 idle 且策略表已有行（只看"变更内容"四个字会早读）。 */
+async function waitScanDone(timeout = 180000) {
+  const end = Date.now() + timeout
+  let last = null
+  while (Date.now() < end) {
+    const snap = await flowState()
+    if (snap) {
+      last = snap
+      const rows = Array.isArray(snap.strategies) ? snap.strategies.length : 0
+      if ((snap.phase === 'idle' && rows > 0) || snap.phase === 'done') return snap
+    }
+    await page.waitForTimeout(250)
+  }
+  return last
+}
+
 async function basicSuite() {
   // ---- 0. 渲染 ----
   await page.waitForSelector('aside', { timeout: 30000 })
@@ -207,8 +224,9 @@ async function basicSuite() {
 
   // ---- 3. 开始更新（比对）----
   await clickText('开始更新', { exact: true })
-  check(await waitBody(/变更内容/, 120000), '比对完成')
-  let snap = await flowState()
+  // 卡片是一直在的，判据是 phase 回 idle + 策略表已有行
+  let snap = await waitScanDone()
+  check(!!snap && (snap.strategies?.length ?? 0) > 0, '比对完成', JSON.stringify(snap?.phase))
   check(snap?.counts?.added === 1 && snap?.counts?.modified === 2 &&
         snap?.counts?.deleted === 1, '比对计数（+1 ~2 -1）',
         JSON.stringify(snap?.counts))
@@ -466,7 +484,7 @@ async function downloadSuite() {
   await clickText('开始更新', { exact: true })
   check(await waitBody(/变更内容/, 120000), '比对完成')
   await waitBody(/e2e-big\.jar/, 30000)      // 等新条目真的画出来
-  const snap = await flowState()
+  const snap = (await waitScanDone()) ?? (await flowState())
   check(snap?.counts?.added === 4, '比对出 4 个新增文件',
         JSON.stringify(snap?.counts))
   check((snap?.groups ?? []).some((g) => g.items.some((i) => i.path.endsWith('e2e-big.jar'))),
