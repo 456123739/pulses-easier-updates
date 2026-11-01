@@ -306,24 +306,6 @@ def run(argv: list[str] | None = None) -> int:
 
     window.events.loaded += on_loaded
 
-    def _poll_ready():
-        import time as _t
-        for _ in range(100):                          # 最长 ~30s
-            _t.sleep(0.3)
-            if did_setup[0]:
-                return
-            try:
-                if window.evaluate_js("1+1") == 2:
-                    _note("loaded 事件没来，但页面已就绪（轮询确认）")
-                    _setup_ui("poll")
-                    return
-            except Exception:                         # noqa: BLE001, S110
-                continue
-
-    # loaded 不来时靠轮询探活（端到端也保留：真机上见过 loaded 完全不触发，
-    # 只靠它会导致"窗口出来了但界面永远不就绪"）。轮询本身带 30s 上限。
-    threading.Thread(target=_poll_ready, daemon=True).start()
-
     def _page_ready_hook(reason: str) -> None:
         _setup_ui(reason)
 
@@ -343,12 +325,9 @@ def run(argv: list[str] | None = None) -> int:
         _t.sleep(limit)
         if did_setup[0]:
             return
-        _note(f"{int(limit)}s 内页面没就绪：关掉新界面，交给 Tk")
-        boot_failed[0] = True
-        try:
-            window.destroy()
-        except Exception as exc:                     # noqa: BLE001
-            _note(f"destroy 失败：{exc}")
+        # 不在这里 destroy：从 Python 线程调 WinForms 的 Invoke 可能互等卡死，
+        # 上层（受监督子进程的父进程）会用超时 + 杀进程树来兜底
+        _note(f"{int(limit)}s 内页面没就绪")
 
     boot_failed = [False]
     threading.Thread(target=_boot_timeout, daemon=True).start()

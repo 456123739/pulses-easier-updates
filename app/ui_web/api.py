@@ -156,6 +156,14 @@ class Api:
 
     # ------------------------------------------------------------------
     def invoke(self, method: str, params: dict | None = None) -> dict:
+        # 页面主动调桥 = 前端已经跑起来了：这是最可靠的"就绪"信号
+        # （不用从别的线程 evaluate_js 探活，那条路会和 WinForms 消息循环互等）
+        hook = getattr(self, "on_page_ready", None)
+        if callable(hook):
+            try:
+                hook("page-call")
+            except Exception:                        # noqa: BLE001, S110
+                pass
         handler = self._methods.get(str(method))
         if handler is None:
             return _err("UNKNOWN_METHOD", f"未知操作：{method}")
