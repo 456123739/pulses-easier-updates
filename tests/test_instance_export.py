@@ -147,16 +147,22 @@ class ExportCase(unittest.TestCase):
         self.assertFalse(ok)
 
     def test_unreadable_file_fails_export(self):
-        import os as _os
+        # 用注入的读失败模拟"文件读不出来"：Windows 上 chmod 000 对属主无效，
+        # 靠权限位造不出这个场景。
+        from app.core import fingerprint as fpmod
         secret = self.root / "mods" / "secret.jar"
         secret.write_bytes(b"S" * 64)
-        _os.chmod(secret, 0)
-        try:
+        real = fpmod.FingerprintCache.compute
+
+        def fake_compute(cache, path, **kwargs):
+            if Path(path).name == "secret.jar":
+                raise PermissionError("denied")
+            return real(cache, path, **kwargs)
+
+        with mock.patch.object(fpmod.FingerprintCache, "compute", fake_compute):
             path = EX.export_from_instance(self.root, self.out,
                                            rules=R.expand_rules(),
                                            lookup_fn=lambda wanted: {})
-        finally:
-            _os.chmod(secret, 0o644)
         self.assertIsNone(path)
         self.assertFalse(self.out.exists())
 

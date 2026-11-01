@@ -9,6 +9,7 @@ import { mkdirSync, existsSync, statSync } from 'node:fs'
 const require = createRequire(new URL('../../web/package.json', import.meta.url))
 const { chromium } = require('playwright')
 import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const argv = process.argv.slice(2)
 const arg = (name, def = '') => {
@@ -21,7 +22,7 @@ const CFKEY = arg('cfkey', '')
 const SHOTS = arg('shots', '')
 const PORT = Number(arg('port', '8131'))
 const PAGE_URL = `http://127.0.0.1:${PORT}/index.html`
-const repo = resolve(new URL('../..', import.meta.url).pathname)
+const repo = fileURLToPath(new URL('../..', import.meta.url))
 
 let failed = 0
 const check = (ok, label, extra = '') => {
