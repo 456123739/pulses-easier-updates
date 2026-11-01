@@ -178,11 +178,11 @@
   padding: 0 8px;
   border-radius: 8px;
   color: var(--c-text);
-  background: rgba(78, 201, 176, 0.1);
+  background: rgba(95, 184, 166, 0.1);
   font-size: var(--fs-body);
 }
 .rowName:hover {
-  background: rgba(78, 201, 176, 0.16);
+  background: rgba(95, 184, 166, 0.16);
 }
 
 .chips {

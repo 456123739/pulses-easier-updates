@@ -2,15 +2,17 @@
    原则：不做高光/发光/镜面渐变；层次靠"色调差 + 发丝线 + 极浅投影"，
    强调色只用于主操作与选中态，面积克制。 */
 :root {
-  /* ---- 中性色阶（哑光，低饱和）---- */
-  --c-base: #101011;
-  --c-window: #161617;
-  --c-sidebar: #1a1a1c;
-  --c-workspace: #141415;
-  --c-card: #1f1f22;
-  --c-card-2: #232326;
-  --c-log: #191a1b;
-  --c-input: #1c1c1f;
+  /* ---- 中性色阶（石墨灰，暖中性、低饱和）----
+     不用纯黑：纯黑在显示器上会"吸"掉层次，显得廉价；这里整体抬到 7–14% 灰度，
+     靠相邻色阶的差值（约 3–5%）分层，而不是靠纯黑 vs 纯白拉对比。 */
+  --c-base: #121214;
+  --c-window: #17171a;
+  --c-sidebar: #1a1b1d;
+  --c-workspace: #151517;
+  --c-card: #1e1f22;
+  --c-card-2: #242528;
+  --c-log: #1a1b1e;
+  --c-input: #202124;
 
   /* ---- 材质 ---- */
   --mat-1: rgba(255, 255, 255, 0.028);
@@ -22,12 +24,12 @@
   --glass-blur-thick: blur(28px) saturate(120%);
 
   /* ---- 强调色（青，压低饱和）---- */
-  --c-accent: #4ec9b0;
-  --c-accent-hover: #5ed3bb;
-  --c-accent-press: #43b39c;
-  --c-accent-soft: rgba(78, 201, 176, 0.12);
-  --c-accent-line: rgba(78, 201, 176, 0.34);
-  --c-accent-text: #8fe3d1;
+  --c-accent: #5fb8a6;
+  --c-accent-hover: #6cc4b2;
+  --c-accent-press: #52a897;
+  --c-accent-soft: rgba(95, 184, 166, 0.12);
+  --c-accent-line: rgba(95, 184, 166, 0.3);
+  --c-accent-text: #9ad6c8;
 
   /* ---- 文字 ---- */
   --c-text: #e9e9ec;
@@ -37,9 +39,9 @@
   --c-border: rgba(255, 255, 255, 0.08);
 
   /* ---- 语义色 ---- */
-  --c-added: #6fc7b3;
-  --c-modified: #cfcfa0;
-  --c-deleted: #e08d7c;
+  --c-added: #79bda9;
+  --c-modified: #c4bd93;
+  --c-deleted: #cf9182;
   --c-warn: #cfcfa0;
   --c-error: #e08d7c;
   --c-warn-soft: rgba(207, 207, 160, 0.1);

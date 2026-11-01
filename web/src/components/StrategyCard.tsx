@@ -219,6 +219,7 @@ function Row({
           {row.display.replace(/^[^ ]+ /, '')}
         </span>
       </button>
+      {onStrategy && <span className={styles.leader} aria-hidden />}
       {onStrategy && (
         <div className={styles.chips}>
           {row.strategies.map((s) => (
