@@ -177,6 +177,14 @@ class Api:
     # 端到端（PULSES_E2E=1 才注册；页面内驱动只认这几个口子）
     # ------------------------------------------------------------------
     def _e2e_config(self, params: dict) -> dict:
+        # 页面主动来要夹具，说明前端已经跑起来了。宿主用它做"就绪"信号，
+        # 这样就不必从别的线程 evaluate_js 去探活（那条路会互等卡死）。
+        hook = getattr(self, "on_page_ready", None)
+        if callable(hook):
+            try:
+                hook("e2e")
+            except Exception:                        # noqa: BLE001, S110
+                pass
         """把夹具路径交给页面：驱动按 basic / download 决定跑哪几套。"""
         cfg = _e2e_cfg()
         if not cfg:

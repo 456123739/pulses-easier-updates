@@ -22,6 +22,9 @@ createRoot(root).render(
 
 // 端到端：只有 ?e2e=1 才加载页面内驱动。产物里存在这个 chunk，
 // 但玩家路径永远不会 import 它（也就不会下载）。
-if (new URLSearchParams(window.location.search).get('e2e') === '1') {
+const e2eFlag =
+  new URLSearchParams(window.location.search).get('e2e') === '1' ||
+  window.location.hash.includes('e2e=1')
+if (e2eFlag) {
   void import('./e2e/harness').then((mod) => mod.start())
 }

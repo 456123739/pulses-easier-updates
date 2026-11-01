@@ -93,12 +93,16 @@ def _web_target() -> str:
 
 
 def with_e2e_flag(url: str) -> str:
-    """给入口 URL 加 `?e2e=1`（已有查询串就接 `&`）。
+    """给入口 URL 加 `#e2e=1`（用 hash，不走查询串）。
 
-    页面只在带这个参数时才动态 import `web/src/e2e/harness.ts`：玩家路径既不会
+    页面只在带这个标记时才动态 import `web/src/e2e/harness.ts`：玩家路径既不会
     加载它，也不会有任何端到端口子被注册。
+
+    为什么用 hash 不用 `?e2e=1`：pywebview 内置的静态服务对带查询串的
+    `index.html?e2e=1` 处理不一致，实测在 Windows 上页面根本加载不出来
+    （`loaded` 事件永不触发），而 hash 不会发给服务端。
     """
-    return f"{url}{'&' if '?' in url else '?'}e2e=1"
+    return f"{url}#e2e=1"
 
 
 def bind_drop(window, api: Api, bus: EventBus) -> None:
@@ -316,7 +320,18 @@ def run(argv: list[str] | None = None) -> int:
             except Exception:                         # noqa: BLE001, S110
                 continue
 
-    threading.Thread(target=_poll_ready, daemon=True).start()
+    # 生产路径：loaded 不来时靠轮询探活；端到端模式下不轮询（跨线程 evaluate_js
+    # 会和 WinForms 的消息循环互等），改由页面 `e2e.config` 主动报到。
+    if not os.environ.get("PULSES_E2E", "").strip() in ("1", "true", "yes"):
+        threading.Thread(target=_poll_ready, daemon=True).start()
+
+    def _page_ready_hook(reason: str) -> None:
+        _setup_ui(reason)
+
+    try:
+        api.on_page_ready = _page_ready_hook
+    except Exception:                                # noqa: BLE001, S110
+        pass
 
     def _boot_timeout():
         import time as _t

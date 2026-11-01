@@ -308,19 +308,19 @@ class E2eBridgeCase(unittest.TestCase):
 
 
 class E2eHostUrlCase(unittest.TestCase):
-    """入口 URL 的 `?e2e=1`：只有端到端才加，而且不能破坏已有的查询串。"""
+    """入口 URL 的 `#e2e=1`：只有端到端才加，用 hash 避开静态服务的查询串问题。"""
 
-    def test_adds_query_to_local_file(self):
+    def test_adds_hash_to_local_file(self):
         from app.ui_web.host import with_e2e_flag
         self.assertEqual(with_e2e_flag("C:/x/web/dist/index.html"),
-                         "C:/x/web/dist/index.html?e2e=1")
+                         "C:/x/web/dist/index.html#e2e=1")
 
     def test_keeps_existing_query(self):
         from app.ui_web.host import with_e2e_flag
         self.assertEqual(with_e2e_flag("http://127.0.0.1:5273/?a=1"),
-                         "http://127.0.0.1:5273/?a=1&e2e=1")
+                         "http://127.0.0.1:5273/?a=1#e2e=1")
 
     def test_dev_target_with_query(self):
         from app.ui_web.host import with_e2e_flag
         self.assertEqual(with_e2e_flag("http://127.0.0.1:5273/index.html?x=2"),
-                         "http://127.0.0.1:5273/index.html?x=2&e2e=1")
+                         "http://127.0.0.1:5273/index.html?x=2#e2e=1")
