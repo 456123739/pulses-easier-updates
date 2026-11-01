@@ -233,8 +233,11 @@ class E2eBridgeCase(unittest.TestCase):
             self.assertTrue(res["ok"])
             data = res["data"]
             self.assertEqual(data["suite"], "all")
-            self.assertEqual(Path(data["work"]), self.work.resolve())
-            self.assertEqual(data["basic"]["pack"], str(self.pack))
+            # Windows 上临时目录可能带 8.3 短名（RUNNER~1），两边都 resolve 后再比
+            self.assertEqual(Path(data["work"]).resolve(),
+                             self.work.resolve())
+            self.assertEqual(Path(data["basic"]["pack"]).resolve(),
+                             self.pack.resolve())
             # 报告路径只走环境变量，配置里不带（免得两个来源打架）
             self.assertEqual(data["report"], str(self.report))
 
