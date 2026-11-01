@@ -142,6 +142,7 @@ class Api:
                 "e2e.config": self._e2e_config,
                 "e2e.fs": self._e2e_fs,
                 "e2e.can_close": self._e2e_can_close,
+                "e2e.step": self._e2e_step,
             })
             # 直接暴露成 js_api 方法：页面跑完后 `api.e2e_report(payload)`。
             # 平时不注册 → 产品里没有这个入口。
@@ -194,6 +195,21 @@ class Api:
         out.setdefault("suite", "all")
         out["report"] = os.environ.get("PULSES_E2E_REPORT", "")
         return out
+
+    def _e2e_step(self, params: dict) -> dict:
+        """页面每走一步报一次：卡住时 CI 里能看出卡在哪一步。"""
+        name = str((params or {}).get("name") or "")[:120]
+        ok = bool((params or {}).get("ok", True))
+        try:
+            path = Path(os.environ.get(
+                "PULSES_E2E_REPORT", "e2e-report.json") + ".progress")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(f"{'PASS' if ok else 'FAIL'} {name}\n")
+                fh.flush()
+        except Exception:                            # noqa: BLE001, S110
+            pass
+        return {"ok": True, "data": {}}
 
     def _e2e_fs(self, params: dict) -> dict:
         """只读探针：页面没有文件系统，磁盘断言得由 Python 代读。

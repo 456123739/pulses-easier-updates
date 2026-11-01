@@ -104,6 +104,14 @@ function mark(label: string): void {
 function check(ok: boolean, name: string, detail = ''): boolean {
   steps.push({ name, ok: Boolean(ok), detail: ok ? '' : String(detail).slice(0, 800) })
   statusBox().steps = steps.length
+  // 每步都往磁盘落一行：真卡死时 CI 里能看出卡在哪（不 await，坏掉也不影响流程）
+  try {
+    void (window as unknown as {
+      pywebview?: { api?: { invoke?: (m: string, p: unknown) => Promise<unknown> } }
+    }).pywebview?.api?.invoke?.('e2e.step', { name, ok: Boolean(ok) })
+  } catch {
+    /* 忽略：只是诊断信息 */
+  }
   return Boolean(ok)
 }
 

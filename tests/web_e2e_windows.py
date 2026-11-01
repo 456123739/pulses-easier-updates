@@ -186,12 +186,22 @@ def main() -> int:
                 break
             if time.time() - last >= HEARTBEAT:
                 last = time.time()
+                progress = Path(str(report) + ".progress")
+                done = ""
+                if progress.is_file():
+                    lines = progress.read_text(encoding="utf-8").splitlines()
+                    if lines:
+                        done = f"，最近一步：{lines[-1]}（共 {len(lines)} 步）"
                 log(f"等报告：已 {int(time.time() - started)}s / {int(TIMEOUT)}s，"
-                    f"进程{'在跑' if proc.poll() is None else '已退出'}")
+                    f"进程{'在跑' if proc.poll() is None else '已退出'}{done}")
             time.sleep(0.5)
 
         if not report.is_file():
             log(f"{int(TIMEOUT)}s 内没拿到报告（进程退出码 {proc.poll()}）")
+            progress = Path(str(report) + ".progress")
+            if progress.is_file():
+                lines = progress.read_text(encoding="utf-8").splitlines()
+                log(f"最后 15 步：\n  " + "\n  ".join(lines[-15:]))
             dump_logs(log_path)
             return 1
 
