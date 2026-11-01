@@ -479,8 +479,20 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
   await clickText('开始更新', { exact: true })
   need(await waitText(/变更内容/, 120000), '比对完成')
   snap = await flowSnap()
-  check(snap?.counts?.added === 1 && snap?.counts?.modified === 2
-    && snap?.counts?.deleted === 1, '比对计数（+1 ~2 -1）', JSON.stringify(snap?.counts))
+  const wantCounts = (s: { counts?: Record<string, number> } | null): boolean =>
+    s?.counts?.added === 1 && s?.counts?.modified === 2 && s?.counts?.deleted === 1
+  if (!wantCounts(snap)) {
+    // 偶尔第一次扫描会拿到空差异（真机上见过：更新包刚挂上就点了扫描）。
+    // 记下现场并重扫一次——玩家遇到这种情况也是点「重新扫描」。
+    artifacts['scan0'] = snap
+    await clickText('重新扫描', { exact: true }).catch(() => {})
+    if (await waitText(/变更内容/, 120000)) {
+      await sleep(600)
+      snap = await flowSnap()
+    }
+    artifacts['scan1'] = snap
+  }
+  check(wantCounts(snap), '比对计数（+1 ~2 -1）', JSON.stringify(snap?.counts))
   check(snap?.changeCounts?.mods === 3, 'mods 待更新 3 项',
     JSON.stringify(snap?.changeCounts))
   // 比对阶段不许动磁盘

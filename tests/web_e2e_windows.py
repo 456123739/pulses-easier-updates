@@ -221,6 +221,9 @@ def main() -> int:
                      else f"  →  {item['detail']}"), flush=True)
         log(f"页面内驱动：{len(data.get('steps') or [])} 条断言，"
             f"{'通过' if data.get('ok') else '失败'}（{data.get('ms', 0)} ms）")
+        arts = data.get("artifacts") or {}
+        if arts:
+            log("现场：" + json.dumps(arts, ensure_ascii=False)[:1500])
         if not data.get("ok"):
             log("失败：" + str(data.get("error")))
             dump_logs(log_path)
