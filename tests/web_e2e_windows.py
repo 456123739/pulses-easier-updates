@@ -199,6 +199,9 @@ def main() -> int:
                 # 进度 3 分钟没动、报告也没来：别干等到超时
                 if time.time() - last_progress_at > 180:
                     log("进度 180s 没动，提前判定失败")
+                    if progress.is_file():
+                        lines = progress.read_text(encoding="utf-8").splitlines()
+                        log("最后 10 步：\n  " + "\n  ".join(lines[-10:]))
                     break
                 log(f"等报告：已 {int(time.time() - started)}s / {int(TIMEOUT)}s，"
                     f"进程{'在跑' if proc.poll() is None else '已退出'}{done}")

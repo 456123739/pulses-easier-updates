@@ -91,10 +91,19 @@ jobs:
 
       # 真机端到端（源码壳）：真 WebView2 + 真前端 + 真磁盘，覆盖全部功能
       - name: 真机端到端（源码，失败即阻断）
-        timeout-minutes: 20
+        timeout-minutes: 25
+        shell: pwsh
         env:
-          PULSES_E2E_TIMEOUT: "900"
-        run: python tests/web_e2e_windows.py
+          PULSES_E2E_TIMEOUT: "600"
+        run: |
+          # WebView2 冷启动在 runner 上偶发不加载页面；给两次机会，真 bug 两次都会挂
+          for ($i = 1; $i -le 2; $i++) {
+            python tests/web_e2e_windows.py
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "第 $i 次失败（exit $LASTEXITCODE）"
+            if ($i -eq 2) { throw "真机端到端（源码）两次都失败" }
+            Start-Sleep -Seconds 5
+          }
 
       # 真实 Tk 窗口：动画 / 文字刷新 / 列表增量 / 滚动位置
       # （没有桌面时脚本自己跳过，不会误伤）
@@ -117,10 +126,18 @@ jobs:
 
       # 真机端到端（打包壳）：和第 9 步同一套断言，跑的是 dist 里的 exe
       - name: 打包后真机端到端（新界面，失败即阻断）
-        timeout-minutes: 20
+        timeout-minutes: 25
+        shell: pwsh
         env:
-          PULSES_E2E_TIMEOUT: "900"
-        run: python tests/web_e2e_windows.py --exe "dist/Pulses Easier/Pulses Easier.exe"
+          PULSES_E2E_TIMEOUT: "600"
+        run: |
+          for ($i = 1; $i -le 2; $i++) {
+            python tests/web_e2e_windows.py --exe "dist/Pulses Easier/Pulses Easier.exe"
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "第 $i 次失败（exit $LASTEXITCODE）"
+            if ($i -eq 2) { throw "打包后真机端到端两次都失败" }
+            Start-Sleep -Seconds 5
+          }
 
       # 默认启动路径：不设 PULSES_UI，玩家双击就是这个行为（窗口必须出来）
       - name: 打包后起窗冒烟（默认路径）

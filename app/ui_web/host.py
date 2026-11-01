@@ -320,10 +320,9 @@ def run(argv: list[str] | None = None) -> int:
             except Exception:                         # noqa: BLE001, S110
                 continue
 
-    # 生产路径：loaded 不来时靠轮询探活；端到端模式下不轮询（跨线程 evaluate_js
-    # 会和 WinForms 的消息循环互等），改由页面 `e2e.config` 主动报到。
-    if not os.environ.get("PULSES_E2E", "").strip() in ("1", "true", "yes"):
-        threading.Thread(target=_poll_ready, daemon=True).start()
+    # loaded 不来时靠轮询探活（端到端也保留：真机上见过 loaded 完全不触发，
+    # 只靠它会导致"窗口出来了但界面永远不就绪"）。轮询本身带 30s 上限。
+    threading.Thread(target=_poll_ready, daemon=True).start()
 
     def _page_ready_hook(reason: str) -> None:
         _setup_ui(reason)
