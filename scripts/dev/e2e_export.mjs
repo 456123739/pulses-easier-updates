@@ -8,7 +8,7 @@ import { mkdirSync, existsSync, statSync } from 'node:fs'
 
 const require = createRequire(new URL('../../web/package.json', import.meta.url))
 const { chromium } = require('playwright')
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const argv = process.argv.slice(2)
@@ -89,7 +89,7 @@ await page.waitForTimeout(300)
 await page.getByRole('button', { name: /选择目录|更换目录/ }).first().click()
 await page.waitForTimeout(1200)
 const box = await page.locator('body').innerText()
-check(box.includes('E2E-Pack'), '实例名显示在摘要卡里')
+check(box.includes(basename(INSTANCE)), '实例名显示在摘要卡里', basename(INSTANCE))
 check(/1\.20\.1/.test(box), 'MC 版本显示')
 check(/Fabric/i.test(box), '加载器显示')
 await shot('dev-instance')

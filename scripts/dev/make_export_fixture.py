@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -19,8 +20,11 @@ PROJECT = "sodium"
 
 def fetch_real_mod(dest: Path) -> bool:
     try:
-        url = (f"https://api.modrinth.com/v2/project/{PROJECT}/version"
-               '?game_versions=["1.20.1"]&loaders=["fabric"]')
+        query = urllib.parse.urlencode(
+            {"game_versions": json.dumps(["1.20.1"]),
+             "loaders": json.dumps(["fabric"])},
+            quote_via=urllib.parse.quote)
+        url = f"https://api.modrinth.com/v2/project/{PROJECT}/version?{query}"
         req = urllib.request.Request(url, headers=UA)
         with urllib.request.urlopen(req, timeout=20) as resp:
             versions = json.loads(resp.read())
