@@ -335,10 +335,16 @@ def run(argv: list[str] | None = None) -> int:
 
     def _boot_timeout():
         import time as _t
-        _t.sleep(25.0)
+        # 冷启动（CI 上的 WebView2 首次拉起）可能很慢，端到端时放宽
+        limit = 25.0
+        try:
+            limit = float(os.environ.get("PULSES_E2E_BOOT_TIMEOUT", "25"))
+        except Exception:                            # noqa: BLE001, S110
+            pass
+        _t.sleep(limit)
         if did_setup[0]:
             return
-        _note("25s 内页面没就绪：关掉新界面，交给 Tk")
+        _note(f"{int(limit)}s 内页面没就绪：关掉新界面，交给 Tk")
         boot_failed[0] = True
         try:
             window.destroy()

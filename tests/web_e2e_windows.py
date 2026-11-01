@@ -162,7 +162,9 @@ def main() -> int:
                    "PULSES_E2E": "1",
                    "PULSES_E2E_CFG": str(cfg_path),
                    "PULSES_E2E_REPORT": str(report),
-                   "PULSES_WEB_LOG": str(log_path)}
+                   "PULSES_WEB_LOG": str(log_path),
+               # CI 上 WebView2 冷启动可能十几秒，别让它自动退回 Tk
+               "PULSES_E2E_BOOT_TIMEOUT": "120"}
         if exe_path is not None:
             cmd = [str(exe_path)]
         else:
