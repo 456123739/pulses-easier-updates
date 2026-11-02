@@ -30,6 +30,7 @@ from ..core import config_exclude
 from ..core import recover as recover_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
+from ..core import pack_lock
 from ..core.apply_rules import is_checked as _rule_is_checked
 from ..core.apply_rules import resolve_strategy, will_skip
 from ..core.differ import DiffResult, diff_from_manifest, diff_packs_parallel
@@ -131,6 +132,8 @@ class Flow:
         self.error: str | None = None
 
         self._temp: Path | None = None
+        self._pack_lock: pack_lock.PackLock | None = None
+        self._snapshot: dict[str, tuple[int, int]] | None = None
         self._thread: threading.Thread | None = None
         self._abort = threading.Event()
         self._resume_pending = False
@@ -233,6 +236,7 @@ class Flow:
         return self.snapshot()
 
     def clear(self) -> dict:
+        self._release_lock()
         if self.busy():
             raise FlowError("更新流程进行中")
         self._discard_temp()
@@ -276,11 +280,34 @@ class Flow:
         self._thread.start()
         return {"started": True}
 
+    def _acquire_lock(self, action: str) -> bool:
+        """拿整合包占用锁；拿不到就把错误写进状态并返回 False。"""
+        if self.pack_root is None:
+            return True
+        lock = pack_lock.PackLock(self.pack_root, action)
+        try:
+            lock.acquire()
+        except pack_lock.PackBusy as exc:
+            self.phase = PHASE_IDLE
+            self.error = str(exc)
+            self.bus.log(str(exc), "ERROR")
+            self.controller.push_state()
+            return False
+        self._pack_lock = lock
+        return True
+
+    def _release_lock(self) -> None:
+        lock, self._pack_lock = self._pack_lock, None
+        if lock is not None:
+            lock.release()
+
     def _scan_worker(self) -> None:
         try:
             zpath = self.update_zip
             root = self.pack_root
             assert zpath is not None and root is not None
+            if not self._acquire_lock("扫描"):
+                return
             self.bus.log(f"开始比对：{zpath.name}", "INFO")
             # 上次中断留下的 .xxx.pulses_tmp 会被当成"玩家文件"算进差异里，先收拾
             try:
@@ -373,6 +400,8 @@ class Flow:
                 # 这里把"包内没有、只在 index 里"的文件补进去（不判删除）。
                 _merge_index_changes(diff, root, content_root, index_hashes)
             self.diff = diff
+            if self.pack_root is not None:
+                self._snapshot = pack_lock.snapshot(self.pack_root)
             self._build_tables(content_root)
             self.bus.progress("scan", "比对完成", 1.0)
             self.phase = PHASE_IDLE
@@ -388,6 +417,8 @@ class Flow:
             self.error = str(exc)
             self.bus.log(f"比对失败：{exc}", "ERROR")
             self.controller.push_state()
+        finally:
+            self._release_lock()
 
     def _build_tables(self, content_root: Path) -> None:
         root = self.pack_root
@@ -520,6 +551,16 @@ class Flow:
 
     def _apply_worker(self) -> None:
         try:
+            root = self.pack_root
+            if not self._acquire_lock("更新"):
+                return
+            # 扫描之后整合包被别的程序改过 → 计划已经作废，宁可停下也不覆盖
+            if root is not None and self._snapshot is not None:
+                changed = pack_lock.guard(self._snapshot, root)
+                if changed:
+                    raise pack_lock.PackChanged(
+                        "扫描之后整合包被修改过（" +
+                        pack_lock.describe(changed) + "），请重新扫描后再更新")
             tasks = self.tasks
             cache = self.controller.cache_root()
             if tasks:
@@ -572,11 +613,14 @@ class Flow:
             if failed:
                 self.bus.log(f"有 {len(failed)} 项未通过复核", "WARNING")
             self.controller.refresh_pack()
+            if root is not None:
+                self._snapshot = pack_lock.snapshot(root)
         except Exception as exc:                            # noqa: BLE001
             self.phase = PHASE_IDLE
             self.error = str(exc)
             self.bus.log(f"更新失败：{exc}", "ERROR")
         finally:
+            self._release_lock()
             self.controller.push_state()
 
     # ------------------------------------------------------------------

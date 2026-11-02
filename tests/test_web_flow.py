@@ -118,6 +118,32 @@ class WebFlowCase(unittest.TestCase):
         self.assertIn("config", groups)
         self.assertTrue(any(i["smartExcluded"] for i in groups["config"]["items"]))
 
+    def test_scan_rejected_when_another_window_holds_lock(self):
+        from app.core import pack_lock
+        lock = pack_lock.PackLock(self.inst, "更新").acquire()
+        try:
+            self.api.invoke("update.pick", {"path": str(self.update)})
+            self.api.invoke("pack.scan", {})
+            self.ctl.flow._thread.join(60)
+            snap = self.ctl.flow.snapshot()
+            self.assertIn("正在", snap["error"] or "")
+            self.assertIsNone(self.ctl.flow.diff)
+        finally:
+            lock.release()
+
+    def test_apply_aborts_when_pack_changed_after_scan(self):
+        self._scan()
+        target = self.inst / "config" / "shipped.toml"
+        target.write_text('tampered = true\n', encoding="utf-8")
+        self.api.invoke("update.apply", {})
+        self.ctl.flow._thread.join(120)
+        snap = self.ctl.flow.snapshot()
+        self.assertIn("扫描之后整合包被修改", snap["error"] or "")
+        # 计划作废：一个文件都不该被应用
+        self.assertEqual((self.inst / "mods" / "old.jar").read_text(), "OLD")
+        self.assertEqual(target.read_text(encoding="utf-8"),
+                         'tampered = true\n')
+
     def test_apply_updates_files_and_keeps_player_data(self):
         self._scan()
         self.api.invoke("update.apply", {})

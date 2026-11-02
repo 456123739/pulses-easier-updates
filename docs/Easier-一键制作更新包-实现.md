@@ -86,3 +86,14 @@ API Key 存本机应用配置（`cf_api_key`），不上传、不进仓库；为
 - CurseForge 指纹（murmur2）是纯 Python，100MB 候选文件约 8.5MB/s；非候选文件只算 sha1/sha512（约 290MB/s）。超大模组会拖慢导出，可接受但不快。
 - 只认 `mods/` + `config/` 同时存在的目录为整合包（`pack_locator` 的既有判据）；只有 mods 的目录会被拒绝。
 - 导出线程不做下载：命中直链的文件只写 index，玩家端下载时才会真正拉取。
+
+## 9. 更新期间的整合包锁与变更守卫（0.11.1）
+
+`app/core/pack_lock.py`：
+
+- **锁**：`<LOCALAPPDATA>/Pulses Easier/locks/pulses-easier-<hash>.lock` + 操作系统文件锁
+  （Windows `msvcrt.locking`，POSIX `fcntl.flock`）。进程退出/崩溃/被强杀时由内核释放，
+  不需要清理残留；不往整合包里写任何东西，也不锁玩家文件。
+- **守卫**：扫描时 `snapshot(root)` 记录 `{rel: (mtime_ns, size)}`，更新前 `guard()` 再比一次，
+  有变化就抛 `PackChanged`，界面提示重新扫描。忽略 `logs/`、`crash-reports/` 和 `.pulses_tmp*`。
+- 接入点：`ui_web/flow.py` 的扫描与更新（扫描结束即释放锁；更新开始重新加锁并校验快照）。
