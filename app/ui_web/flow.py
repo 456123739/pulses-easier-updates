@@ -545,6 +545,8 @@ class Flow:
             raise FlowError("请先比对")
         self.error = None
         self.report = {}
+        # 上一次「取消」可能把中止标志留在 set 状态：不清掉的话这次一开始就中止
+        self._abort.clear()
         if not self._done_paths:
             self._done_paths = set()
         self.phase = PHASE_DOWNLOAD if self.collect_tasks() else PHASE_APPLY

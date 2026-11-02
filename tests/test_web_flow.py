@@ -191,6 +191,24 @@ class WebFlowCase(unittest.TestCase):
         self.assertIsNone(flow.error)
         self.assertEqual((self.inst / "mods" / "old.jar").read_text(), "NEW")
 
+    def test_cancel_from_pause_then_apply_again(self):
+        self._scan()
+        (self.inst / "config" / "shipped.toml").write_text("tampered\n",
+                                                           encoding="utf-8")
+        self.api.invoke("update.apply", {})
+        self._wait_paused()
+        self.api.invoke("update.abort", {})
+        flow = self.ctl.flow
+        self.assertTrue(self._wait(lambda: not flow.busy()))
+        self.assertIsNone(flow.paused)
+        # 取消标志不能污染下一次更新
+        self.api.invoke("pack.scan", {})
+        self.assertTrue(self._wait(lambda: not flow.busy(), 60))
+        self.api.invoke("update.apply", {})
+        self.assertTrue(self._wait(lambda: flow.phase == "done", 60),
+                        f"再次更新没有完成：{flow.phase} {flow.error}")
+        self.assertEqual((self.inst / "mods" / "old.jar").read_text(), "NEW")
+
     def test_watch_pauses_when_file_changes_mid_apply(self):
         from app.ui_web import flow as flow_mod
 
