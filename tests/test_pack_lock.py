@@ -28,7 +28,7 @@ class LockCase(unittest.TestCase):
         lock = pl.PackLock(self.pack, "扫描").acquire()
         try:
             self.assertTrue(lock.path.is_file())
-            data = lock.path.read_text(encoding="utf-8")
+            data = lock.meta_path.read_text(encoding="utf-8")
             self.assertIn("扫描", data)
         finally:
             lock.release()

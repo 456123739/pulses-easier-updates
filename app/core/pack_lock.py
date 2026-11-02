@@ -70,29 +70,35 @@ class PackLock:
         self.root = Path(root)
         self.action = action
         self.path = lock_path_for(self.root)
+        self.meta_path = self.path.with_suffix(".json")
         self._fh = None
 
     # ---- 生命周期 ---------------------------------------------------
     def acquire(self) -> "PackLock":
         fh = open(self.path, "a+b")
         try:
+            # Windows 的 msvcrt.locking 锁的是字节范围，空文件也能锁，
+            # 但先补一个字节更稳（各家实现对这个边界不一致）。
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() == 0:
+                fh.write(b"\0")
+                fh.flush()
             _lock_file(fh)
         except OSError:
-            owner = _read_owner(self.path)
+            owner = _read_owner(self.meta_path)
             fh.close()
             raise PackBusy(
                 f"这个整合包正在被另一个窗口{owner or '使用'}", ) from None
         self._fh = fh
+        # 元数据写在**另一个**文件里：锁住的字节范围在不同进程/句柄下
+        # 连读都会被拒绝（Windows 的字节锁就是这么工作的）。
         try:
-            fh.seek(0)
-            fh.truncate()
-            fh.write(json.dumps({
+            self.meta_path.write_text(json.dumps({
                 "pid": os.getpid(),
                 "action": self.action,
                 "root": str(self.root),
                 "since": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }, ensure_ascii=False).encode("utf-8"))
-            fh.flush()
+            }, ensure_ascii=False), encoding="utf-8")
         except OSError:
             pass
         return self
@@ -107,6 +113,10 @@ class PackLock:
             pass
         try:
             fh.close()
+        except OSError:
+            pass
+        try:
+            self.meta_path.unlink()
         except OSError:
             pass
 
