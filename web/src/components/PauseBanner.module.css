@@ -1,0 +1,39 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-color: rgba(207, 145, 130, 0.28);
+}
+
+.bar {
+  width: 3px;
+  align-self: stretch;
+  border-radius: 3px;
+  background: #cf9182;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 560;
+  color: #e8e6e2;
+}
+
+.sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--c-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}

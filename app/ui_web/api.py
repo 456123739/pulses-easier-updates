@@ -108,6 +108,10 @@ class Api:
                 p.get("strategies") or {}, p.get("checked") or {}),
             "update.apply": lambda p: self.controller.flow.start_apply(),
             "update.abort": lambda p: self.controller.flow.abort(),
+            "update.pause.resume":
+                lambda p: self.controller.flow.resume_pause(),
+            "update.pause.rescan":
+                lambda p: self.controller.flow.rescan_pause(),
             "update.retry": lambda p: self.controller.flow.retry(p.get("path", "")),
             "update.giveup": lambda p: self.controller.flow.give_up(),
             "update.strategy.set": lambda p: self.controller.flow.set_strategy(

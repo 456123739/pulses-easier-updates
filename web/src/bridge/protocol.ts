@@ -87,6 +87,7 @@ export interface FlowSnapshot {
   error: string | null;
   changelog: boolean;
   resume?: { update: string; completed: number; total: number } | null;
+  paused?: { stage: string; count: number; files: string[] } | null;
 }
 
 export interface DevStrategy {

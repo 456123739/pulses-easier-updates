@@ -13,6 +13,7 @@ import LogPanel from './LogPanel'
 import MainButton from './MainButton'
 import SlotPanel from './SlotPanel'
 import PendingBanner from './PendingBanner'
+import PauseBanner from './PauseBanner'
 import styles from './PlayerView.module.css'
 
 export default function PlayerView() {
@@ -48,6 +49,7 @@ export default function PlayerView() {
   const phase = usePlayer((s) => s.phase)
   const groups = usePlayer((s) => s.groups)
   const indexPercent = usePlayer((s) => s.indexPercent)
+  const paused = usePlayer((s) => s.paused)
   const slotsOpen = usePlayer((s) => s.slotsOpen)
   const pendingCount = usePlayer((s) => s.pendingCount)
   const pendingMode = usePlayer((s) => s.pendingMode)
@@ -138,6 +140,20 @@ export default function PlayerView() {
 
       <section className={styles.right}>
         <div className={styles.treeArea}>
+          <AnimatePresence initial={false}>
+            {paused ? (
+              <motion.div
+                key="paused"
+                className={styles.pendingSlot}
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ type: 'spring', stiffness: 320, damping: 30 }}
+              >
+                <PauseBanner />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
           <AnimatePresence mode="wait" initial={false}>
             {pendingCount > 0 && pendingMode ? (
               <motion.div

@@ -671,6 +671,7 @@ def execute_plan(
     batch_pause_ms: float = BATCH_PAUSE_MS,
     space_check: bool = True,
     should_abort=None,
+    on_step: Callable[[str], None] | None = None,
 ) -> dict:
     """
     按计划执行更新。
@@ -695,6 +696,14 @@ def execute_plan(
     def _prog(done: int, total: int):
         if progress:
             progress(done, total)
+
+    def _step(rel: str):
+        # 让调用方知道"这个目标已经归 Easier 处理完"，看门狗据此排除自己
+        if on_step:
+            try:
+                on_step(rel)
+            except Exception:      # noqa: BLE001  看门狗出错不能影响更新
+                pass
 
     report: dict = {
         "applied": 0,
@@ -759,12 +768,14 @@ def execute_plan(
                 report["bytes"] += res.bytes_copied
             return ok
 
+        _done_dir = rel.as_posix() + "/"
         if _retry_once(_one, _log, f"替换目录 {rel.as_posix()}"):
             report["applied"] += 1
             report["smart_skipped"] += len(skip_set)
         else:
             report["failed"].append(
                 {"rel": rel.as_posix(), "error": "目录操作失败"})
+        _step(_done_dir)
         step += weights.get(rel.as_posix(), 1)
         _prog(step, total_steps)
 
@@ -827,6 +838,7 @@ def execute_plan(
         else:
             report["failed"].append(
                 {"rel": key, "error": "写入失败（已重试 1 次）"})
+        _step(key)
         copied = report["bytes"] - before_bytes
         step += 1
         _prog(step, total_steps)
@@ -862,6 +874,7 @@ def execute_plan(
         else:
             report["failed"].append(
                 {"rel": rel.as_posix(), "error": "删除失败（已重试 1 次）"})
+        _step(rel.as_posix())
         step += 1
         _prog(step, total_steps)
 

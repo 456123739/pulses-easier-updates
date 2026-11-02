@@ -131,18 +131,94 @@ class WebFlowCase(unittest.TestCase):
         finally:
             lock.release()
 
-    def test_apply_aborts_when_pack_changed_after_scan(self):
+    # ------------------------------------------------------------------
+    # 外部改动 → 暂停（而不是直接报错作废）
+    # ------------------------------------------------------------------
+    def _wait(self, cond, timeout=20.0) -> bool:
+        import time as _t
+        end = _t.monotonic() + timeout
+        while _t.monotonic() < end:
+            if cond():
+                return True
+            _t.sleep(0.05)
+        return False
+
+    def _wait_paused(self) -> dict:
+        flow = self.ctl.flow
+        ok = self._wait(lambda: flow.paused is not None or not flow.busy())
+        self.assertTrue(ok, "没有进入暂停，也没有结束")
+        self.assertIsNotNone(flow.paused, "期望暂停，实际直接结束了")
+        return flow.paused
+
+    def test_apply_pauses_when_pack_changed_after_scan(self):
         self._scan()
         target = self.inst / "config" / "shipped.toml"
         target.write_text('tampered = true\n', encoding="utf-8")
         self.api.invoke("update.apply", {})
-        self.ctl.flow._thread.join(120)
-        snap = self.ctl.flow.snapshot()
-        self.assertIn("扫描之后整合包被修改", snap["error"] or "")
-        # 计划作废：一个文件都不该被应用
+        paused = self._wait_paused()
+        self.assertEqual(paused["stage"], "start")
+        self.assertIn("config/shipped.toml", paused["files"])
+        # 暂停期间一个文件都不该被改动
         self.assertEqual((self.inst / "mods" / "old.jar").read_text(), "OLD")
         self.assertEqual(target.read_text(encoding="utf-8"),
                          'tampered = true\n')
+
+    def test_pause_then_rescan_rebuilds_plan(self):
+        self._scan()
+        target = self.inst / "config" / "shipped.toml"
+        target.write_text('tampered = true\n', encoding="utf-8")
+        self.api.invoke("update.apply", {})
+        self._wait_paused()
+        self.api.invoke("update.pause.rescan", {})
+        flow = self.ctl.flow
+        self.assertTrue(self._wait(lambda: not flow.busy()))
+        snap = flow.snapshot()
+        self.assertIsNone(snap["paused"])
+        self.assertIsNone(snap["error"])
+        # 重新扫描后：被改过的文件仍在计划里，别的文件仍是旧内容
+        self.assertEqual((self.inst / "mods" / "old.jar").read_text(), "OLD")
+
+    def test_pause_then_resume_applies_anyway(self):
+        self._scan()
+        target = self.inst / "config" / "shipped.toml"
+        target.write_text('tampered = true\n', encoding="utf-8")
+        self.api.invoke("update.apply", {})
+        paused = self._wait_paused()
+        self.assertGreaterEqual(paused["count"], 1)
+        self.api.invoke("update.pause.resume", {})
+        flow = self.ctl.flow
+        self.assertTrue(self._wait(lambda: not flow.busy(), 60))
+        self.assertIsNone(flow.error)
+        self.assertEqual((self.inst / "mods" / "old.jar").read_text(), "NEW")
+
+    def test_watch_pauses_when_file_changes_mid_apply(self):
+        from app.ui_web import flow as flow_mod
+
+        self._scan()
+        real = flow_mod.execute_plan
+        inst = self.inst
+        flow = self.ctl.flow
+
+        def fake_execute(plan, root, **kw):
+            # 模拟"另一个程序"在应用开始后改文件：把所有目标都动一遍，
+            # 还没被 Easier 处理到的那些会在下一次轮询里被发现。
+            for rel in list(plan.copy):
+                path = inst / rel
+                if path.is_file():
+                    path.write_bytes(path.read_bytes() + b"x")
+            flow._last_poll = 0.0
+            return real(plan, root, **kw)
+
+        flow_mod.execute_plan = fake_execute
+        try:
+            self.api.invoke("update.apply", {})
+            paused = self._wait_paused()
+            self.assertEqual(paused["stage"], "apply")
+            self.assertTrue(paused["files"])
+            self.api.invoke("update.pause.resume", {})
+            self.assertTrue(self._wait(lambda: not flow.busy(), 60))
+        finally:
+            flow_mod.execute_plan = real
 
     def test_apply_updates_files_and_keeps_player_data(self):
         self._scan()

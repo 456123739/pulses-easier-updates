@@ -30,7 +30,7 @@ from ..core import config_exclude
 from ..core import recover as recover_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
-from ..core import pack_lock
+from ..core import pack_lock, pack_watch
 from ..core.apply_rules import is_checked as _rule_is_checked
 from ..core.apply_rules import resolve_strategy, will_skip
 from ..core.differ import DiffResult, diff_from_manifest, diff_packs_parallel
@@ -136,6 +136,12 @@ class Flow:
         self._snapshot: dict[str, tuple[int, int]] | None = None
         self._thread: threading.Thread | None = None
         self._abort = threading.Event()
+        # 更新途中检测到外部改动 → 暂停，等玩家选「继续 / 重新扫描」
+        self.paused: dict | None = None
+        self._pause_done = threading.Event()
+        self._pause_choice = "continue"
+        self._rescan_pending = False
+        self._last_poll = 0.0
         self._resume_pending = False
         self._done_paths: set[str] = set()
 
@@ -162,6 +168,7 @@ class Flow:
                 "error": self.error,
                 "changelog": bool(self.changelog),
                 "resume": self.resume_info(),
+                "paused": dict(self.paused) if self.paused else None,
             }
 
     def strategy_rows(self) -> list[dict]:
@@ -558,9 +565,16 @@ class Flow:
             if root is not None and self._snapshot is not None:
                 changed = pack_lock.guard(self._snapshot, root)
                 if changed:
-                    raise pack_lock.PackChanged(
-                        "扫描之后整合包被修改过（" +
-                        pack_lock.describe(changed) + "），请重新扫描后再更新")
+                    choice = self._pause_for(changed, "start")
+                    if choice == "abort":
+                        self.phase = PHASE_IDLE
+                        return
+                    if choice == "rescan":
+                        self._rescan_pending = True
+                        self.phase = PHASE_IDLE
+                        return
+                    # 继续：把当前状态当成新基线
+                    self._snapshot = pack_lock.snapshot(root)
             tasks = self.tasks
             cache = self.controller.cache_root()
             if tasks:
@@ -594,11 +608,29 @@ class Flow:
             source = PlanSource(src_layers)
             plan = build_plan(self.diff, self.checked, self.strategies,
                               old_root=self.pack_root, source=source)
+            watch = pack_watch.watch_for_plan(self.pack_root, plan)
+            self._last_poll = time.monotonic()
+
+            def _on_step(rel: str) -> None:
+                watch.mark_done(rel)
+                self._watch_tick(watch)
+
+            def _on_progress(done: int, total: int) -> None:
+                self.bus.progress("apply", f"应用 {done}/{total}",
+                                  done / max(1, total))
+                self._watch_tick(watch)
+
             report = execute_plan(
                 plan, self.pack_root, source=source,
                 log=lambda level, msg: self.bus.log(msg, level.upper()),
-                progress=lambda done, total: self.bus.progress(
-                    "apply", f"应用 {done}/{total}", done / max(1, total)))
+                progress=_on_progress, on_step=_on_step,
+                should_abort=self._abort.is_set)
+            if self._abort.is_set():
+                self.phase = PHASE_IDLE
+                self._abort.clear()
+                self.bus.log("更新已中止", "WARNING")
+                self.controller.push_state()
+                return
             failed = verify_after_update(plan, self.pack_root)
             self.report = {"applied": report.get("applied", 0),
                            "deleted": report.get("deleted", 0),
@@ -620,8 +652,12 @@ class Flow:
             self.error = str(exc)
             self.bus.log(f"更新失败：{exc}", "ERROR")
         finally:
+            self.paused = None
             self._release_lock()
             self.controller.push_state()
+            if self._rescan_pending:
+                self._rescan_pending = False
+                self.start_scan()
 
     # ------------------------------------------------------------------
     # 续传
@@ -796,6 +832,66 @@ class Flow:
         self.bus.log(f"已导入策略配置（{applied} 项）", "SUCCESS")
         self.controller.push_state()
         return self.snapshot()
+
+    # ------------------------------------------------------------------
+    # 外部改动 → 暂停
+    # ------------------------------------------------------------------
+    def _pause_for(self, changed: list[str], stage: str) -> str:
+        """停下等玩家选：返回 continue / rescan / abort。"""
+        self._pause_done.clear()
+        self._pause_choice = "continue"
+        self.paused = {"stage": stage, "count": len(changed),
+                       "files": list(changed)[:20]}
+        self.bus.log("检测到整合包被外部修改（" +
+                     pack_watch.describe(changed) + "），更新已暂停", "WARNING")
+        self.controller.push_state()
+        while not self._pause_done.wait(0.2):
+            if self._abort.is_set():
+                self.paused = None
+                self.controller.push_state()
+                return "abort"
+        choice = self._pause_choice or "continue"
+        self.paused = None
+        self.controller.push_state()
+        return choice
+
+    def _watch_tick(self, watch) -> None:
+        """节流后的轮询：只盯计划里还没动手的目标。"""
+        now = time.monotonic()
+        if now - self._last_poll < 0.8:
+            return
+        self._last_poll = now
+        if not watch:
+            return
+        changed = watch.poll()
+        if not changed:
+            return
+        choice = self._pause_for(changed, "apply")
+        if choice == "continue":
+            watch.rebase(changed)
+            return
+        # 重新扫描 / 中止：让 execute_plan 在下一个安全点停下
+        if choice == "rescan":
+            self._rescan_pending = True
+        self._abort.set()
+
+    def resume_pause(self) -> dict:
+        """玩家点「继续更新」：接受当前状态，接着往下做。"""
+        if not self.paused:
+            return {"ok": False}
+        self._pause_choice = "continue"
+        self._pause_done.set()
+        self.bus.log("已选择继续更新（外部改动保留会被更新覆盖）", "INFO")
+        return {"ok": True}
+
+    def rescan_pause(self) -> dict:
+        """玩家点「重新扫描」：放弃当前计划，重新比对。"""
+        if not self.paused:
+            return {"ok": False}
+        self._pause_choice = "rescan"
+        self._pause_done.set()
+        self.bus.log("已选择重新扫描", "WARNING")
+        return {"ok": True}
 
     def abort(self) -> dict:
         self._abort.set()

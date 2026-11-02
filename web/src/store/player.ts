@@ -53,6 +53,7 @@ interface PlayerStore {
   slotsOpen: boolean
   pendingCount: number
   pendingMode: 'wait' | 'complete' | null
+  paused: { stage: string; count: number; files: string[] } | null
   updatePack: { name: string; size: number } | null
   placeholder: string
 
@@ -183,6 +184,7 @@ export const usePlayer = create<PlayerStore>((set, get) => ({
   slotsOpen: false,
   pendingCount: 0,
   pendingMode: null,
+  paused: null,
   updatePack: { name: 'Pulses-Easier-0.9.2-2026.10.22.zip', size: 128_400_000 },
   placeholder: '请先在侧边栏定位整合包，再拖入更新包',
 
@@ -267,6 +269,7 @@ export const usePlayer = create<PlayerStore>((set, get) => ({
           : null,
         pendingCount: flow.pending.length,
         pendingMode: flow.pending.length ? 'wait' : null,
+        paused: flow.paused ?? null,
       }
     }),
   pushLog: (text, level = 'info') =>

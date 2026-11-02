@@ -433,6 +433,30 @@ async function basicSuite() {
   check(dev?.phase === 'done' && dev?.outPath === outFile,
         '开发者完成态（快照）', JSON.stringify({ phase: dev?.phase, out: dev?.outPath }))
 
+  // ---- 暂停（收尾用例）：扫描之后被外部改动 ----
+  await clickText('玩家', { exact: true })
+  check(await waitBody(/更新策略/), '切回玩家视图')
+  await call('pack.scan', {}, '重新扫描（暂停用例准备）')
+  await waitScanDone()
+  const jarBefore = readFileSync(join(fixture.pack, 'mods/old.jar'), 'utf8')
+  writeFileSync(join(fixture.pack, 'config/shipped.toml'), 'tampered = true\n')
+  await call('update.apply', {}, '开始更新（此时磁盘已被改过）')
+  const pausedShown = await waitFor(async () =>
+    /更新已暂停/.test(await bodyText()), 30000)
+  check(!!pausedShown, '检测到外部改动后暂停并提示')
+  const pausedSnap = await flowState()
+  check(pausedSnap?.paused?.stage === 'start' &&
+        (pausedSnap?.paused?.count ?? 0) >= 1, '暂停状态带原因与文件',
+        JSON.stringify(pausedSnap?.paused))
+  check(readFileSync(join(fixture.pack, 'mods/old.jar'), 'utf8') === jarBefore,
+        '暂停期间没有改动任何文件')
+  await clickText('继续更新', { exact: true })
+  const resumed = await waitFor(async () =>
+    /更新完成/.test(await bodyText()), 120000)
+  check(!!resumed, '选择继续后更新完成')
+  const afterPause = await flowState()
+  check((afterPause?.paused ?? null) === null, '完成后暂停条消失')
+  check((await flowState())?.phase === 'done', '继续后流程走到完成态')
 }
 
 // ----------------------------------------------------------------------
