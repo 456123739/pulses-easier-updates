@@ -113,7 +113,8 @@ class GuardCase(unittest.TestCase):
 
     def test_detects_modify_add_delete(self):
         snap = pl.snapshot(self.pack)
-        (self.pack / "mods" / "a.jar").write_bytes(b"B" * 10)
+        # 大小也一起变：Windows 上同一时间片内的改动 mtime 可能不变
+        (self.pack / "mods" / "a.jar").write_bytes(b"B" * 11)
         (self.pack / "mods" / "new.jar").write_bytes(b"N")
         (self.pack / "config" / "x.toml").unlink()
         changed = pl.guard(snap, self.pack)
