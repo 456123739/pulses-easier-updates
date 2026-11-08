@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { invoke, pickPath } from '@/bridge'
-import type { AppState, DevRuleGroup, DevRuleNode, DevSnapshot, DevStrategy } from '@/bridge/protocol'
+import type { AppState, DevSnapshot, DevStrategy } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
+import { useUi } from '@/store/ui'
 import DropZone from './DropZone'
 import Icon from './Icon'
 import styles from './DeveloperView.module.css'
@@ -44,64 +45,24 @@ function fmtBytes(bytes: number | undefined): string {
   return `${size.toFixed(digits)} ${units[index] ?? 'TB'}`
 }
 
-interface RuleRowProps {
-  node: DevRuleNode
-  child?: boolean
-  count?: number
-  pending?: boolean
-  disabled?: boolean
-  onToggle: (key: string, value: boolean) => void
-}
-
-function RuleRow({ node, child = false, count, pending = false, disabled = false, onToggle }: RuleRowProps) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={node.checked}
-      className={styles.rule}
-      data-child={child}
-      data-pending={pending}
-      disabled={disabled}
-      onClick={() => onToggle(node.key, !node.checked)}
-    >
-      <span className={styles.check} data-on={node.checked} aria-hidden />
-      <span className={styles.ruleTitle}>{node.title}</span>
-      {!child && count !== undefined && <span className={styles.ruleCount}>{fmtInt(count)} 个</span>}
-    </button>
-  )
-}
-
 export default function DeveloperView() {
   const dev = useApp((s) => s.state?.dev)
   const connected = useApp((s) => s.connected)
   const pushToast = useApp((s) => s.pushToast)
   const patchState = useApp((s) => s.patchState)
   const setState = useApp((s) => s.setState)
-  const [changelog, setChangelog] = useState('')
+  const openSheet = useUi((s) => s.openSheet)
   const [outName, setOutName] = useState('')
   const [outPath, setOutPath] = useState('')
-  const [cfKey, setCfKey] = useState('')
-  const [ruleBusy, setRuleBusy] = useState('')
-  const seq = useRef(0)
+  const [specialBusy, setSpecialBusy] = useState('')
 
   const instance = dev?.instance ?? null
-  const ruleOptions: DevRuleGroup[] = dev?.ruleOptions ?? []
-  const rows = instance?.rows ?? []
+  const specials = dev?.specials ?? []
   const exporting = dev?.phase === 'exporting'
   const loading = dev?.phase === 'loading'
   const pending = dev?.pending ?? null
   const mode = instance ? 'instance' : 'zip'
   const rootPath = instance?.root ?? dev?.source?.path ?? ''
-
-  // 后端是事实来源；本地只在打字时短暂领先（防抖动回写）
-  const sourceKey = dev?.source?.path ?? instance?.root ?? ''
-  useEffect(() => {
-    if (dev?.changelog !== undefined && dev.changelog !== changelog) {
-      setChangelog(dev.changelog)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey])
 
   useEffect(() => {
     if (outName) return
@@ -143,29 +104,17 @@ export default function DeveloperView() {
     }
   }
 
-  const setRule = async (key: string, value: boolean) => {
-    if (!connected || ruleBusy) return
-    setRuleBusy(key)
+  // 特殊导出内容：勾一个就重扫一次（后端 dev.rule.set），扫描期间禁用这一行
+  const setSpecial = async (key: string, value: boolean) => {
+    if (!connected || specialBusy) return
+    setSpecialBusy(key)
     try {
       const snap = await invoke<DevSnapshot>('dev.rule.set', { key, value })
       if (snap) patchState({ dev: snap })
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '保存失败', 'error')
     } finally {
-      setRuleBusy('')
-    }
-  }
-
-  const saveCfKey = async () => {
-    if (!connected) return
-    const key = cfKey.trim()
-    if (!key) return
-    try {
-      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key })
-      if (snap) patchState({ dev: snap })
-      setCfKey('')
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+      setSpecialBusy('')
     }
   }
 
@@ -176,20 +125,6 @@ export default function DeveloperView() {
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '保存失败', 'error')
     }
-  }
-
-  const onChangelog = (text: string) => {
-    setChangelog(text)
-    if (!connected) return
-    const mine = ++seq.current
-    window.setTimeout(async () => {
-      if (mine !== seq.current) return
-      try {
-        await invoke('dev.changelog.set', { text })
-      } catch {
-        /* 忽略 */
-      }
-    }, 500)
   }
 
   const setStrategy = async (name: string, value: string) => {
@@ -243,15 +178,6 @@ export default function DeveloperView() {
     }
   }
 
-  // 顶层目录在当前扫描结果里被选中的文件数（按名字对 instance.rows）
-  const topFiles = (key: string): number => {
-    const want = key.toLowerCase()
-    const exact = rows.find((r) => r.name.toLowerCase() === want)
-    if (exact) return exact.files
-    const prefixed = rows.find((r) => r.name.toLowerCase().startsWith(want))
-    return prefixed ? prefixed.files : 0
-  }
-
   const progressTotal =
     dev?.progress?.total || instance?.totals.files || 0
   const progressDone = dev?.progress?.done ?? 0
@@ -261,8 +187,13 @@ export default function DeveloperView() {
         instance.loaderVersion ? ` ${instance.loaderVersion}` : ''
       }`
     : ''
-  const checkedGroups = ruleOptions.filter((g) => g.checked).length
   const hasSource = Boolean(dev?.source || instance)
+
+  // 更新日志按钮上的摘要：第一行有效内容 + 字数
+  const changelogText = (dev?.changelog ?? '').trim()
+  const changelogSummary = changelogText
+    ? `${changelogText.split('\n').find((line) => line.trim() && !line.trim().startsWith('#'))?.replace(/^[-*]\s*/, '') ?? '已写内容'} · ${changelogText.replace(/\s/g, '').length} 字`
+    : '还没写 · 点开编写（所见即所得）'
 
   return (
     <div className={styles.page} data-mode={mode}>
@@ -348,45 +279,6 @@ export default function DeveloperView() {
                 </span>
               )}
             </p>
-          </div>
-        )}
-
-        {instance && (
-          <div className={`${styles.surface} ${styles.panel}`}>
-            <div className={styles.panelHead}>
-              <span className="t-title">导出内容</span>
-              <span className="t-small">
-                已选 {checkedGroups} / {ruleOptions.length} 组
-              </span>
-            </div>
-            <div className={`${styles.rules} scroll`}>
-              {ruleOptions.map((group) => (
-                <div key={group.key} className={styles.ruleGroup}>
-                  <RuleRow
-                    node={group}
-                    count={topFiles(group.key)}
-                    pending={ruleBusy === group.key}
-                    disabled={!connected || exporting || Boolean(ruleBusy)}
-                    onToggle={setRule}
-                  />
-                  {group.children.map((child) => (
-                    <RuleRow
-                      key={child.key}
-                      node={child}
-                      child
-                      pending={ruleBusy === child.key}
-                      disabled={!connected || exporting || Boolean(ruleBusy)}
-                      onToggle={setRule}
-                    />
-                  ))}
-                </div>
-              ))}
-              {!ruleOptions.length && (
-                <span className="t-small" style={{ padding: '14px 2px' }}>
-                  选择目录后，这里会列出可以导出的内容。
-                </span>
-              )}
-            </div>
           </div>
         )}
 
@@ -494,50 +386,40 @@ export default function DeveloperView() {
       </section>
 
       <section className={styles.right}>
-        {instance && (
+        {specials.length > 0 && (
           <div className={`${styles.surface} ${styles.panel}`}>
             <div className={styles.panelHead}>
-              <span className="t-title">CurseForge API Key</span>
-              {dev?.hasCfKey && <span className={styles.saved}>已保存</span>}
+              <span className="t-title">特殊导出选项</span>
+              <span className="t-small">扫到才出现 · 默认不带</span>
             </div>
-            <div className={styles.keyRow}>
-              <input
-                className="input"
-                value={cfKey}
-                onChange={(e) => setCfKey(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void saveCfKey()
-                }}
-                placeholder={dev?.hasCfKey ? '已保存，重新填写可替换' : '粘贴 API Key'}
-                spellCheck={false}
-                autoComplete="off"
-                style={{ flex: 1, minWidth: 0 }}
-              />
-              <button
-                className="btn"
-                onClick={() => void saveCfKey()}
-                disabled={!connected || !cfKey.trim()}
-              >
-                保存
-              </button>
+            <div className={`${styles.opts} scroll`}>
+              {specials.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={styles.opt}
+                  data-on={item.checked}
+                  title={item.sample.join('\n')}
+                  onClick={() => void setSpecial(item.key, !item.checked)}
+                  disabled={!connected || exporting || Boolean(specialBusy)}
+                >
+                  <span className={styles.switch} data-on={item.checked}>
+                    <span className={styles.knob} />
+                  </span>
+                  <span className={styles.optText}>
+                    <span className={styles.optLabel}>
+                      {item.title}
+                      <span className={styles.optCount}>
+                        {fmtInt(item.files)} 个 · {fmtBytes(item.bytes)}
+                      </span>
+                    </span>
+                    <span className={styles.optDesc}>{item.desc}</span>
+                  </span>
+                </button>
+              ))}
             </div>
-            <p className={styles.note}>仅保存在本机，用于查模组直链；不填则只走 Modrinth</p>
           </div>
         )}
-
-        <div className={`${styles.surface} ${styles.panel} ${styles.changelogPanel}`}>
-          <div className={styles.panelHead}>
-            <span className="t-title">更新日志</span>
-            <span className={styles.count}>{changelog.length} 字</span>
-          </div>
-          <textarea
-            className={`input selectable ${styles.editor}`}
-            value={changelog}
-            onChange={(e) => onChangelog(e.target.value)}
-            placeholder="写点给玩家看的内容：新增了什么、修了什么、要注意什么。支持 Markdown。"
-            spellCheck={false}
-          />
-        </div>
 
         <div className={`${styles.surface} ${styles.panel}`}>
           <div className={styles.panelHead}>
@@ -566,6 +448,20 @@ export default function DeveloperView() {
             })}
           </div>
         </div>
+
+        <button
+          type="button"
+          className={`${styles.surface} ${styles.changelogButton}`}
+          onClick={() => openSheet('changelog-editor')}
+          disabled={!connected || exporting || loading}
+          aria-label="编写更新日志"
+        >
+          <span className={styles.changelogText}>
+            <span className={styles.changelogTitle}>更新日志</span>
+            <span className={styles.changelogSub}>{changelogSummary}</span>
+          </span>
+          <span className={styles.changelogGo}>编写 ›</span>
+        </button>
       </section>
     </div>
   )

@@ -106,3 +106,29 @@ textarea:focus {
 img {
   -webkit-user-drag: none;
 }
+
+/* ---- Markdown 渲染（更新日志抽屉 / 编辑器预览共用） ---- */
+.md-preview .md-li {
+  display: flex;
+  gap: 8px;
+}
+
+.md-preview .md-quote {
+  border-left: 2px solid var(--hairline-strong);
+  padding: 2px 0 2px 10px;
+  color: var(--c-text-2);
+  font-size: var(--fs-body);
+}
+
+.md-preview .md-code {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--c-log);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--c-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -9,7 +9,7 @@
 // 用法：node scripts/dev/e2e_ui.mjs <bridgeUrl> <workdir> [basic|download]
 // 依赖从 web/node_modules 解析（本脚本不在 web/ 下，直接 import 'playwright' 找不到）。
 import { createRequire } from 'node:module'
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
@@ -417,28 +417,75 @@ async function basicSuite() {
   dev = await devState()
   check(dev?.mode === 'zip' && Boolean(dev?.source), '拒绝后来源没丢',
         JSON.stringify({ mode: dev?.mode, source: dev?.source }))
+  // 导出内容面板已经去掉：顶层目录交给「更新范围」自己表达
+  check(!(await bodyText()).includes('导出内容'), '「导出内容」面板已移除')
+
+  // ---- 特殊导出选项：扫到才出现，默认一个都不勾 ----
+  mkdirSync(join(fixture.pack, 'screenshots'), { recursive: true })
+  writeFileSync(join(fixture.pack, 'optionsof.txt'), 'fov:90\n')
+  writeFileSync(join(fixture.pack, 'mods', 'extra.jar.disabled'), 'DISABLED')
+  writeFileSync(join(fixture.pack, 'screenshots', 'shot.png'), 'PNG')
+  await setPicks([fixture.pack])
+  await clickText('开发者端整合包定位', { exact: true })
+  dev = await waitDevIdle()
+  const specialKeys = (dev?.specials ?? []).map((x) => x.key)
+  check(['optifine', 'mods-disabled', 'screenshots'].every((k) => specialKeys.includes(k)),
+        '特殊导出选项只列出扫到的内容', JSON.stringify(specialKeys))
+  check((dev?.specials ?? []).every((x) => x.checked === false),
+        '特殊导出选项默认都不勾', JSON.stringify((dev?.specials ?? []).map((x) => [x.key, x.checked])))
+  check(await waitBody(/特殊导出选项/), '右栏出现「特殊导出选项」')
+  check(!(dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
+        '没勾之前它不该混进更新范围')
+
+  // 勾上 → 重扫后 optionsof.txt 出现在更新范围；再关掉恢复原样
+  const waitDev = (fn) => waitFor(async () => {
+    const d = await devState()
+    return d && fn(d) ? d : null
+  }, 60000)
+  await clickText('OptiFine 画质设置')
+  dev = await waitDev((d) => (d.specials ?? []).find((x) => x.key === 'optifine')?.checked === true)
+  check(!!dev, '勾选特殊选项后状态回写')
+  check((dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
+        '勾选后文件进入更新范围', JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
+  await clickText('OptiFine 画质设置')
+  dev = await waitDev((d) => (d.specials ?? []).find((x) => x.key === 'optifine')?.checked === false)
+  check(!!dev && !(dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
+        '取消后文件退出更新范围')
+
   // 排除 config（点目录名）—— 快照到了不代表行已经画出来
   await waitRow('config')
   await clickRowName('config')
-  dev = await devState()
-  check((dev?.strategies ?? []).find((r) => r.name === 'config')?.excluded === true,
-        '目录可被排除（config）')
+  dev = await waitDev((d) => (d.strategies ?? []).find((r) => r.name === 'config')?.excluded === true)
+  check(!!dev, '目录可被排除（config）')
   // 改策略
   await waitRow('mods')
   await clickRowChip('mods', '替换重名')
-  dev = await devState()
-  check((dev?.strategies ?? []).find((r) => r.name === 'mods')?.current === '替换重名',
-        '开发者策略可改（mods → 替换重名）')
+  dev = await waitDev((d) => (d.strategies ?? []).find((r) => r.name === 'mods')?.current === '替换重名')
+  check(!!dev, '开发者策略可改（mods → 替换重名）')
   // 导出选项
   await clickText('压缩到最小体积')
-  dev = await devState()
-  check(dev?.options?.min_size === true, '导出选项可切换（min_size）')
-  // 更新日志
-  const changelog = '# 导出夹具\n\n- 开发者端\n'
-  await page.locator('textarea').first().fill(changelog)
-  await sleep(1200)                       // 视图里有 500ms 防抖
-  dev = await devState()
-  check(dev?.changelog === changelog, '更新日志写回后端', JSON.stringify(dev?.changelog))
+  dev = await waitDev((d) => d.options?.min_size === true)
+  check(!!dev, '导出选项可切换（min_size）')
+
+  // ---- 更新日志：长按钮 → 独立窗口，所见即所得 ----
+  await clickText('编写更新日志', { exact: true })
+  check(await waitBody(/所见即所得/), '更新日志编辑器打开')
+  await page.locator('[contenteditable="true"]').first().click()
+  await page.keyboard.type('导出夹具')
+  await page.keyboard.press('Enter')
+  await clickText('无序列表', { exact: true })        // 工具栏：无序列表
+  await page.keyboard.type('开发者端')
+  await sleep(300)
+  await clickText('预览', { exact: true })
+  check(await waitBody(/导出夹具/), '预览里能看到刚写的内容')
+  await clickText('Markdown', { exact: true })
+  const md = await page.locator('textarea').last().inputValue()
+  check(md.includes('导出夹具') && md.includes('开发者端'),
+        'Markdown 原文同步（两种视图同一份内容）', md)
+  await clickText('完成', { exact: true })
+  const changelog = md
+  dev = await waitDev((d) => (d.changelog ?? '').includes('导出夹具'))
+  check(!!dev, '更新日志写回后端', JSON.stringify(dev?.changelog))
   // 输出位置（走 pick_path 的 save 分支）+ 开始制作
   const outFile = join(work, 'dev-out', 'E2EExport.eapack')
   await setPicks([outFile])

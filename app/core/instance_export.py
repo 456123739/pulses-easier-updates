@@ -286,6 +286,9 @@ def export_from_instance(
             "whitelist": whitelist,
             "has_changelog": bool(changelog_md and changelog_md.strip()),
             "source": "instance",
+            # 与 zip 那条导出路径保持一致：两边写出来的清单字段必须一样，
+            # 否则玩家端/校验脚本按其中一个读就会漏（历史上就是这么漏的）
+            "excluded_folders": sorted(set(excluded_tops or [])),
         }
 
         out_path.parent.mkdir(parents=True, exist_ok=True)

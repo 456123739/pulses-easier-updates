@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@/bridge'
+import type { DevSnapshot } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { useUi } from '@/store/ui'
 import Sheet from './Sheet'
@@ -36,11 +37,32 @@ export default function PreferencesSheet() {
   const raw = useApp((s) => s.state?.settings)
   const state = (raw ?? EMPTY) as Settings
   const pushToast = useApp((s) => s.pushToast)
+  const hasCfKey = useApp((s) => s.state?.dev?.hasCfKey ?? false)
+  const patchState = useApp((s) => s.patchState)
   const [draft, setDraft] = useState<Settings>(state)
+  const [cfKey, setCfKey] = useState('')
+  const [cfBusy, setCfBusy] = useState(false)
 
   useEffect(() => {
     if (open) setDraft(state)
   }, [open, state])
+
+  const saveCfKey = async () => {
+    if (!connected || cfBusy) return
+    const key = cfKey.trim()
+    if (!key) return
+    setCfBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key })
+      if (snap) patchState({ dev: snap })
+      setCfKey('')
+      pushToast('CurseForge API Key 已保存', 'info')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+    } finally {
+      setCfBusy(false)
+    }
+  }
 
   const patch = async (next: Settings) => {
     setDraft((d) => ({ ...d, ...next }))
@@ -116,7 +138,39 @@ export default function PreferencesSheet() {
           />
         </Row>
 
-        <Row label="界面" note="「自动」先试新界面、起不来自动退回旧界面；重启后生效">
+        <div className="t-small" style={{ marginTop: 4, color: 'var(--c-muted)' }}>
+          开发者端
+        </div>
+
+        <Row label="CurseForge API Key" note="仅保存在本机，用于查模组直链；不填则只走 Modrinth">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              className="input"
+              value={cfKey}
+              onChange={(e) => setCfKey(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveCfKey()
+              }}
+              placeholder={hasCfKey ? '已保存，重新填写可替换' : '粘贴 API Key'}
+              spellCheck={false}
+              autoComplete="off"
+              style={{ width: 180 }}
+            />
+            <button
+              className="btn"
+              onClick={() => void saveCfKey()}
+              disabled={!connected || !cfKey.trim() || cfBusy}
+            >
+              {hasCfKey ? '更换' : '保存'}
+            </button>
+          </div>
+        </Row>
+
+        <div className="t-small" style={{ marginTop: 4, color: 'var(--c-muted)' }}>
+          界面
+        </div>
+
+        <Row label="默认界面" note="「自动」先试新界面、起不来自动退回旧界面；重启后生效">
           <div className="seg">
             {UI_MODES.map((m) => {
               const active = (draft.ui_mode ?? 'auto') === m.id

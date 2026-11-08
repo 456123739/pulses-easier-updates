@@ -139,6 +139,17 @@ export interface DevInstance {
   rows: DevInstanceRow[];
 }
 
+export interface DevSpecial {
+  key: string;
+  title: string;
+  desc: string;
+  /** 扫到的文件数 / 字节数（只统计，用来判断值不值得勾） */
+  files: number;
+  bytes: number;
+  sample: string[];
+  checked: boolean;
+}
+
 export interface DevSnapshot {
   /** loading = 已认出是什么，正在读取（扫描/解析在后台线程） */
   phase: 'idle' | 'loading' | 'exporting' | 'done' | 'error';
@@ -148,6 +159,8 @@ export interface DevSnapshot {
   mode: 'zip' | 'instance';
   instance: DevInstance | null;
   ruleOptions: DevRuleGroup[];
+  /** 特殊导出内容：只有扫到了才出现，默认都不勾 */
+  specials: DevSpecial[];
   hasCfKey: boolean;
   source: { path: string; name: string } | null;
   name: string;

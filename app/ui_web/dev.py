@@ -16,6 +16,7 @@ from pathlib import Path
 from ..core import database as db
 from ..core import eapack as eapack_mod
 from ..core import export_rules as rules_mod
+from ..core import export_specials
 from ..core import instance_export as inst_export
 from ..core import instance_scan
 from ..core import pack_source
@@ -48,7 +49,9 @@ class DevFlow:
         self.pending: dict | None = None   # loading 时的目标（kind / path / name / note）
         self._open_seq = 0                 # 连续拖入时只让最后一次生效
         self.scan: dict | None = None
-        self.rule_keys: set[str] = rules_mod.default_keys()
+        # 特殊选项（本机数据）默认一律不导出：从默认勾选里剔掉
+        self.rule_keys: set[str] = rules_mod.default_keys() - export_specials.keys()
+        self.specials: list[dict] = []
         self.cf_key = ""
         try:
             self.cf_key = str(db.load_app_config().get("cf_api_key") or "")
@@ -95,6 +98,8 @@ class DevFlow:
                                                "checked": c.key in self.rule_keys}
                                               for c in g.children]}
                                 for g in rules_mod.DEFAULT_OPTIONS],
+                "specials": [dict(item, checked=item["key"] in self.rule_keys)
+                             for item in self.specials],
                 "hasCfKey": bool(self.cf_key),
                 "source": ({"path": str(self.source_zip),
                             "name": self.source_zip.name}
@@ -194,6 +199,7 @@ class DevFlow:
                 return                                   # 后来居上：这次结果作废
             self.mode = "zip"
             self.scan = None
+            self.specials = []
             self.source_zip = path
             self.pack = pack
             self.merged = merged
@@ -308,11 +314,13 @@ class DevFlow:
         files = [r["name"] for r in scan["rows"]
                  if r["isFile"] and r["files"]
                  and r["name"] not in NEVER_PACK_FILES]
+        specials = export_specials.detect(root)
         with self._lock:
             if seq is not None and seq != self._open_seq:
                 return                                   # 后来居上：这次结果作废
             self.mode = "instance"
             self.scan = scan
+            self.specials = specials
             self.source_zip = None
             self.pack = None
             self.merged = []
@@ -375,6 +383,7 @@ class DevFlow:
             self.pending = None
             self.mode = "zip"
             self.scan = None
+            self.specials = []
             self.source_zip = None
             self.pack = None
             self.merged = []
