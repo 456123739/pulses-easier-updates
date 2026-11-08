@@ -319,6 +319,10 @@ async function basicSuite() {
   await pref.waitFor({ state: 'visible', timeout: 15000 })
   const prefText = await pref.innerText()
   check(/界面/.test(prefText), '首选项有「界面」一栏', prefText.replace(/\n/g, ' | ').slice(0, 120))
+  // CurseForge Key 挪到这里了；端到端用 PULSES_CF_KEY="" 关掉查询，状态要如实显示
+  check(prefText.includes('CurseForge API Key'), '首选项有 CurseForge API Key')
+  check(/已禁用（环境变量/.test(prefText), 'CF Key 状态如实显示（端到端禁用）',
+        prefText.replace(/\n/g, ' | ').slice(0, 200))
   for (const label of ['自动', '旧界面', '新界面']) {
     check(prefText.includes(label), `「界面」有「${label}」选项`)
   }
@@ -469,7 +473,10 @@ async function basicSuite() {
 
   // ---- 更新日志：长按钮 → 独立窗口，所见即所得 ----
   await clickText('编写更新日志', { exact: true })
-  check(await waitBody(/所见即所得/), '更新日志编辑器打开')
+  // 判据必须是"抽屉里有可编辑正文"，不能靠文案：长按钮上本来就有「所见即所得」
+  check(await waitFor(async () =>
+    (await page.locator('[role="dialog"] [contenteditable="true"]').count()) === 1, 20000),
+    '更新日志编辑器打开')
   await page.locator('[contenteditable="true"]').first().click()
   await page.keyboard.type('导出夹具')
   await page.keyboard.press('Enter')

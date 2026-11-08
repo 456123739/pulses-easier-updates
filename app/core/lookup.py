@@ -71,8 +71,9 @@ def _call(fetch, url: str, payload: dict, headers: dict, *,
         try:
             return fetch(url, payload, headers, timeout)
         except urllib.error.HTTPError as exc:
-            if exc.code == 403:
-                raise LookupDenied(f"API 授权失败（403）：{url}") from exc
+            if exc.code in (401, 403):
+                raise LookupDenied(
+                    f"API 授权失败（{exc.code}）：{url}") from exc
             last = exc
             if exc.code not in (429, 500, 502, 503, 504):
                 raise LookupError(f"HTTP {exc.code}：{url}") from exc

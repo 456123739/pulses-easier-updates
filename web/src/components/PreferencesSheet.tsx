@@ -38,6 +38,7 @@ export default function PreferencesSheet() {
   const state = (raw ?? EMPTY) as Settings
   const pushToast = useApp((s) => s.pushToast)
   const hasCfKey = useApp((s) => s.state?.dev?.hasCfKey ?? false)
+  const cfKeySource = useApp((s) => s.state?.dev?.cfKeySource ?? 'builtin')
   const patchState = useApp((s) => s.patchState)
   const [draft, setDraft] = useState<Settings>(state)
   const [cfKey, setCfKey] = useState('')
@@ -46,6 +47,20 @@ export default function PreferencesSheet() {
   useEffect(() => {
     if (open) setDraft(state)
   }, [open, state])
+
+  const clearCfKey = async () => {
+    if (!connected) return
+    setCfBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key: '' })
+      if (snap) patchState({ dev: snap })
+      pushToast('已回到内置 Key', 'info')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '重置失败', 'error')
+    } finally {
+      setCfBusy(false)
+    }
+  }
 
   const saveCfKey = async () => {
     if (!connected || cfBusy) return
@@ -142,27 +157,45 @@ export default function PreferencesSheet() {
           开发者端
         </div>
 
-        <Row label="CurseForge API Key" note="仅保存在本机，用于查模组直链；不填则只走 Modrinth">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              className="input"
-              value={cfKey}
-              onChange={(e) => setCfKey(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void saveCfKey()
-              }}
-              placeholder={hasCfKey ? '已保存，重新填写可替换' : '粘贴 API Key'}
-              spellCheck={false}
-              autoComplete="off"
-              style={{ width: 180 }}
-            />
-            <button
-              className="btn"
-              onClick={() => void saveCfKey()}
-              disabled={!connected || !cfKey.trim() || cfBusy}
-            >
-              {hasCfKey ? '更换' : '保存'}
-            </button>
+        <Row label="CurseForge API Key" note="默认用 PCL 内置的那把，开箱即用；填自己的会覆盖（仅存本机）">
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                className="input"
+                value={cfKey}
+                onChange={(e) => setCfKey(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveCfKey()
+                }}
+                placeholder={hasCfKey ? '已自定义，留空保存可回到内置' : '留空即用内置'}
+                spellCheck={false}
+                autoComplete="off"
+                style={{ width: 168 }}
+              />
+              <button
+                className="btn"
+                onClick={() => void saveCfKey()}
+                disabled={!connected || !cfKey.trim() || cfBusy}
+              >
+                {hasCfKey ? '更换' : '保存'}
+              </button>
+              {hasCfKey && (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void clearCfKey()}
+                  disabled={!connected || cfBusy}
+                >
+                  用回内置
+                </button>
+              )}
+            </div>
+            <span className="t-small">
+              {cfKeySource === 'user'
+                ? '正在使用：你自己的 Key'
+                : cfKeySource === 'off'
+                  ? '已禁用（环境变量 PULSES_CF_KEY）'
+                  : '正在使用：内置（PCL 默认）'}
+            </span>
           </div>
         </Row>
 

@@ -162,6 +162,8 @@ export interface DevSnapshot {
   /** 特殊导出内容：只有扫到了才出现，默认都不勾 */
   specials: DevSpecial[];
   hasCfKey: boolean;
+  /** CurseForge Key 从哪来：内置默认 / 用户自己填的 / 被环境变量关掉 */
+  cfKeySource: 'user' | 'builtin' | 'off';
   source: { path: string; name: string } | null;
   name: string;
   version: string;

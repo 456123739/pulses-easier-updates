@@ -19,6 +19,7 @@ from ..core import export_rules as rules_mod
 from ..core import export_specials
 from ..core import instance_export as inst_export
 from ..core import instance_scan
+from ..core import cf_key
 from ..core import pack_source
 from ..config import NEVER_PACK_FILES
 from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
@@ -101,6 +102,7 @@ class DevFlow:
                 "specials": [dict(item, checked=item["key"] in self.rule_keys)
                              for item in self.specials],
                 "hasCfKey": bool(self.cf_key),
+                "cfKeySource": cf_key.source(self.cf_key),
                 "source": ({"path": str(self.source_zip),
                             "name": self.source_zip.name}
                            if self.source_zip else None),
@@ -365,6 +367,7 @@ class DevFlow:
         return self.snapshot()
 
     def set_cf_key(self, key: str) -> dict:
+        """保存用户自己的 CurseForge API Key；传空串 = 清掉，回到内置默认。"""
         self.cf_key = str(key or "").strip()
         try:
             cfg = db.load_app_config()
@@ -372,6 +375,7 @@ class DevFlow:
             db.save_app_config(cfg)
         except Exception:                                  # noqa: BLE001
             pass
+        self.controller.push_state()
         return self.snapshot()
 
     def clear(self) -> dict:
@@ -496,7 +500,7 @@ class DevFlow:
                 pack_version=self.version or "1.0.0",
                 opts=dict(self.options),
                 excluded_tops=sorted(self.excluded),
-                cf_key=self.cf_key,
+                cf_key=cf_key.resolve(self.cf_key),
                 cancel=self._cancel,
                 progress=self._progress,
                 log=lambda level, msg: self.bus.log(msg, level.upper()))
