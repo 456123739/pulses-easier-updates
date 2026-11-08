@@ -124,6 +124,9 @@ class Api:
             "update.config.import": lambda p: self.controller.flow.import_config(
                 p.get("path", "")),
             # ---- 开发者：制作更新包 ----
+            # dev.open 是界面用的唯一入口：实例目录 / 导出包都认，认出类型就返回，
+            # 扫描与解析在后台线程（见 dev.DevFlow.open）。
+            "dev.open": lambda p: self.controller.dev.open(p.get("path", "")),
             "dev.pick": lambda p: self.controller.dev.import_zip(p.get("path", "")),
             "dev.instance.pick": lambda p: self.controller.dev.import_instance(
                 p.get("path", "")),
@@ -390,6 +393,11 @@ class Api:
         except ApiError as exc:
             self.bus.dnd("error", exc.message)
             return _err(exc.code, exc.message)
+        except Exception as exc:                       # noqa: BLE001
+            # 开发者端的分类错误（例如误拖了 .eapack）走这里：要让玩家看见原因
+            message = str(exc) or "打不开这个文件"
+            self.bus.dnd("error", message)
+            return _err(getattr(exc, "code", "DROP_FAILED"), message)
         return {"ok": True, "data": {"paths": clean}}
 
 

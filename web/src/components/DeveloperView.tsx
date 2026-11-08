@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke, pickPath } from '@/bridge'
-import type { DevRuleGroup, DevRuleNode, DevSnapshot, DevStrategy } from '@/bridge/protocol'
+import type { AppState, DevRuleGroup, DevRuleNode, DevSnapshot, DevStrategy } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import DropZone from './DropZone'
 import Icon from './Icon'
@@ -27,8 +27,6 @@ const LOADERS: Record<string, string> = {
   neoforge: 'NeoForge',
   vanilla: '原版',
 }
-
-type SourceMode = 'zip' | 'instance'
 
 const fmtInt = (n: number | undefined) => (n ?? 0).toLocaleString('zh-CN')
 
@@ -79,11 +77,10 @@ export default function DeveloperView() {
   const connected = useApp((s) => s.connected)
   const pushToast = useApp((s) => s.pushToast)
   const patchState = useApp((s) => s.patchState)
+  const setState = useApp((s) => s.setState)
   const [changelog, setChangelog] = useState('')
   const [outName, setOutName] = useState('')
   const [outPath, setOutPath] = useState('')
-  // 来源是页面自己的意图：选「本地整合包目录」时后端还是 zip，直到真的选了一个目录
-  const [source, setSource] = useState<SourceMode>(dev?.mode ?? 'zip')
   const [cfKey, setCfKey] = useState('')
   const [ruleBusy, setRuleBusy] = useState('')
   const seq = useRef(0)
@@ -92,12 +89,10 @@ export default function DeveloperView() {
   const ruleOptions: DevRuleGroup[] = dev?.ruleOptions ?? []
   const rows = instance?.rows ?? []
   const exporting = dev?.phase === 'exporting'
-  const rootPath = source === 'instance' ? (instance?.root ?? '') : (dev?.source?.path ?? '')
-
-  // 后端是事实来源：它切了模式（导入 zip / 选实例 / 清空）就跟着切
-  useEffect(() => {
-    if (dev?.mode) setSource(dev.mode)
-  }, [dev?.mode])
+  const loading = dev?.phase === 'loading'
+  const pending = dev?.pending ?? null
+  const mode = instance ? 'instance' : 'zip'
+  const rootPath = instance?.root ?? dev?.source?.path ?? ''
 
   // 后端是事实来源；本地只在打字时短暂领先（防抖动回写）
   const sourceKey = dev?.source?.path ?? instance?.root ?? ''
@@ -110,30 +105,41 @@ export default function DeveloperView() {
 
   useEffect(() => {
     if (outName) return
-    const base = source === 'instance' ? instance?.name : dev?.source?.name
+    const base = instance?.name ?? dev?.source?.name
     if (!base) return
     setOutName(`${base.replace(/\.(zip|mrpack)$/i, '')}_update.eapack`)
-  }, [source, instance?.name, dev?.source?.name, outName])
+  }, [instance?.name, dev?.source?.name, outName])
 
-  const importZip = async () => {
-    if (!connected) return
+  // STEP 1 只有一个动作：把路径交给后端判断（实例目录 / 导出包都行）。
+  // 后端只做"认出是什么"就返回，扫描在后台；所以点完不会被卡住。
+  const openPath = async (path: string) => {
+    if (!connected || !path) return
     try {
-      const path = await pickPath('file', '')
-      if (path) await invoke('dev.pick', { path })
+      const res = await invoke<{ state: AppState }>('app.pick_pack', { path })
+      const next = (res as unknown as { state?: AppState }).state
+      if (next) setState(next)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : '导入失败', 'error')
+      pushToast(err instanceof Error ? err.message : '打不开这个整合包', 'error')
     }
   }
 
-  const pickInstance = async () => {
+  const openSource = async () => {
+    if (!connected) return
+    try {
+      const path = await pickPath('file', '')
+      if (path) await openPath(path)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '选择失败', 'error')
+    }
+  }
+
+  const openDir = async () => {
     if (!connected) return
     try {
       const path = await pickPath('folder', '')
-      if (!path) return
-      const snap = await invoke<DevSnapshot>('dev.instance.pick', { path })
-      if (snap) patchState({ dev: snap })
+      if (path) await openPath(path)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : '无法读取这个目录', 'error')
+      pushToast(err instanceof Error ? err.message : '选择失败', 'error')
     }
   }
 
@@ -247,7 +253,7 @@ export default function DeveloperView() {
   }
 
   const progressTotal =
-    dev?.progress?.total || (source === 'instance' ? instance?.totals.files : undefined) || 0
+    dev?.progress?.total || instance?.totals.files || 0
   const progressDone = dev?.progress?.done ?? 0
   const percent = progressTotal > 0 ? Math.min(1, progressDone / progressTotal) : null
   const loaderLabel = instance
@@ -259,109 +265,93 @@ export default function DeveloperView() {
   const hasSource = Boolean(dev?.source || instance)
 
   return (
-    <div className={styles.page} data-mode={source}>
+    <div className={styles.page} data-mode={mode}>
       <section className={styles.left}>
-        <div className={styles.sourceBar}>
-          <div className="seg">
-            {(['zip', 'instance'] as SourceMode[]).map((m) => {
-              const active = source === m
-              const label = m === 'zip' ? '启动器整合包' : '本地整合包目录'
-              return (
-                <button
-                  key={m}
-                  type="button"
-                  className={active ? `seg-item ${styles.segOn}` : 'seg-item'}
-                  data-active={active}
-                  aria-pressed={active}
-                  onClick={() => setSource(m)}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
+        <DropZone
+          step="STEP 1"
+          title={
+            loading
+              ? '识别中…'
+              : instance
+                ? instance.name
+                : dev?.source
+                  ? `导出包：${dev.source.name}`
+                  : '整合包定位'
+          }
+          subtitle={
+            loading
+              ? pending?.path ?? ''
+              : instance
+                ? `本地实例 · ${instance.root}`
+                : dev?.source
+                  ? `导出包 · ${dev.source.path}`
+                  : '整合包目录 / 整合包里的任意文件 / 启动器导出的 .zip'
+          }
+          hint={loading ? '' : hasSource ? '点击更换' : '拖入 · 或点击选择'}
+          height={96}
+          locked={exporting || loading}
+          ariaLabel="开发者端整合包定位"
+          onPick={() => void openSource()}
+        />
+
+        <div className={styles.pickRow}>
           <span className="t-small">
-            {source === 'instance' ? '直接读本地实例目录，不经过启动器导出' : '导入启动器导出的整合包'}
+            {loading
+              ? '正在读取整合包…（不挡界面，读完自动出现）'
+              : hasSource
+                ? '拖入 / 点击卡片可更换整合包'
+                : '本地实例直接选目录，不用先让启动器导出'}
           </span>
+          <button
+            className="btn btn-ghost"
+            onClick={() => void openDir()}
+            disabled={!connected || exporting || loading}
+          >
+            选择目录…
+          </button>
         </div>
 
-        {source === 'zip' ? (
-          <DropZone
-            step="STEP 1"
-            title={dev?.source ? `导出包：${dev.source.name}` : '拖入整合包，开始制作更新包'}
-            subtitle={
-              dev?.source
-                ? `${dev.files} 个文件 · ${dev.version || '未标注版本'}`
-                : '支持整合包根目录 / 版本目录'
-            }
-            hint={dev?.source ? '' : '或点击选择'}
-            height={92}
-            onPick={importZip}
-          />
-        ) : (
+        {instance && (
           <div className={`${styles.surface} ${styles.panel} ${styles.instance}`}>
-            <div className={styles.instHead}>
-              <span className={styles.instIcon}>
-                <Icon name="folder" size={15} />
-              </span>
-              <div className={styles.instText}>
-                <span className={styles.instName}>{instance ? instance.name : '选择本地整合包目录'}</span>
-                <span className={styles.instPath} title={instance?.root ?? ''}>
-                  {instance ? instance.root : '实例根目录，需要包含 mods/ 与 config/'}
-                </span>
+            <div className={styles.meta}>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>MC 版本</span>
+                <span className={styles.metaValue}>{instance.minecraft || '未识别'}</span>
               </div>
-              <button
-                className="btn"
-                onClick={() => void pickInstance()}
-                disabled={!connected || exporting}
-              >
-                {instance ? '更换目录' : '选择目录'}
-              </button>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>加载器</span>
+                <span className={styles.metaValue}>{loaderLabel || '未识别'}</span>
+              </div>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>文件数</span>
+                <span className={styles.metaValue}>{fmtInt(instance.totals.files)}</span>
+              </div>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>总体积</span>
+                <span className={styles.metaValue}>{fmtBytes(instance.totals.bytes)}</span>
+              </div>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>候选资源</span>
+                <span className={styles.metaValue}>{fmtInt(instance.totals.candidates)}</span>
+              </div>
             </div>
-
-            {instance && (
-              <>
-                <div className={styles.meta}>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>MC 版本</span>
-                    <span className={styles.metaValue}>{instance.minecraft || '未识别'}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>加载器</span>
-                    <span className={styles.metaValue}>{loaderLabel || '未识别'}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>文件数</span>
-                    <span className={styles.metaValue}>{fmtInt(instance.totals.files)}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>总体积</span>
-                    <span className={styles.metaValue}>{fmtBytes(instance.totals.bytes)}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>候选资源</span>
-                    <span className={styles.metaValue}>{fmtInt(instance.totals.candidates)}</span>
-                  </div>
-                </div>
-                <p className={styles.note}>
-                  候选：能查到 CurseForge 或 Modrinth 直链的模组，包里只写 index、不打包本体
-              {(dev?.instance?.unsafeLinks?.length ?? 0) > 0 && (
+            <p className={styles.note}>
+              候选：能查到 CurseForge 或 Modrinth 直链的模组，包里只写 index、不打包本体
+              {(instance.unsafeLinks?.length ?? 0) > 0 && (
                 <span className={styles.warnLine}>
-                  已跳过 {dev?.instance?.unsafeLinks?.length} 个指向实例外的链接
+                  已跳过 {instance.unsafeLinks?.length} 个指向实例外的链接
                 </span>
               )}
-              {(dev?.instance?.badNames?.length ?? 0) > 0 && (
+              {(instance.badNames?.length ?? 0) > 0 && (
                 <span className={styles.warnLine}>
-                  有 {dev?.instance?.badNames?.length} 个文件名不是 UTF-8，导出会失败
+                  有 {instance.badNames?.length} 个文件名不是 UTF-8，导出会失败
                 </span>
               )}
-                </p>
-              </>
-            )}
+            </p>
           </div>
         )}
 
-        {source === 'instance' && (
+        {instance && (
           <div className={`${styles.surface} ${styles.panel}`}>
             <div className={styles.panelHead}>
               <span className="t-title">导出内容</span>
@@ -443,9 +433,7 @@ export default function DeveloperView() {
             ))}
             {!hasSource && (
               <div className="t-small" style={{ padding: '18px 4px' }}>
-                {source === 'instance'
-                  ? '选择整合包目录后，这里会列出所有顶层目录与根目录文件。'
-                  : '导入整合包后，这里会列出所有顶层目录与根目录文件。'}
+                定好整合包后，这里会列出所有顶层目录与根目录文件。
               </div>
             )}
           </div>
@@ -466,7 +454,7 @@ export default function DeveloperView() {
             className="btn btn-primary"
             style={{ height: 38, padding: '0 20px' }}
             onClick={() => void build()}
-            disabled={!rootPath || exporting}
+            disabled={!rootPath || exporting || loading}
           >
             {exporting ? '制作中…' : '开始制作更新包'}
           </button>
@@ -506,7 +494,7 @@ export default function DeveloperView() {
       </section>
 
       <section className={styles.right}>
-        {source === 'instance' && (
+        {instance && (
           <div className={`${styles.surface} ${styles.panel}`}>
             <div className={styles.panelHead}>
               <span className="t-title">CurseForge API Key</span>

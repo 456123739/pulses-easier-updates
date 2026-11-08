@@ -140,7 +140,10 @@ export interface DevInstance {
 }
 
 export interface DevSnapshot {
-  phase: 'idle' | 'exporting' | 'done' | 'error';
+  /** loading = 已认出是什么，正在读取（扫描/解析在后台线程） */
+  phase: 'idle' | 'loading' | 'exporting' | 'done' | 'error';
+  /** loading 时的目标；只有 phase=loading 才有值 */
+  pending: { kind: 'instance' | 'zip'; path: string; name: string; note?: string } | null;
   /** zip = 导入启动器导出的整合包；instance = 直接读本地实例目录 */
   mode: 'zip' | 'instance';
   instance: DevInstance | null;

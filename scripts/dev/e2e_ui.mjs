@@ -387,12 +387,36 @@ async function basicSuite() {
   // ---- G. 开发者端：导入 → 选项 → 导出 ----
   await clickText('开发者', { exact: true })
   check(await waitBody(/开始制作更新包/), '切到开发者视图')
-  await setPicks([fixture.zip])
-  await clickText('拖入整合包')
-  check(await waitBody(/更新范围/), '开发者导入整合包')
-  let dev = await devState()
+
+  // 识别在后台跑：等 phase 离开 loading，别用"标题一直在"的页面文案当判据
+  const waitDevIdle = () => waitFor(async () => {
+    const d = await devState()
+    return d && d.phase !== 'loading' ? d : null
+  }, 60000)
+
+  // STEP 1 = 整合包定位，主路径是本地实例目录（不用先让启动器导出）
+  await setPicks([fixture.pack])
+  await clickText('开发者端整合包定位', { exact: true })
+  let dev = await waitDevIdle()
+  check(dev?.mode === 'instance' && Boolean(dev?.instance?.root),
+        '开发者定位本地实例', JSON.stringify(dev?.mode))
   check((dev?.strategies ?? []).length >= 2, '开发者列出更新范围',
         JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
+
+  // 同一个入口也认启动器导出的包
+  await setPicks([fixture.zip])
+  await clickText('开发者端整合包定位', { exact: true })
+  dev = await waitDevIdle()
+  check(dev?.mode === 'zip' && dev?.source?.name === 'E2EPack.zip',
+        '导出包也认（zip）', JSON.stringify(dev?.source))
+
+  // 误拖更新包：要明确拒绝，而且不能把已有来源弄丢
+  const rejected = await invoke('dev.open', { path: fixture.update })
+  check(rejected?.ok === false && rejected?.error?.code === 'IS_UPDATE_PACK',
+        '更新包被明确拒绝', JSON.stringify(rejected?.error?.code))
+  dev = await devState()
+  check(dev?.mode === 'zip' && Boolean(dev?.source), '拒绝后来源没丢',
+        JSON.stringify({ mode: dev?.mode, source: dev?.source }))
   // 排除 config（点目录名）—— 快照到了不代表行已经画出来
   await waitRow('config')
   await clickRowName('config')

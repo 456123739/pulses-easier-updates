@@ -18,6 +18,7 @@ from ..core import eapack as eapack_mod
 from ..core import export_rules as rules_mod
 from ..core import instance_export as inst_export
 from ..core import instance_scan
+from ..core import pack_source
 from ..config import NEVER_PACK_FILES
 from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
                            parse_mrpack)
@@ -29,6 +30,12 @@ EXPORT_KEYS = ("include_hashes", "tamper_proof", "precompute_overrides",
 class DevError(RuntimeError):
     code = "DEV_ERROR"
 
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.message = message
+        if code:
+            self.code = code
+
 
 class DevFlow:
     def __init__(self, controller, bus):
@@ -36,8 +43,10 @@ class DevFlow:
         self.bus = bus
         self._lock = threading.RLock()
 
-        self.phase = "idle"           # idle | exporting | done | error
+        self.phase = "idle"           # idle | loading | exporting | done | error
         self.mode = "zip"             # zip（导入启动器整合包）| instance（本地实例）
+        self.pending: dict | None = None   # loading 时的目标（kind / path / name / note）
+        self._open_seq = 0                 # 连续拖入时只让最后一次生效
         self.scan: dict | None = None
         self.rule_keys: set[str] = rules_mod.default_keys()
         self.cf_key = ""
@@ -71,13 +80,14 @@ class DevFlow:
 
     # ------------------------------------------------------------------
     def busy(self) -> bool:
-        return self.phase == "exporting"
+        return self.phase in ("loading", "exporting")
 
     def snapshot(self) -> dict:
         with self._lock:
             return {
                 "phase": self.phase,
                 "mode": self.mode,
+                "pending": dict(self.pending) if self.pending else None,
                 "instance": self._scan_summary(),
                 "ruleOptions": [{"key": g.key, "title": g.title,
                                  "checked": g.key in self.rule_keys,
@@ -104,15 +114,72 @@ class DevFlow:
             }
 
     # ------------------------------------------------------------------
+    # 入口：统一判断 + 后台识别（界面只走这一个）
+    # ------------------------------------------------------------------
+    def open(self, raw: str) -> dict:
+        """整合包定位：实例目录 / 启动器导出包都行。
+
+        判断本身很便宜（见 `core.pack_source`），但"扫描 / 解析"是重活，
+        所以这里只做到"认出是什么"，然后立刻返回（phase=loading），
+        真正的读取交给后台线程，界面不会卡在点击上。
+        """
+        if self.phase == "exporting":
+            raise DevError("上一步还没完成，稍等一下")
+        try:
+            ref = pack_source.classify(raw)
+        except pack_source.SourceError as exc:
+            raise DevError(exc.message, code=exc.code)
+
+        with self._lock:
+            self._open_seq += 1
+            seq = self._open_seq
+            self.phase = "loading"
+            self.error = None
+            self.progress = {}
+            self.pending = {"kind": ref.kind, "path": str(ref.path),
+                            "name": ref.label, "note": ref.note}
+        snap = self.snapshot()
+        self.controller.push_state()
+        threading.Thread(target=self._open_worker, args=(seq, ref),
+                         name="dev-open", daemon=True).start()
+        return snap
+
+    def _open_worker(self, seq: int, ref: pack_source.SourceRef) -> None:
+        try:
+            if ref.kind == pack_source.KIND_INSTANCE:
+                self._load_instance(ref.root, seq=seq)
+            else:
+                self._load_zip(ref.path, seq=seq)
+        except Exception as exc:                        # noqa: BLE001
+            with self._lock:
+                if seq != self._open_seq:               # 后来居上，丢弃这次结果
+                    return
+                self.phase = "error"
+                self.error = str(exc) or "识别失败"
+                self.pending = None
+            self.bus.log(f"整合包识别失败：{self.error}", "ERROR")
+        else:
+            with self._lock:
+                if seq != self._open_seq:
+                    return
+                self.pending = None
+        finally:
+            self.controller.push_state()
+
+    # ------------------------------------------------------------------
     def import_zip(self, raw: str) -> dict:
+        """同步导入启动器导出的 zip（老入口，兼容脚本与用例；界面走 open）。"""
         if self.busy():
-            raise DevError("正在导出，暂时不能更换整合包")
-        path = Path(raw).expanduser()
+            raise DevError("上一步还没完成，稍等一下")
+        path = Path(str(raw or "")).expanduser()
         if not path.is_file():
             raise DevError(f"文件不存在：{path}")
         if path.suffix.lower() not in (".zip", ".mrpack"):
             raise DevError("请选择启动器导出的整合包（.zip / .mrpack）")
+        self._load_zip(path)
+        return self.snapshot()
 
+    def _load_zip(self, path: Path, seq: int | None = None) -> None:
         pack, err = parse_mrpack(path)
         if pack is None:
             raise DevError(f"不是有效的整合包：{err}")
@@ -123,6 +190,8 @@ class DevFlow:
                         if "/" not in p and not is_reserved_root_name(p)})
 
         with self._lock:
+            if seq is not None and seq != self._open_seq:
+                return                                   # 后来居上：这次结果作废
             self.mode = "zip"
             self.scan = None
             self.source_zip = path
@@ -139,7 +208,6 @@ class DevFlow:
             self.out_path = ""
         self.bus.log(f"已导入整合包：{path.name}（{len(merged)} 个文件）", "SUCCESS")
         self.controller.push_state()
-        return self.snapshot()
 
     # ------------------------------------------------------------------
     def _scan_summary(self) -> dict | None:
@@ -214,15 +282,20 @@ class DevFlow:
             self.root_files = kept_files
 
     def import_instance(self, raw: str) -> dict:
-        """从本地整合包目录直接制作更新包（不需要启动器导出的 zip）。"""
+        """从本地整合包目录直接制作更新包（老入口，界面走 open）。"""
         if self.busy():
-            raise DevError("正在导出，暂时不能更换整合包")
+            raise DevError("上一步还没完成，稍等一下")
         raw = str(raw or "").strip()
         if not raw:
             raise DevError("请选择整合包目录")
         path = Path(raw).expanduser()
         if not path.is_dir():
             raise DevError(f"目录不存在：{path}")
+        self._load_instance(raw)
+        return self.snapshot()
+
+    def _load_instance(self, raw: str, seq: int | None = None) -> None:
+        path = Path(str(raw or "")).expanduser()
         root = instance_scan.pack_locator.locate_modpack(path)
         if not root:
             raise DevError("这个目录里没有找到整合包（需要 mods/ 与 config/）")
@@ -236,6 +309,8 @@ class DevFlow:
                  if r["isFile"] and r["files"]
                  and r["name"] not in NEVER_PACK_FILES]
         with self._lock:
+            if seq is not None and seq != self._open_seq:
+                return                                   # 后来居上：这次结果作废
             self.mode = "instance"
             self.scan = scan
             self.source_zip = None
@@ -267,7 +342,7 @@ class DevFlow:
     def set_rule(self, key: str, value: bool) -> dict:
         """勾选/取消一个「导出内容」选项，并立即重扫。"""
         if self.busy():
-            raise DevError("正在导出")
+            raise DevError("上一步还没完成，稍等一下")
         known = {g.key for g in rules_mod.DEFAULT_OPTIONS}
         for g in rules_mod.DEFAULT_OPTIONS:
             known.update(c.key for c in g.children)
@@ -293,9 +368,11 @@ class DevFlow:
 
     def clear(self) -> dict:
         if self.busy():
-            raise DevError("正在导出")
+            raise DevError("上一步还没完成，稍等一下")
         self._cleanup_temp()
         with self._lock:
+            self._open_seq += 1                          # 清空后，晚到的识别结果不再写入
+            self.pending = None
             self.mode = "zip"
             self.scan = None
             self.source_zip = None
@@ -315,7 +392,7 @@ class DevFlow:
     # ------------------------------------------------------------------
     def set_option(self, key: str, value: bool) -> dict:
         if self.busy():
-            raise DevError("正在导出，暂时不能修改导出选项")
+            raise DevError("上一步还没完成，稍等一下")
         if key not in EXPORT_KEYS:
             raise DevError(f"未知选项：{key}")
         with self._lock:
@@ -329,14 +406,14 @@ class DevFlow:
 
     def set_changelog(self, text: str) -> dict:
         if self.busy():
-            raise DevError("正在导出，暂时不能修改更新日志")
+            raise DevError("上一步还没完成，稍等一下")
         with self._lock:
             self.changelog = str(text or "")
         return self.snapshot()
 
     def set_strategy(self, name: str, value: str = "", excluded: bool | None = None) -> dict:
         if self.busy():
-            raise DevError("正在导出，暂时不能修改更新范围")
+            raise DevError("上一步还没完成，稍等一下")
         if name not in self.strategies and name not in self.excluded:
             raise DevError(f"没有这个条目：{name}")
         before = set(self.excluded)
@@ -363,7 +440,9 @@ class DevFlow:
             if self.mode == "instance" else len(self.merged)
         with self._lock:
             if self.phase == "exporting":
-                raise DevError("正在导出")
+                raise DevError("正在导出中，稍等一下")
+            if self.phase == "loading":
+                raise DevError("还在识别整合包，稍等一下")
             if self.mode == "instance":
                 if not self.scan:
                     raise DevError("请先选择整合包目录")
