@@ -1,6 +1,9 @@
 # 新界面（React + pywebview）重建进度
 
-分支：`feat/ui-web-render`。Tk 界面保持原样，`PULSES_UI=web` 才启动新界面。
+现状（2026-11-08 核对）：新界面已经并入 `main`，随 0.10.x / 0.11.x 一起发布；
+默认 `ui_mode=auto`（先起新界面，WebView2 缺失或没起来就退回 Tk 旧界面）。
+本文件记录的是 0.10.0 那一轮重建的过程与结论，之后的行为以 `CHANGELOG.md` 为准。
+分支 `feat/ui-web-render` 停在新界面首发（0.10.0），其内容已全部在 `main` 里。
 
 ## 已完成
 
@@ -33,12 +36,12 @@
 
 | 层 | 位置 | 现状 |
 |---|---|---|
-| 单元（Python） | `tests/` | 468 项全过（新增 flow 4 项 + 桥 6 项） |
-| 界面交互（Playwright） | `web/scripts/ui_test.mjs` | 12 项全过：渲染/胶囊/折叠/换身份/首选项/受阻条/下载态/无控制台错误 |
+| 单元（Python） | `tests/` | `pytest tests -q` → **603 项**全过（2026-11-08，约 85s） |
+| 界面交互（Playwright，桩桥） | `web/scripts/ui_test.mjs` | **19 项检查**全过：渲染/胶囊/折叠/换身份/首选项/受阻条/下载态/无控制台错误 |
 | 截图 | `web/scripts/shot.mjs` + `ui_test.mjs --shots` | `web/shots/*.png` |
 | 端到端（Tk 真窗口） | `tests/e2e_flow.py`（Windows） | 未改，仍覆盖完整流程 |
-| 端到端（新界面，真前端 + 真 Api） | `scripts/dev/run_ui_e2e.py` | **A–H 全覆盖（133 条断言）**：定位 → 导入 → 策略/折叠/日志/首选项/白名单/数据库 → 应用 → 磁盘核对 → 开发者导出 → 真下载/中止/续传 |
-| 端到端（页面内驱动） | `web/src/e2e/harness.ts` | **123 条断言**（+ Python 侧 21 条磁盘/导出复核）：真按钮、真桥；只有文件选择用替身。只在 `?e2e=1` 时动态 import |
+| 端到端（新界面，真前端 + 真 Api） | `scripts/dev/run_ui_e2e.py` | A–H 全覆盖：定位 → 导入 → 策略/折叠/日志/首选项/白名单/数据库 → 应用 → 磁盘核对 → 开发者导出 → 真下载/中止/续传；断言写在 `scripts/dev/e2e_ui.mjs`（105 处 `check()`） |
+| 端到端（页面内驱动） | `web/src/e2e/harness.ts` | 69 处 `check()`（+ Python 侧磁盘/导出复核）：真按钮、真桥；只有文件选择用替身。只在 `?e2e=1` 时动态 import |
 | 页面内驱动的本地运行 | `scripts/dev/run_harness_local.py` | 同一份 harness 在本机 Chromium 里跑（bridge_server 补 `window.pywebview`） |
 | 外壳冒烟（真 WebView2 起窗） | `tests/web_e2e_windows.py` / CI 打包后起窗 | CI 里跑，证据进 artifact |
 
@@ -78,20 +81,22 @@
 
 - 源码运行与打包运行都一样：`webview.start()` 后窗口报 `Main window failed to start`，
   页面从未 loaded（`tests/web_e2e_windows.py` 与打包冒烟都能复现）。
-- 因此 CI 里能自动验证的是：类型检查、构建、474 项单元测试、**浏览器里的真前端 + 真 Api 端到端**
- （`scripts/dev/run_ui_e2e.py`，12 项断言）、Tk GUI 冒烟、PyInstaller 打包、**打包后 exe 起窗**。
+- 因此 CI 里能自动验证的是：类型检查、构建、**603 项单元测试**、**浏览器里的真前端 + 真 Api 端到端**
+ （`scripts/dev/run_ui_e2e.py`，含真下载/中止/续传）、Tk GUI 冒烟、PyInstaller 打包、**打包后 exe 起窗**。
 - 真正的 WebView2 渲染只能在用户 Windows 机器上验证。
 - 程序侧兜底：`runtime_available()` 找不到 `msedgewebview2.exe` 就直接用 Tk；
   `webview.start()` 返回而页面没加载 → 抛错 → main.py 的 auto 分支退回 Tk。
 
 ## 交付前的兜底
 
-- 默认启动顺序：受监督子进程跑新界面 → 页面 `loaded` 写就绪文件 → 交棒；
-  25s 未就绪或子进程异常退出 → 杀掉子进程、退回 Tk（`app/ui_web/launch.py`）。
+- 现在的默认（`auto`）：**在本进程里**起新界面，正常关闭返回 0；异常或非 0 退出 → 退回 Tk。
+  （0.10.4 起改的：打包环境里受监督子进程的 WebView2 反而起不来。）
+- `app/ui_web/launch.py` 仍保留受监督启动（子进程 + 就绪文件 + 25s 超时杀进程树），
+  但只在显式 `python -m app.ui_web.launch` 或测试里用；子进程入口已修正为 `main.py`。
 - 本机没有 WebView2（找不到 `msedgewebview2.exe`）→ 直接用 Tk。
 - `PULSES_UI=tk` / `web` 可强制；`PULSES_WEB_LOG` 写启动留痕，方便排查。
 
-## 未完成（按优先级）
+## 未完成（按优先级；2026-11-08 复核仍未做）
 
 1. **Tk 完整对齐**：检查点/中断残留恢复（`recover`）、应用阶段的"最低空间"提示、
    多显示器 DPI 细节仍未搬到新界面

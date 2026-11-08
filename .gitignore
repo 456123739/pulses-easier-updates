@@ -45,3 +45,6 @@ docs/AI-*
 web/node_modules/
 web/dist/
 .pytest_cache/
+
+# TypeScript 增量构建信息（每次都变，不入库）
+web/tsconfig.tsbuildinfo

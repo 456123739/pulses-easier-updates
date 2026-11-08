@@ -1,9 +1,16 @@
 """
 Pulses Easier 程序入口
 ------------------------------------------------
-用显式的混合基类整合 CustomTkinter 与 tkinterdnd2。
+两套界面，本文件负责选哪一套、以及新界面起不来时退回旧界面。
 
-启动流程：
+界面选择（优先级从高到低）：
+  PULSES_UI=web|auto|tk  →  首选项里的「界面」（~/.pulses_easier/config.json）
+                          →  DEFAULT_UI_MODE（app/core/database.py，当前 "auto"）
+    auto = 先起新界面，WebView2 缺失 / 没就绪 / 异常退出 → 继续走 Tk（默认）
+    web  = 只起新界面，失败直接报错（调试用）
+    tk   = 只用旧界面
+
+旧界面（Tk）启动流程：
   1. 创建主窗口实例（UI 构建在 __init__ 完成）
   2. 主窗口以屏幕外坐标映射，双端预热（玩家端 + 开发者端）
   3. 预热完成 → 移回屏幕中心 → withdraw
@@ -24,8 +31,10 @@ if len(sys.argv) >= 3 and sys.argv[1] == "--preview-worker":
     from app.core.preview_worker import main as _preview_main
     sys.exit(_preview_main(sys.argv[2:]))
 
-# 新界面的"受监督子进程"入口：由父进程拉起，页面加载完成后写一个就绪文件，
+# 新界面的"受监督子进程"入口：由 launch.child_command() 拉起，页面加载完成后写就绪文件，
 # 父进程超时没等到就杀掉它、退回 Tk——WebView2 卡死时玩家也不会看到黑屏。
+# 注意：当前默认的 auto 路径不走这里（见下方 _start_web_ui 的注释），
+# 只有显式跑 app/ui_web/launch.py 这套受监督启动时才会用到。
 if len(sys.argv) >= 2 and sys.argv[1] == "--web-host":
     if len(sys.argv) >= 3:
         os.environ["PULSES_WEB_READY"] = sys.argv[2]
@@ -33,9 +42,10 @@ if len(sys.argv) >= 2 and sys.argv[1] == "--web-host":
     sys.exit(_host_child.run([]))
 
 # 界面选择：
-#   默认（tk）    → 旧界面（稳定版；0.10.0 的"先试新界面"在部分机器上会卡成后台进程）
-#   PULSES_UI=web → 强制新界面（调试/尝鲜）
-#   PULSES_UI=auto→ 先试新界面、失败退回 Tk（实验，未默认开启）
+#   默认（auto，见 app/core/database.py 的 DEFAULT_UI_MODE）
+#                 → 先在本进程里起新界面，起不来/异常退出就继续走 Tk
+#   PULSES_UI=web → 强制新界面（调试/尝鲜），起不来直接报错
+#   PULSES_UI=tk  → 强制旧界面（稳定版）
 def _start_web_ui() -> int:
     """在本进程里跑新界面，返回进程退出码（0 = 正常关闭）。"""
     from app.ui_web import host as _web_host
@@ -43,7 +53,7 @@ def _start_web_ui() -> int:
 
 
 def _saved_ui_mode() -> str:
-    """首选项里选的界面（默认旧界面）。读配置失败一律当旧界面。"""
+    """首选项里选的界面；没配过就用 DEFAULT_UI_MODE（"auto"），读配置失败也回落到它。"""
     try:
         from app.core import database
         return database.get_ui_mode()

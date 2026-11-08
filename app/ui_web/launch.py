@@ -1,13 +1,18 @@
 """
 launch.py — 新界面的受监督启动
 ------------------------------------------------
-WebView2 在某些机器/会话里会"卡在起窗"（不报错也不出画面）。为了不让玩家
-看到黑屏，默认路径改成：父进程拉起一个子进程跑新界面，子进程在页面加载完成
-后写一个就绪文件；父进程等不到就杀掉它、自己退回 Tk。
+WebView2 在某些机器/会话里会"卡在起窗"（不报错也不出画面）。这里提供一条
+受监督路径：父进程拉起一个子进程跑新界面，子进程在页面加载完成后写一个就绪
+文件；父进程等不到就杀掉它、自己退回 Tk。
 
-    PULSES_UI=auto（默认）→ 受监督启动，失败退回 Tk
-    PULSES_UI=web         → 在本进程里直接跑（调试用，失败就炸）
-    PULSES_UI=tk          → 只用 Tk
+⚠️ 当前 main.py 的默认路径不走这里：0.10.4 起 `auto` 改为**在本进程里**起新界面，
+异常/非 0 退出再退回 Tk（打包环境里子进程的 WebView2 反而起不来）。
+本模块只在显式运行 `python -m app.ui_web.launch`（或测试）时生效。
+
+    python -m app.ui_web.launch     → 受监督启动；就绪超时/子进程崩溃时返回 None
+                                      （调用方据此退回 Tk；单独运行时直接退出）
+    PULSES_UI=web                   → 在 main.py 进程内直接跑（调试用，失败就抛）
+    PULSES_UI=tk                    → 只用 Tk
 """
 
 from __future__ import annotations
@@ -26,7 +31,9 @@ def child_command(ready_path: str, entry: str | None = None) -> list[str]:
     """受监督子进程的启动命令：冻结版直接复用 exe，源码版用 python + 入口脚本。"""
     if getattr(sys, "frozen", False):
         return [sys.executable, "--web-host", ready_path]
-    script = entry or str(Path(sys.argv[0]).resolve())
+    # 源码运行：子进程必须是 main.py —— 它负责分发 --web-host 到 host.run()
+    # （用 launch.py 自己当入口会再跑一遍 run_supervised，变成套娃）
+    script = entry or str(Path(__file__).resolve().parents[2] / "main.py")
     return [sys.executable, script, "--web-host", ready_path]
 
 
@@ -52,8 +59,11 @@ def run_supervised(entry: str | None = None,
     except OSError:
         pass
 
-    cwd = (Path(sys.executable).parent if getattr(sys, "frozen", False)
-           else Path(entry).resolve().parent if entry else Path.cwd())
+    if getattr(sys, "frozen", False):
+        cwd = Path(sys.executable).parent
+    else:
+        # 与 child_command 的入口保持一致：源码下子进程是 main.py，cwd 必须是项目根
+        cwd = Path(entry).resolve().parent if entry else Path(__file__).resolve().parents[2]
     try:
         proc = subprocess.Popen(  # noqa: S603
             child_command(ready_path, entry),

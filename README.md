@@ -1,7 +1,10 @@
 # Pulses Easier
 
-Minecraft 整合包更新管理工具（**开发者端 + 玩家端**），界面基于
-CustomTkinter，目标平台 Windows 10。
+Minecraft 整合包更新管理工具（**开发者端 + 玩家端**），目标平台 Windows 10/11。
+
+界面有两套：**新界面**由 WebView2 渲染（Python 侧 `app/ui_web/`，前端 `web/`
+用 React 19 + TS + Vite），**旧界面**是 CustomTkinter 写的（`app/ui/`）。
+默认 `auto`：先起新界面，WebView2 缺失或没起来就自动退回旧界面。
 
 > 下载引擎（设置里可切）：
 > **RideX（锐驰引擎）** —— 多源并发、多分片、多级重试，按目标磁盘类型自动限制并发；
@@ -38,6 +41,22 @@ python main.py
 * **开发者端**：拖入启动器导出的整合包 ZIP / `.mrpack` / `.eapack`
   → 调整策略与黑名单 → 写更新日志 → 设置导出选项 → 开始制作更新包。
 
+## 界面
+
+两套界面共用同一份 `app/ui_web`（新）/ `app/ui`（旧）之上的业务层，行为一致。
+
+| 想用的界面 | 怎么切 |
+|---|---|
+| 自动（默认） | 什么都不做：先起新界面，失败退回旧界面 |
+| 固定新界面 | 首选项 → 界面 → 新界面；或 `PULSES_UI=web` |
+| 固定旧界面 | 首选项 → 界面 → 旧界面；或 `PULSES_UI=tk` |
+
+* 选择写在 `~/.pulses_easier/config.json` 的 `ui_mode`（`auto` / `web` / `tk`），
+  代码里的默认值是 `app/core/database.py` 的 `DEFAULT_UI_MODE`。
+* 新界面需要 **WebView2 运行时**（Win11 自带；Win10 一般随 Edge 装好）。
+  没有它、或窗口起不来，`auto` 会安静退回旧界面。
+* 界面之间可以随时切，重启生效；业务流程、数据库、最近打开都是同一份。
+
 ## 目录结构
 
 ```
@@ -65,12 +84,14 @@ app/
     preview_worker.py       预览子进程入口
     recent.py               最近打开的整合包
     state.py                应用级状态（锁定 / 当前整合包）
-  ui/                       主窗口、侧边栏、玩家端、开发者端
+  ui/                       旧界面：主窗口、侧边栏、玩家端、开发者端
+  ui_web/                   新界面：WebView 宿主 / js_api 桥 / 事件泵 / 无头更新流程
   ui/widgets/               策略表、变更列表、补入子窗口/提示条、槽位面板等
   utils/                    文件与动画等通用工具
 assets/                     图标等资源
 tests/                      测试与夹具（无 GUI 环境下的桩、本地 HTTP 夹具）
 docs/                       流程审查报告与修复状态
+web/                        新界面前端（React + TS + Vite；依赖与 dist 不入库）
 release/                    发布产物
 ```
 
@@ -205,8 +226,23 @@ python3 tests/bench_ab.py          # 与原版的成对 A/B 实测（本地模�
 python3 tests/realworld_test.py    # 真实网络实战：Modrinth 10 + CurseForge 10
 ```
 
-当前合计 **367 项**检查：单元 **264** + 端到端 **82**（`e2e_flow` 41 /
-`e2e_incomplete` 41）+ 真实 GUI **21**。
+一条命令跑完全部单元测试（不需要显示器）：
+
+```bash
+python -m pytest tests -q          # 603 项（2026-11-08 核对），约 85s
+```
+
+界面相关的两层（需要 Node + Playwright 内核）：
+
+```bash
+cd web && npm ci && npm run build
+node scripts/ui_test.mjs                     # 界面交互（桩桥）：19 项检查
+cd .. && python scripts/dev/run_ui_e2e.py    # 真前端 + 真 Api + 真磁盘
+```
+
+真前端端到端会自己造夹具、起 `bridge_server`，用真页面点完整个流程
+（定位 → 导入 → 比对 → 下载/中止/续传 → 应用 → 磁盘核对 → 开发者导出），
+`HOME` / `USERPROFILE` 指向临时目录，不读也不写你本机的 `~/.pulses_easier`。
 
 静态检查（项目本身是干净的）：
 
