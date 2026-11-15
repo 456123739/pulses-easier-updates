@@ -23,6 +23,11 @@ DATABASE-TEST/
 resources/
 *.egg-info/
 
+# 历次「完整项目包」（每个 1~8 MB，平时用不到）：
+# 归档在 resources 分支（tag resources-2026-11），取用见 docs/资源归档.md
+release/*
+!release/README.md
+
 # Jupyter Notebook 检查点
 .ipynb_checkpoints/
 

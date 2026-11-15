@@ -21,11 +21,18 @@ Minecraft 整合包更新管理工具（**开发者端 + 玩家端**），目标
 * **Windows 免安装绿色版（推荐）**：
   [`pulses-easier-0.11.2-beta-win64.zip`](https://github.com/456123739/pulses-easier-updates/releases/latest)
   —— 解压后双击 `Pulses Easier.exe`，**不需要装 Python**。
-* **完整项目包（源码）**：
-  [`release/pulses-easier-v0.11.2-full.zip`](release/pulses-easier-v0.11.1-full.zip)
-  —— 解压后可直接 `python main.py`。
+* **完整项目包（源码）**：历次 `git archive` 完整包统一归档在
+  [`resources` 分支](https://github.com/456123739/pulses-easier-updates/tree/resources)，
+  取用方法见 [`docs/资源归档.md`](docs/资源归档.md)。例如：
+
+  ```bash
+  git fetch origin resources
+  git show resources:releases/pulses-easier-v0.11.2-full.zip > pulses-easier-v0.11.2-full.zip
+  ```
+
+  解压后可直接 `python main.py`。
 * 历史增量包（只含 8 个文件，v0.3.0 下载引擎聚合更新）：
-  [`release/pulses-easier-download-engine-v0.3.0-aggregate.zip`](release/pulses-easier-download-engine-v0.3.0-aggregate.zip)
+  `resources` 分支的 `releases/pulses-easier-download-engine-v0.3.0-aggregate.zip`。
 
 ## 运行
 
