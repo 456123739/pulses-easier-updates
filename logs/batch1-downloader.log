@@ -1,0 +1,195 @@
+test_abort_returns_all_tasks (__main__.TestAbort.test_abort_returns_all_tasks) ... ok
+test_abort_stops_quickly (__main__.TestAbort.test_abort_stops_quickly) ... ok
+test_classify_fs (__main__.TestDiskPolicy.test_classify_fs) ... ok
+test_clear_disk_cache_forces_reprobe (__main__.TestDiskPolicy.test_clear_disk_cache_forces_reprobe) ... ok
+test_detect_local_disk (__main__.TestDiskPolicy.test_detect_local_disk) ... ok
+test_disabled_switch_has_no_effect (__main__.TestDiskPolicy.test_disabled_switch_has_no_effect) ... ok
+test_hdd_override_skips_multipart (__main__.TestDiskPolicy.test_hdd_override_skips_multipart)
+part_threads 被磁盘策略压到 1 → 根本不进入分片路径。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=6, laddr=('127.0.0.1', 51412), raddr=('127.0.0.1', 42619)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 51400), raddr=('127.0.0.1', 42619)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_hdd_policy_downloads_big_file_sequentially (__main__.TestDiskPolicy.test_hdd_policy_downloads_big_file_sequentially)
+机械盘策略下 6 MiB 文件必须完整、且全程不发 Range。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 51418), raddr=('127.0.0.1', 42619)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_override_limits_are_downgrade_only (__main__.TestDiskPolicy.test_override_limits_are_downgrade_only) ... ok
+test_probe_disk_cache_warms_and_skips_reprobe (__main__.TestDiskPolicy.test_probe_disk_cache_warms_and_skips_reprobe)
+启动时探一次就该够：之后 resolve 只做字典命中， ... ok
+test_probe_failure_is_unknown (__main__.TestDiskPolicy.test_probe_failure_is_unknown) ... ok
+test_ssd_override_keeps_multipart (__main__.TestDiskPolicy.test_ssd_override_keeps_multipart) ... sys:1: ResourceWarning: unclosed <socket.socket fd=9, family=2, type=1, proto=6, laddr=('127.0.0.1', 51444), raddr=('127.0.0.1', 42619)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=7, family=2, type=1, proto=6, laddr=('127.0.0.1', 51428), raddr=('127.0.0.1', 42619)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=7, family=2, type=1, proto=6, laddr=('127.0.0.1', 51448), raddr=('127.0.0.1', 42619)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 51426), raddr=('127.0.0.1', 42619)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_summary_line (__main__.TestDiskPolicy.test_summary_line) ... ok
+test_all_sources_stall_fails_bounded (__main__.TestFallback.test_all_sources_stall_fails_bounded) ... ok
+test_http_404_not_saved (__main__.TestFallback.test_http_404_not_saved)
+G2 回归：404 错误页不能落盘。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=10, family=2, type=1, proto=6, laddr=('127.0.0.1', 57610), raddr=('127.0.0.1', 42077)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 57606), raddr=('127.0.0.1', 42077)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_retryable_status_retried (__main__.TestFallback.test_retryable_status_retried) ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 57626), raddr=('127.0.0.1', 42077)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_stall_source_switches (__main__.TestFallback.test_stall_source_switches)
+慢源触发 stall → 换到正常源。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 44852), raddr=('127.0.0.1', 42077)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_truncated_body_fails (__main__.TestFallback.test_truncated_body_fails) ... ok
+test_unknown_size_chunked (__main__.TestFallback.test_unknown_size_chunked)
+G5 回归：无 Content-Length（chunked）也能下完。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 44904), raddr=('127.0.0.1', 42077)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_url_fallback_second_source_used (__main__.TestFallback.test_url_fallback_second_source_used)
+G1 回归：第 2 个 URL 必须真的被尝试。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 44906), raddr=('127.0.0.1', 42077)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_url_fallback_three_sources (__main__.TestFallback.test_url_fallback_three_sources) ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 44918), raddr=('127.0.0.1', 42077)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_byte_progress_monotonic (__main__.TestHashAndProgress.test_byte_progress_monotonic) ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 56946), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_callbacks_order_and_failure_only_final (__main__.TestHashAndProgress.test_callbacks_order_and_failure_only_final) ... sys:1: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=6, laddr=('127.0.0.1', 56980), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 56960), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=6, laddr=('127.0.0.1', 56968), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_caller_arithmetic_matches_player_view (__main__.TestHashAndProgress.test_caller_arithmetic_matches_player_view)
+复刻 player_view 的统计口径： ... sys:1: ResourceWarning: unclosed <socket.socket fd=24, family=2, type=1, proto=6, laddr=('127.0.0.1', 57076), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=21, family=2, type=1, proto=6, laddr=('127.0.0.1', 57070), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=15, family=2, type=1, proto=6, laddr=('127.0.0.1', 57040), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=13, family=2, type=1, proto=6, laddr=('127.0.0.1', 57012), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 57024), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 56996), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=6, laddr=('127.0.0.1', 57052), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=19, family=2, type=1, proto=6, laddr=('127.0.0.1', 57060), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_file_progress_never_exceeds_total (__main__.TestHashAndProgress.test_file_progress_never_exceeds_total) ... sys:1: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=6, laddr=('127.0.0.1', 57084), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 57090), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=6, laddr=('127.0.0.1', 57096), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 57086), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_results_one_entry_per_task (__main__.TestHashAndProgress.test_results_one_entry_per_task) ... sys:1: ResourceWarning: unclosed <socket.socket fd=20, family=2, type=1, proto=6, laddr=('127.0.0.1', 57158), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 57124), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=15, family=2, type=1, proto=6, laddr=('127.0.0.1', 57152), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=6, laddr=('127.0.0.1', 57116), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 57100), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=13, family=2, type=1, proto=6, laddr=('127.0.0.1', 57138), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_streaming_hash_mismatch_rejected (__main__.TestHashAndProgress.test_streaming_hash_mismatch_rejected) ... sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 57176), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 57164), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_streaming_hash_ok (__main__.TestHashAndProgress.test_streaming_hash_ok) ... sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 57188), raddr=('127.0.0.1', 40031)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_defaults_present (__main__.TestInit.test_defaults_present) ... ok
+test_empty_task_list (__main__.TestInit.test_empty_task_list) ... ok
+test_estimate_eta (__main__.TestInit.test_estimate_eta) ... ok
+test_invalidate_options (__main__.TestInit.test_invalidate_options) ... ok
+test_public_api_shape (__main__.TestInit.test_public_api_shape) ... ok
+test_multipart_writes_correct_data (__main__.TestParts.test_multipart_writes_correct_data) ... sys:1: ResourceWarning: unclosed <socket.socket fd=11, family=2, type=1, proto=6, laddr=('127.0.0.1', 52904), raddr=('127.0.0.1', 44563)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 52894), raddr=('127.0.0.1', 44563)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_part_with_meta_full_range_is_accepted (__main__.TestParts.test_part_with_meta_full_range_is_accepted)
+sidecar 明确记录全覆盖时，应当直接收尾（不重下）。 ... ok
+test_preallocated_part_not_treated_as_complete (__main__.TestParts.test_preallocated_part_not_treated_as_complete)
+G4 回归：预分配（全零）的 .part 不能被当成下载完成。 ... ok
+test_range_ignored_is_rejected (__main__.TestParts.test_range_ignored_is_rejected)
+G3 回归：源忽略 Range 时必须拒绝，不能写出错位文件。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 52924), raddr=('127.0.0.1', 44563)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=13, family=2, type=1, proto=6, laddr=('127.0.0.1', 52936), raddr=('127.0.0.1', 44563)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_range_ignored_then_fallback_source (__main__.TestParts.test_range_ignored_then_fallback_source)
+忽略 Range 的源 + 正常源 → 必须最终成功且内容正确。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 52942), raddr=('127.0.0.1', 44563)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_resume_uses_range (__main__.TestParts.test_resume_uses_range) ... ok
+test_all_failed_still_reports_every_task (__main__.TestPatientOverlap.test_all_failed_still_reports_every_task) ... ok
+test_patient_retry_overlaps_main_pool (__main__.TestPatientOverlap.test_patient_retry_overlaps_main_pool)
+一个文件在主池里立刻失败后，耐心重试应当**马上**开始， ... ok
+test_connection_reuse (__main__.TestScheduling.test_connection_reuse) ... sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 34300), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_parallel_slots_and_content (__main__.TestScheduling.test_parallel_slots_and_content) ... sys:1: ResourceWarning: unclosed <socket.socket fd=17, family=2, type=1, proto=6, laddr=('127.0.0.1', 34346), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=13, family=2, type=1, proto=6, laddr=('127.0.0.1', 34316), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=6, laddr=('127.0.0.1', 34344), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=23, family=2, type=1, proto=6, laddr=('127.0.0.1', 34380), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=20, family=2, type=1, proto=6, laddr=('127.0.0.1', 34362), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 34330), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=16, family=2, type=1, proto=6, laddr=('127.0.0.1', 34356), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=21, family=2, type=1, proto=6, laddr=('127.0.0.1', 34370), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_redirect_followed (__main__.TestScheduling.test_redirect_followed) ... sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 34392), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_subdirectory_creation (__main__.TestScheduling.test_subdirectory_creation) ... sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 34406), raddr=('127.0.0.1', 46671)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_actual_ranges_match_planned_count (__main__.TestSizeTiers.test_actual_ranges_match_planned_count) ... ok
+test_large_file_multi_first_when_enabled (__main__.TestSizeTiers.test_large_file_multi_first_when_enabled)
+large_file_multi_first_bytes>0 时，超大文件应先试分片。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=13, family=2, type=1, proto=6, laddr=('127.0.0.1', 54176), raddr=('127.0.0.1', 40319)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=6, laddr=('127.0.0.1', 54182), raddr=('127.0.0.1', 40319)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 54172), raddr=('127.0.0.1', 40319)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_multipart_after_single_by_default (__main__.TestSizeTiers.test_multipart_after_single_by_default)
+默认 0：仍然是单连接优先，分片只是后手。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 54196), raddr=('127.0.0.1', 40319)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_part_count_respects_config (__main__.TestSizeTiers.test_part_count_respects_config) ... ok
+test_part_count_tiers (__main__.TestSizeTiers.test_part_count_tiers) ... ok
+test_small_file_never_multiparts (__main__.TestSizeTiers.test_small_file_never_multiparts)
+< multi_part_min_bytes 的文件即使单连接失败也不该走分片。 ... sys:1: ResourceWarning: unclosed <socket.socket fd=14, family=2, type=1, proto=6, laddr=('127.0.0.1', 54212), raddr=('127.0.0.1', 40319)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+sys:1: ResourceWarning: unclosed <socket.socket fd=12, family=2, type=1, proto=6, laddr=('127.0.0.1', 54202), raddr=('127.0.0.1', 40319)>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+
+----------------------------------------------------------------------
+Ran 51 tests in 17.913s
+
+OK
+sys:1: ResourceWarning: unclosed <socket.socket fd=4, family=2, type=1, proto=6, laddr=('127.0.0.1', 52910), raddr=('127.0.0.1', 44563)>

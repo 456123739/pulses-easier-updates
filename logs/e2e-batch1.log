@@ -1,0 +1,79 @@
+真实模组文件：TerraBlender-fabric-1.20.1-3.0.1.11.jar (322417 B, sha1 2965a82b66b9…)
+导出更新包：TestPack-2.0.0.eapack (1908 B)
+包内条目：
+    changelog.md
+    ea_hashes.json
+    ea_manifest.json
+    ea_settings.json
+    modrinth.index.json
+    overrides/config/shipped.toml
+    overrides/mods/pack-local.jar
+
+── 1) 定位整合包 ──
+  [PASS] 定位成功，pack_info 已建立
+  [PASS] 信息卡能读到模组数
+
+── 2) 拖入更新包 ──
+  [PASS] 更新包已载入
+  [PASS] 识别为更新包 (update)
+  [PASS] 按钮进入「开始更新」
+
+── 3) 比对 ──
+  [PASS] 比对完成
+    变更：+2 ~1 -2
+    策略表：{'config': '替换重名', 'mods': '完全匹配'}
+  [PASS] config 默认策略是「替换重名」（不再整体替换）
+  [PASS] mods 默认策略是「完全匹配」
+  [PASS] 所有条目默认勾选
+  [PASS] 按钮进入「确认更新」
+    待下载：['mods/TerraBlender-fabric-1.20.1-3.0.1.11.jar']
+  [PASS] 更新包声明的 mod 有待下载任务
+
+── 4) 下载（真实网络） ──
+  [PASS] 下载阶段已锁定 app_state
+  [PASS] 下载阶段结束
+    下载+应用耗时 0.6s
+
+── 5) 结果校验 ──
+  [PASS] 真实模组已下载并落位
+  [PASS] 文件大小与 CDN 一致
+  [PASS] sha1 与 index 声明一致
+  [PASS] 旧版本 mod 已被移除（完全匹配）
+  [PASS] 更新包 overrides 自带的 mod 已就位
+  [PASS] config 里的同名文件被覆盖（替换重名）
+  [PASS] config 里玩家本地文件被保留 ★P0-1
+  [PASS] 根目录玩家本地文件被保留
+  [PASS] 包内元数据 modrinth.index.json 没有落进整合包根目录 ★P0-2
+  [PASS] 包内元数据 ea_settings.json 没有落进整合包根目录 ★P0-2
+  [PASS] 包内元数据 ea_manifest.json 没有落进整合包根目录 ★P0-2
+  [PASS] 包内元数据 ea_hashes.json 没有落进整合包根目录 ★P0-2
+  [PASS] 包内元数据 changelog.md 没有落进整合包根目录 ★P0-2
+  [PASS] 成功应用后 resume.json 已清除
+  [PASS] phase 回到 idle
+  [PASS] 按钮回到「确认更新」
+  [PASS] app_state 已解锁
+  [TODO] 系统临时目录没有新增残留（已知待修，第二批处理）
+
+── 6) 回收站与回滚 ──
+    回收站会话：['20261006-091339']
+  [PASS] 存在回收站会话
+    回收站内容：['config/shipped.toml', 'mods/old-version.jar', 'mods/removed-in-new-version.jar']
+  [PASS] 被删除的 mod 在回收站里（可恢复）★P1-1
+  [PASS] 被覆盖的旧 mod 在回收站里
+  [PASS] restore_session 执行成功
+  [PASS] 回收站恢复把文件放回了正确位置 ★P1-1
+
+── 7) 最终目录 ──
+    config/player-only.toml (16 B)
+    config/shipped.toml (12 B)
+    mods/TerraBlender-fabric-1.20.1-3.0.1.11.jar (322417 B)
+    mods/old-version.jar (22 B)
+    mods/pack-local.jar (15 B)
+    mods/removed-in-new-version.jar (14 B)
+    options.txt (7 B)
+    resourcepacks/keep.zip (2 B)
+
+==============================================================
+通过 35 项，失败 0 项，待修 1 项
+  ⏳ 系统临时目录没有新增残留
+端到端流程测试：全部通过 ✓

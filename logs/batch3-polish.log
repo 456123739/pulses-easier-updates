@@ -1,0 +1,37 @@
+test_three_implementations_agree (__main__.TestApplyRulesAgree.test_three_implementations_agree) ... ok
+test_unchecked_means_skip_everywhere (__main__.TestApplyRulesAgree.test_unchecked_means_skip_everywhere) ... ok
+test_defer_to_single_after_removed (__main__.TestConfigReallyUsed.test_defer_to_single_after_removed) ... ok
+test_hash_threads_used_by_scan (__main__.TestConfigReallyUsed.test_hash_threads_used_by_scan) ... ok
+test_log_panel_respects_max_lines (__main__.TestConfigReallyUsed.test_log_panel_respects_max_lines) ... ok
+test_progress_throttle_used (__main__.TestConfigReallyUsed.test_progress_throttle_used) ... ok
+test_checkpoint_public_api (__main__.TestDeadCodeRemoved.test_checkpoint_public_api) ... ok
+test_dead_modules_gone (__main__.TestDeadCodeRemoved.test_dead_modules_gone) ... ok
+test_no_references (__main__.TestDeadCodeRemoved.test_no_references) ... ok
+test_accepts_eapack (__main__.TestDeveloperViewPolish.test_accepts_eapack) ... ok
+test_export_options_panel_has_on_change_wired (__main__.TestDeveloperViewPolish.test_export_options_panel_has_on_change_wired) ... ok
+test_export_options_written_on_toggle (__main__.TestDeveloperViewPolish.test_export_options_written_on_toggle)
+勾选即写库（桩控件存不住 BooleanVar，这里直接验证接线）。 ... ok
+test_export_tmp_cleaned_after_build (__main__.TestDeveloperViewPolish.test_export_tmp_cleaned_after_build) ... ok
+test_import_profile_restores_whitelist_and_options (__main__.TestDeveloperViewPolish.test_import_profile_restores_whitelist_and_options) ... ok
+test_strategy_table_default_matches_config (__main__.TestDeveloperViewPolish.test_strategy_table_default_matches_config) ... ok
+test_version_not_hardcoded (__main__.TestDeveloperViewPolish.test_version_not_hardcoded) ... ok
+test_exit_cleanup_removes_workdir (__main__.TestExitCleanup.test_exit_cleanup_removes_workdir) ... ok
+test_main_calls_exit_cleanup (__main__.TestExitCleanup.test_main_calls_exit_cleanup) ... ok
+test_mainwindow_has_exit_cleanup (__main__.TestExitCleanup.test_mainwindow_has_exit_cleanup) ... ok
+test_locate_content_root_variants (__main__.TestNestedOverrides.test_locate_content_root_variants) ... ok
+test_parse_mrpack_reads_nested_overrides (__main__.TestNestedOverrides.test_parse_mrpack_reads_nested_overrides) ... ok
+/usr/lib/python3.11/tempfile.py:1043: ResourceWarning: Implicitly cleaning up <TemporaryDirectory '/tmp/pulses_dev_parse_lucmv0cu'>
+  _warnings.warn(warn_message, ResourceWarning)
+test_two_previews_use_different_files (__main__.TestPreviewWindow.test_two_previews_use_different_files) ... ok
+test_unique_filename_and_fallback_on_failure (__main__.TestPreviewWindow.test_unique_filename_and_fallback_on_failure) ... ok
+test_changed_root_file_is_modified (__main__.TestRootFileDiff.test_changed_root_file_is_modified) ... ok
+test_identical_root_file_is_not_modified (__main__.TestRootFileDiff.test_identical_root_file_is_not_modified) ... ok
+test_index_root_hash_is_used_as_target (__main__.TestRootFileDiff.test_index_root_hash_is_used_as_target) ... ok
+test_missing_header_rejected_for_206 (__main__.TestSingleResumeRangeCheck.test_missing_header_rejected_for_206) ... ok
+test_start_match (__main__.TestSingleResumeRangeCheck.test_start_match) ... ok
+test_start_mismatch (__main__.TestSingleResumeRangeCheck.test_start_mismatch) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 0.125s
+
+OK

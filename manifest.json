@@ -1,0 +1,384 @@
+{
+  "archive": "pulses-easier-resources",
+  "version": "2026-11",
+  "created": "2026-11-15",
+  "source_commit": "c740101",
+  "source_repo": "https://github.com/456123739/pulses-easier-updates",
+  "branch": "resources",
+  "tag": "resources-2026-11",
+  "total_bytes": 42211124,
+  "total_files": 53,
+  "items": [
+    {
+      "path": "releases/pulses-easier-download-engine-v0.2.3.zip",
+      "group": "releases",
+      "bytes": 75225,
+      "sha256": "518a686e198a1206c0f420b34796240f5035560e0c464c097f476ca36194e181",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "releases/pulses-easier-download-engine-v0.3.0-aggregate.zip",
+      "group": "releases",
+      "bytes": 75759,
+      "sha256": "8fca2d2b1a4379931afcf1dc0a4e5bbbfb658245c475c2725ac8d3a08b134c78",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "releases/pulses-easier-v0.11.0-full.zip",
+      "group": "releases",
+      "bytes": 8021189,
+      "sha256": "b6f6e11912fcaa9cdc2259dd885d1239e071b50c82089ba4b2eb04fc9c19deb8",
+      "mtime": "2026-11-02"
+    },
+    {
+      "path": "releases/pulses-easier-v0.11.1-full.zip",
+      "group": "releases",
+      "bytes": 8028134,
+      "sha256": "c426647f931a5f9ae041ce6bb8bbc95e17b886b4c1140db7b267e2879eb3893e",
+      "mtime": "2026-11-02"
+    },
+    {
+      "path": "releases/pulses-easier-v0.11.2-full.zip",
+      "group": "releases",
+      "bytes": 8035758,
+      "sha256": "2af90e51e26b465b1af04359d2ad80214ce0a0d9570acf0db7559b17d04a41aa",
+      "mtime": "2026-11-03"
+    },
+    {
+      "path": "releases/pulses-easier-v0.5.0-full.zip",
+      "group": "releases",
+      "bytes": 1069113,
+      "sha256": "56b2e8cc162faf7098a127a87187adeea0bb96c45bba085f202c481148b9b947",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "releases/pulses-easier-v0.6.0-full.zip",
+      "group": "releases",
+      "bytes": 1121598,
+      "sha256": "ec2283bd39124c5bef7ed887b9deb20f75116a4e7d5a99a280b8883cf4944afd",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "releases/pulses-easier-v0.6.1-full.zip",
+      "group": "releases",
+      "bytes": 1122682,
+      "sha256": "c95278145cfb77a322cbaeb7a3d7733e5c0b0708a1456d787171c2e7b3143905",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "releases/pulses-easier-v0.6.3-full.zip",
+      "group": "releases",
+      "bytes": 1736859,
+      "sha256": "68749a6b35c48ea9c08710d14e92a5563feb426bc108f48b3b68f3948944a756",
+      "mtime": "2026-10-11"
+    },
+    {
+      "path": "releases/pulses-easier-v0.6.4-full.zip",
+      "group": "releases",
+      "bytes": 1742487,
+      "sha256": "8055e01d41d437cf2a2145490864cd7636110340e966f64e3084505c53220050",
+      "mtime": "2026-10-17"
+    },
+    {
+      "path": "releases/pulses-easier-v0.6.5-full.zip",
+      "group": "releases",
+      "bytes": 1760730,
+      "sha256": "d0239c5b3707b3042c3d0250328435886ec8140c5a12a2b416222719e40ed6e4",
+      "mtime": "2026-10-18"
+    },
+    {
+      "path": "releases/pulses-easier-v0.7.0-full.zip",
+      "group": "releases",
+      "bytes": 1795000,
+      "sha256": "6e4da3ab19759cf72ee06d65b04a247c7b8d06f5c145bcae7488bf5be8d2b15e",
+      "mtime": "2026-10-23"
+    },
+    {
+      "path": "releases/pulses-easier-v0.7.1-full.zip",
+      "group": "releases",
+      "bytes": 1814100,
+      "sha256": "e38035e05ce9688093db94d9878a79b9447881008b7d62fb383dbbcfcbadccef",
+      "mtime": "2026-10-25"
+    },
+    {
+      "path": "releases/pulses-easier-v0.8.1-full.zip",
+      "group": "releases",
+      "bytes": 1832187,
+      "sha256": "669af0d19de8e8cd19299cdcfb4c0e4ebe36cbb6fae7c44d0e59556009779e1c",
+      "mtime": "2026-10-25"
+    },
+    {
+      "path": "releases/pulses-easier-v0.9.1-full.zip",
+      "group": "releases",
+      "bytes": 1860725,
+      "sha256": "268982778ed5b504d5af0fee46c72bbf7d0e38360ed34cd67433600e82d75fa5",
+      "mtime": "2026-10-26"
+    },
+    {
+      "path": "releases/pulses-easier-v0.9.2-full.zip",
+      "group": "releases",
+      "bytes": 1890434,
+      "sha256": "992c7869f389a4e0c510773fdba32a04651c85dd4fc152c5230a243782b60426",
+      "mtime": "2026-10-28"
+    },
+    {
+      "path": "logs/batch1-basic.log",
+      "group": "logs",
+      "bytes": 3557,
+      "sha256": "8ac9b4d61ca4d620227b2ce02840c7fa59a46659707b1293fef85227e824f41a",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch1-downloader.log",
+      "group": "logs",
+      "bytes": 19096,
+      "sha256": "7cc4f26fa202decd3239179a2d01fb0154799fc8310be0a61b6b6940332ec826",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch1-fixes.log",
+      "group": "logs",
+      "bytes": 4194,
+      "sha256": "b4e8c57b3c3d8f8f0bbb387cbc1f1d211d86384e4ac401812e560e29331fc000",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch2-basic.log",
+      "group": "logs",
+      "bytes": 3666,
+      "sha256": "9fe32799829fa13b4d75efd2c6017abb76c6cafebd474f5278584bfdce2d250e",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch2-devpack.log",
+      "group": "logs",
+      "bytes": 2873,
+      "sha256": "1b013313a82303a9ba62f61dca7c8e5f7b8ed8dcaa1e06ee2225ebf1cf253406",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch2-downloader.log",
+      "group": "logs",
+      "bytes": 19096,
+      "sha256": "1735f6e51ab8816fd759cf953be49f8ece37a5ac22444c55f57a95dddd908ba6",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch2-fixes.log",
+      "group": "logs",
+      "bytes": 3518,
+      "sha256": "c4f52a00caf7c593a6972a038f436e4348e7d1964b6c94c2872b7a6844610913",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch3-basic.log",
+      "group": "logs",
+      "bytes": 3666,
+      "sha256": "2bd6ef33ab782da74ecc9a6a6723bae274f19d91375ff983c27dc44addafad8f",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch3-devpack.log",
+      "group": "logs",
+      "bytes": 2873,
+      "sha256": "db6498c4c0ac7e5de86c72db79e1ad5946012976be43377c4f1c7e3d671515b9",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch3-downloader.log",
+      "group": "logs",
+      "bytes": 19096,
+      "sha256": "a347ad375c79ee9a0c1d842fabe5ba5fa5f2f7c1e93bf3b193e61201d806bcb8",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch3-fixes.log",
+      "group": "logs",
+      "bytes": 3518,
+      "sha256": "c8259c7220c5140f125bd0da848a4a252d49420daa977a340db2e8dad1e0f091",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/batch3-polish.log",
+      "group": "logs",
+      "bytes": 3432,
+      "sha256": "6435fc68c8fb292468ba880a847fcbf1989c1f517a52b33198f1984b282f5327",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/bench-ab.log",
+      "group": "logs",
+      "bytes": 3462,
+      "sha256": "01297c48212286289e8abbc5600ad67078710bd9edb923b3311ad1bf01d6ec8b",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "logs/e2e-batch1.log",
+      "group": "logs",
+      "bytes": 3148,
+      "sha256": "f0c908d586da03f181b34d2d124a35e37400546c36d0343b119a41c977b92b29",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/e2e-batch2.log",
+      "group": "logs",
+      "bytes": 3089,
+      "sha256": "d528ac7fe4dcc63b4d5fc9c1ad3693d24364e0afe4e2f60c160129b84afac972",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/e2e-batch3.log",
+      "group": "logs",
+      "bytes": 3089,
+      "sha256": "6460a1e9dd51450a075289a08d85af54e143135e4aef53b61cebebfaadae0ecf",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/e2e-final.log",
+      "group": "logs",
+      "bytes": 3089,
+      "sha256": "a8be07f7dd4e7f1820e72b98e08a0bbde5dd50cc4b4a821964c3a178a74e13fe",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/final-basic.log",
+      "group": "logs",
+      "bytes": 3666,
+      "sha256": "00d79e7115dbf315c375d21326b1766fefa8248685d7eb9fce9bcef24c3d31ea",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/final-devpack.log",
+      "group": "logs",
+      "bytes": 2873,
+      "sha256": "04e4e7d43443de2b9a5032e53d518ec1a51cbd0fa2d984488efafb31e36d60b2",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/final-downloader.log",
+      "group": "logs",
+      "bytes": 19096,
+      "sha256": "417ba5fc2eac7e9687c12ee4620a8c801145b6ae6ccc89cc97cfc4de04adc598",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/final-e2e.log",
+      "group": "logs",
+      "bytes": 3089,
+      "sha256": "6b15fecc4a52de5b53a2f86515391231c42dc15d0d10624cbb17e35f93023bf9",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/final-fixes.log",
+      "group": "logs",
+      "bytes": 3518,
+      "sha256": "b60723f952b76c5c8010666c176b90e58c9f50dabfc1b205ac050e25b6ad6135",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/final-polish.log",
+      "group": "logs",
+      "bytes": 3685,
+      "sha256": "32c101ff5acff1439c64ebe42d9de9b2e71ccb6751e2ad983f25ba445581fa43",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/followup-basic.log",
+      "group": "logs",
+      "bytes": 3666,
+      "sha256": "5bd00924f4f0d95ec2c7191e00d2315f6c55d97187538f96d6ae733c59a85bf3",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/followup-devpack.log",
+      "group": "logs",
+      "bytes": 3066,
+      "sha256": "6661c15ee319d4da90097f238f659fef645e4b2481e37f5e598dfddefc825815",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/followup-downloader.log",
+      "group": "logs",
+      "bytes": 19096,
+      "sha256": "97c0a1bdc906fe1887296a8c31122632330d2bd373db4f8268af7c692076321c",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/followup-e2e.log",
+      "group": "logs",
+      "bytes": 3089,
+      "sha256": "3c90297f539b9728377d9e13bc8fadd8afe4a749b29cd28903cf83fe3c2110b4",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/followup-fixes.log",
+      "group": "logs",
+      "bytes": 3518,
+      "sha256": "3b9eec79262f459efefeb9310368ae86b464e8e133461b2cfdc79400390aba97",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/followup-polish.log",
+      "group": "logs",
+      "bytes": 5541,
+      "sha256": "e21e83e97e3e31bb42db77cd8e76c12dbfad682953aef90428553e478a24c0c2",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/realworld.log",
+      "group": "logs",
+      "bytes": 6554,
+      "sha256": "4b7f0653697d7ef14a8af76ab424215b23440fa7b268f6f5e14da9101ef30ad9",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "logs/realworld_rotate.log",
+      "group": "logs",
+      "bytes": 7195,
+      "sha256": "5e4c93ea4f89f4af8c0676ac882ef4c406518071441b3d1395de7348773241bf",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "logs/source-matrix.log",
+      "group": "logs",
+      "bytes": 8641,
+      "sha256": "3a6f87a053552d06f5679be8b88e1be6a66c9c67147739ff3a5973e745dad9d6",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "logs/test-basic.log",
+      "group": "logs",
+      "bytes": 2235,
+      "sha256": "72a08bac406f497719a5a345a6653ad85adaf394ad495dffe4a17530f4c95086",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "logs/test-downloader.log",
+      "group": "logs",
+      "bytes": 4569,
+      "sha256": "685d210b7bb98f11df657e14f8c5c5b6647a78b731e113b547a43331f101a0c4",
+      "mtime": "2026-10-05"
+    },
+    {
+      "path": "logs/v0.5.0-realworld-rotate.log",
+      "group": "logs",
+      "bytes": 9505,
+      "sha256": "eb724ce8e418ffc65dfa7faf98c6ba8b1e7c5f91043f3ce92a96ece6fe8293d4",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/v0.5.0-realworld.log",
+      "group": "logs",
+      "bytes": 7798,
+      "sha256": "d93d345d07ec88e8996603389924cdd3550e530a7bb3b7d1e3b33c2b11c97780",
+      "mtime": "2026-10-06"
+    },
+    {
+      "path": "logs/verify-release-v0.3.0.log",
+      "group": "logs",
+      "bytes": 4282,
+      "sha256": "bbd56be03f655af1b20bbe811eceb6f0e273f4c1f1095cbd1d42a555b43bc4e2",
+      "mtime": "2026-10-05"
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+==============================================================================
+Easier 下载器 · 真实网络实战测试
+==============================================================================
+
+[1] 采集真实 mod 元数据
+  用缓存 tests/logs/realworld_meta.json（--refresh 可强制重新采集）
+
+  合计 20 个（Modrinth 10 / CurseForge 10），总大小 69.0MB
+    Modrinth     378.7KB  TerraBlender-fabric-1.18.1-1.1.0.77.jar
+    Modrinth     864.3KB  patchouli-fabric-26.1-94.jar
+    Modrinth     979.8KB  modernfix-forge-5.27.85+mc1.20.1.jar
+    Modrinth       1.2MB  waystones-fabric-1.21.1-21.1.46.jar
+    Modrinth       2.2MB  xaerominimap-fabric-1.16.5-26.4.2.jar
+    Modrinth       2.4MB  RoughlyEnoughItems-18.0.815-fabric.jar
+    Modrinth       2.7MB  Powah-6.2.7.jar
+    Modrinth       3.7MB  geckolib-quilt-1.18-3.0.33.jar
+    Modrinth      15.1MB  Mekanism-1.12.2-9.6.9.367.jar
+    Modrinth      18.3MB  create-1.20.1-6.0.7.jar
+    CurseForge    20.6KB  Clumps-fabric-1.21.10-28.0.0.1.jar
+    CurseForge    82.2KB  Controlling-fabric-1.21.8-26.0.3.jar
+    CurseForge   233.0KB  NaturesCompass-1.20.1-2.6.0-fabric.jar
+    CurseForge   586.8KB  architectury-13.0.11-fabric.jar
+    CurseForge   949.7KB  konkrete_fabric_1.9.17_MC_1.21.11.jar
+    CurseForge     1.1MB  yet_another_config_lib_v3-3.8.1+1.21.1-fabric.jar
+    CurseForge     1.2MB  sophisticatedbackpacks-1.21.10-3.26.2.2151.jar
+    CurseForge     1.8MB  sodium-fabric-0.8.14+mc1.21.11.jar
+    CurseForge     2.4MB  fabric-api-0.116.16+1.21.1.jar
+    CurseForge    12.9MB  supplementaries-1.21.1-3.9.8-neoforge.jar
+
+[2] 用 Easier 自己的逻辑做分类 + 生成下载任务
+  differ 分类：added=20 modified=0 deleted=0  用时 0ms
+  player_view 生成下载任务：20 个（应为 20）
+
+[3] 本次磁盘策略
+  磁盘 ssd（/dev/sdb2/ext4，/dev/sdb2 rotational=0 (sysfs)） 并发文件数 12（配置 12） 分片线程 4（配置 4）
+
+[4] 第一回合：全部 20 个真实 mod（69.0MB）
+  （--only-rotate：跳过）
+
+[5] 轮转配对回合 ×3：最小的 8 个文件（4.0MB）
+    每轮把 A/B/C 的先后顺序轮换，抵消网络随时间漂移；开跑前测一次单连接基准
+
+  --- 第 1 轮，顺序：A → B → C ---
+
+  >> A 裸 urllib 顺序 ...
+     耗时 14.91s  吞吐 0.27 MB/s  校验 8/8  连接 8  完成 8/8
+     网络基准：0 KB/s（1.36s/256KB）  归一化耗时 10.97×基准
+
+  >> B 原版 downloader（改动前） ...
+     耗时 26.72s  吞吐 0.15 MB/s  校验 8/8  连接 -
+     网络基准：0 KB/s（0.68s/256KB）  归一化耗时 39.56×基准
+
+  >> C 新版 downloader（本次交付） ...
+     耗时 18.25s  吞吐 0.22 MB/s  校验 8/8  连接 -
+     · 磁盘类型判定为 ssd（/dev/sdb2 rotational=0 (sysfs)），未触发额外限制
+     网络基准：0 KB/s（0.96s/256KB）  归一化耗时 18.98×基准
+
+  --- 第 2 轮，顺序：B → C → A ---
+
+  >> B 原版 downloader（改动前） ...
+     耗时 47.46s  吞吐 0.08 MB/s  校验 8/8  连接 -
+     网络基准：0 KB/s（0.90s/256KB）  归一化耗时 53.01×基准
+
+  >> C 新版 downloader（本次交付） ...
+     耗时 6.11s  吞吐 0.65 MB/s  校验 8/8  连接 -
+     · 磁盘类型判定为 ssd（/dev/sdb2 rotational=0 (sysfs)），未触发额外限制
+     网络基准：0 KB/s（3.34s/256KB）  归一化耗时 1.83×基准
+
+  >> A 裸 urllib 顺序 ...
+     耗时 29.75s  吞吐 0.13 MB/s  校验 8/8  连接 8  完成 8/8
+     网络基准：0 KB/s（0.97s/256KB）  归一化耗时 30.61×基准
+
+  --- 第 3 轮，顺序：C → A → B ---
+
+  >> C 新版 downloader（本次交付） ...
+     耗时 10.07s  吞吐 0.40 MB/s  校验 8/8  连接 -
+     · 磁盘类型判定为 ssd（/dev/sdb2 rotational=0 (sysfs)），未触发额外限制
+     网络基准：0 KB/s（2.85s/256KB）  归一化耗时 3.54×基准
+
+  >> A 裸 urllib 顺序 ...
+     耗时 84.19s  吞吐 0.05 MB/s  校验 8/8  连接 8  完成 8/8
+     网络基准：0 KB/s（0.65s/256KB）  归一化耗时 129.05×基准
+
+  >> B 原版 downloader（改动前） ...
+     耗时 64.00s  吞吐 0.06 MB/s  校验 8/8  连接 -
+     网络基准：0 KB/s（3.56s/256KB）  归一化耗时 17.96×基准
+
+  轮转回合汇总（8 个文件，4.0MB）
+    A 裸 urllib 顺序                    各轮 [14.91, 29.75, 84.19]  中位 29.75s
+                                     归一化中位 30.61×基准  各轮 [10.97, 30.61, 129.05]
+    B 原版 downloader（改动前）             各轮 [26.72, 47.46, 64.0]  中位 47.46s
+                                     归一化中位 39.56×基准  各轮 [39.56, 53.01, 17.96]
+    C 新版 downloader（本次交付）            各轮 [18.25, 6.11, 10.07]  中位 10.07s
+                                     归一化中位 3.54×基准  各轮 [18.98, 1.83, 3.54]
+
+    中位对比：A 29.75s  B 47.46s  C 10.07s   →  C/A = 2.96×  C/B = 4.71×
+
+==============================================================================
+参数对照：单线程顺序下载  vs  Easier 新版 downloader
+==============================================================================
+  项目       | 单线程顺序                      | Easier 新版
+  ---------+----------------------------+----------------------------------------
+  并发下载的文件数 | 1                          | multi_slots = 12（=12 路并行）
+  单文件内分片   | 无                          | part_threads = 4（>4MB 且单连接失败后启用）
+  连接复用     | 无，每个文件新建连接                 | 线程本地 keep-alive 缓存
+  SSL 上下文  | 每次新建 default context       | 进程内共享 1 个 context
+  连接/读超时   | urlopen(timeout=120) 一把抓   | connect 10s / 读空闲 20s / 单链接 90s / 停滞 10s
+  停滞判定     | 无（只能等内核超时）                 | 速度窗口 5s，低于 10KB/s 判停滞；多线程槽位另有 3s/20KB/s 快速筛除
+  失败重试     | 无                          | 每 URL 2 次 + 5xx/429 额外 1 次，指数退避 500ms→8s + 抖动
+  多源换源     | 无（只用第 1 个 URL）             | task.urls 逐个尝试；Range 不被支持时整份作废换源
+  HTTP 状态码 | 不检查（错误页会落盘）                | 非 2xx 判失败，不落盘
+  Range 校验 | 无                          | 分片必须 206 且 Content-Range 一致
+  哈希校验     | 全部下完后逐文件 SHA1              | 单连接边下边算；续传时整文件校验
+  续传 / 断点  | 无                          | .part + .part.meta 记录可信区间，按连续前缀 Range 续传
+  进度上报     | 无                          | 字节级节流上报（100ms）+ 文件级进度，单调不回退
+  中止响应     | 只能等当前文件结束                  | 0.5s 轮询中止标志，立即断开连接
+  降级策略     | 无                          | 慢源立即移出多线程槽位 → 单线程重试队列
+  磁盘策略     | 无                          | 按 SSD/HDD/网络盘限制并发文件数与分片线程
+
+[6] 已清理测试目录 /home/admin/NS/pulses_easier/_realworld（存在=False）
+EXIT=0

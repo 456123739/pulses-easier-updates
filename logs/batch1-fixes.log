@@ -1,0 +1,40 @@
+test_defaults (__main__.TestDefaultStrategyIsSafe.test_defaults) ... ok
+test_end_to_end_user_files_survive (__main__.TestDefaultStrategyIsSafe.test_end_to_end_user_files_survive)
+diff → REPLACE_SAME → execute_plan：玩家本地文件必须还在。 ... ok
+test_added_and_removed_files_detected (__main__.TestFolderDiffIgnoresMtime.test_added_and_removed_files_detected) ... ok
+test_diff_does_not_flag_identical_dir (__main__.TestFolderDiffIgnoresMtime.test_diff_does_not_flag_identical_dir)
+文件集合与内容都相同、只有 mtime 不同 → 不该判 MODIFIED。 ... ok
+test_diff_flags_pack_superset_dir (__main__.TestFolderDiffIgnoresMtime.test_diff_flags_pack_superset_dir)
+玩家目录里有更新包没带的文件 → 判 MODIFIED 是对的； ... ok
+test_identical_content_different_mtime_is_same (__main__.TestFolderDiffIgnoresMtime.test_identical_content_different_mtime_is_same) ... ok
+test_same_size_different_content_is_different (__main__.TestFolderDiffIgnoresMtime.test_same_size_different_content_is_different) ... ok
+test_export_without_overrides_still_has_overrides_entry (__main__.TestPackContract.test_export_without_overrides_still_has_overrides_entry) ... ok
+test_merged_source_keeps_legit_overrides_root_changelog (__main__.TestPackContract.test_merged_source_keeps_legit_overrides_root_changelog)
+真正的 overrides/ 里的 changelog.md 是内容，不能被当成元数据。 ... ok
+test_merged_source_skips_reserved_in_fallback (__main__.TestPackContract.test_merged_source_skips_reserved_in_fallback) ... ok
+test_reserved_root_names_detected (__main__.TestPackContract.test_reserved_root_names_detected) ... ok
+test_root_file_items_skips_reserved (__main__.TestPackContract.test_root_file_items_skips_reserved) ... ok
+test_all_resolved_continues_to_apply (__main__.TestPlayerStateMachine.test_all_resolved_continues_to_apply) ... ok
+test_apply_installs_close_guard (__main__.TestPlayerStateMachine.test_apply_installs_close_guard) ... ok
+test_clear_rejected_while_busy (__main__.TestPlayerStateMachine.test_clear_rejected_while_busy) ... ok
+test_close_skips_part_cleanup_when_thread_alive (__main__.TestPlayerStateMachine.test_close_skips_part_cleanup_when_thread_alive) ... ok
+test_download_done_does_not_double_apply (__main__.TestPlayerStateMachine.test_download_done_does_not_double_apply) ... ok
+test_download_phase_locks_app_state (__main__.TestPlayerStateMachine.test_download_phase_locks_app_state) ... ok
+test_drop_pack_rejected_while_applying (__main__.TestPlayerStateMachine.test_drop_pack_rejected_while_applying) ... ok
+test_drop_pack_rejected_while_downloading (__main__.TestPlayerStateMachine.test_drop_pack_rejected_while_downloading) ... ok
+test_failure_branch_enters_manual_state (__main__.TestPlayerStateMachine.test_failure_branch_enters_manual_state) ... ok
+test_panel_does_not_fire_while_items_remain (__main__.TestPlayerStateMachine.test_panel_does_not_fire_while_items_remain) ... ok
+test_panel_fires_on_all_resolved (__main__.TestPlayerStateMachine.test_panel_fires_on_all_resolved) ... ok
+test_skip_all_aborts_and_waits_before_applying (__main__.TestPlayerStateMachine.test_skip_all_aborts_and_waits_before_applying) ... ok
+test_start_apply_is_reentrant_safe (__main__.TestPlayerStateMachine.test_start_apply_is_reentrant_safe) ... ok
+test_start_apply_refuses_while_downloading (__main__.TestPlayerStateMachine.test_start_apply_refuses_while_downloading) ... ok
+test_full_replace_moves_old_dir_to_trash (__main__.TestSafeDirReplace.test_full_replace_moves_old_dir_to_trash) ... ok
+test_full_replace_rolls_back_on_copy_failure (__main__.TestSafeDirReplace.test_full_replace_rolls_back_on_copy_failure) ... ok
+test_manifest_is_merged_not_overwritten (__main__.TestTrashRestoreTargetsCorrectRoot.test_manifest_is_merged_not_overwritten) ... ok
+test_restore_session_returns_files_to_pack_root (__main__.TestTrashRestoreTargetsCorrectRoot.test_restore_session_returns_files_to_pack_root) ... ok
+test_sessions_do_not_collide_in_same_second (__main__.TestTrashRestoreTargetsCorrectRoot.test_sessions_do_not_collide_in_same_second) ... ok
+
+----------------------------------------------------------------------
+Ran 31 tests in 0.114s
+
+OK

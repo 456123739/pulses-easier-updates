@@ -1,0 +1,29 @@
+test_blacklist_applied_on_first_drop (__main__.TestDeveloperView.test_blacklist_applied_on_first_drop) ... ok
+test_drop_rejected_while_parsing (__main__.TestDeveloperView.test_drop_rejected_while_parsing) ... ok
+test_parse_done_reads_blacklist_before_rows (__main__.TestDeveloperView.test_parse_done_reads_blacklist_before_rows)
+解析完成时黑名单必须先于建行设置（否则老版本会静默重新勾选）。 ... ok
+test_parse_error_clears_state (__main__.TestDeveloperView.test_parse_error_clears_state) ... ok
+test_index_copy_failure_is_fatal_and_leaves_no_partial_file (__main__.TestExportOptions.test_index_copy_failure_is_fatal_and_leaves_no_partial_file) ... ok
+test_min_size_filters_index_and_overrides (__main__.TestExportOptions.test_min_size_filters_index_and_overrides) ... ok
+test_precompute_overrides_writes_hashes (__main__.TestExportOptions.test_precompute_overrides_writes_hashes) ... ok
+test_signature_verifies_and_detects_tampering (__main__.TestExportOptions.test_signature_verifies_and_detects_tampering) ... ok
+test_unsigned_pack_is_reported_as_unsigned (__main__.TestExportOptions.test_unsigned_pack_is_reported_as_unsigned) ... ok
+test_blake2b_expected_hash_used (__main__.TestRecordedHashes.test_blake2b_expected_hash_used) ... ok
+test_recorded_folder_hash_short_circuits (__main__.TestRecordedHashes.test_recorded_folder_hash_short_circuits) ... ok
+test_invalid_zip_record_is_kept (__main__.TestResumeRelocate.test_invalid_zip_record_is_kept) ... ok
+test_relocate_zip_restores_availability (__main__.TestResumeRelocate.test_relocate_zip_restores_availability) ... ok
+test_stale_part_cleanup_only_touches_part_files (__main__.TestResumeRelocate.test_stale_part_cleanup_only_touches_part_files) ... ok
+test_export_parse_roundtrip (__main__.TestRoundTrip.test_export_parse_roundtrip) ... ok
+test_index_entries_outside_merge_folders_survive (__main__.TestRoundTrip.test_index_entries_outside_merge_folders_survive)
+P1-11：index 里 shaderpacks/ 的条目不能被丢掉。 ... ok
+test_no_overrides_still_creates_overrides_entry (__main__.TestRoundTrip.test_no_overrides_still_creates_overrides_entry) ... ok
+test_unsafe_paths_are_dropped (__main__.TestRoundTrip.test_unsafe_paths_are_dropped) ... ok
+test_execute_plan_marks_applied_and_leaves_no_checkpoint_gap (__main__.TestVerifyAndCheckpoint.test_execute_plan_marks_applied_and_leaves_no_checkpoint_gap) ... ok
+test_interrupted_checkpoint_is_detected (__main__.TestVerifyAndCheckpoint.test_interrupted_checkpoint_is_detected) ... ok
+test_verify_detects_size_mismatch_and_leftovers (__main__.TestVerifyAndCheckpoint.test_verify_detects_size_mismatch_and_leftovers) ... ok
+test_verify_passes_after_real_apply (__main__.TestVerifyAndCheckpoint.test_verify_passes_after_real_apply) ... ok
+
+----------------------------------------------------------------------
+Ran 22 tests in 0.100s
+
+OK
