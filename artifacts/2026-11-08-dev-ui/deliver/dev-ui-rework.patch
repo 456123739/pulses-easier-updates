@@ -1,0 +1,4054 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 759ffdf..e5cd3ab 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,56 @@
+ # Pulses Easier 更新日志
+ 
++## 未发布 — 开发者端：STEP 1 只留「整合包定位」，导出内容并进更新范围，更新日志改独立编辑器
++
++### STEP 1：整合包定位（一个入口）
++- 开发者端不再分「启动器整合包 / 本地整合包目录」两档：**STEP 1 就是一个整合包定位框**，
++  和侧边栏那个是同一个动作。选实例目录、实例里的任意文件、或 Modrinth 格式的 `.zip` / `.mrpack` 都认，
++  到底是什么由后端判断。
++- **判断很便宜**：目录只 `scandir`（最多向上 8 层），zip 只读中央目录取文件名，
++  **绝不解压、绝不哈希**；认出类型就立刻返回，扫描与解析放到后台线程（`phase=loading`），
++  点完不会卡住界面。连续拖两个包时后来居上，先开始的旧结果不会再覆盖新的。
++- 误拖更新包（`.eapack`）会被明确拒绝并说明原因；没有 `modrinth.index.json` 的 zip 也会直说
++  「目前只认 Modrinth 格式的导出包」。
++- **拖入（DOM drop）按角色路由**：开发者端拖进来的当整合包处理，不再错走玩家端的定位逻辑。
++
++### 导出内容：并进「更新范围」+「特殊导出选项」
++- **去掉「导出内容」勾选面板**：顶层目录的策略与排除，「更新范围」表本来就能表达
++  （每行三个策略胶囊 + 点目录名排除），不再有两套并行的开关。
++- 新增右栏**「特殊导出选项」**：只列出**扫到的**、更新范围表表达不了的本机数据
++  （OptiFine 画质设置、已禁用的 Mod、JEI 个人信息、帕秋莉手册数据、EMI、已绘制的地图、
++  截图、录像回放、本机操作记录）。**默认一个都不带**——它们都是玩家自己机器上的东西；
++  勾上才进包，取消立刻退出（重新扫描）。
++- **CurseForge API Key 挪进首选项**（新增「开发者端」一节），开发者端不再占一栏；
++  保存后立即回读 `hasCfKey`。
++
++### CurseForge API Key：默认用 PCL 内置那把
++- 开箱即用：没填过 Key 时直接用 **PCL2 内置的 CurseForge Key**（`app/core/cf_key.py`），
++  导出实例时的模组直链查询因此默认就能走 CurseForge（2026-11-08 实测：Sodium 指纹
++  `2838862230` → 命中 `394468`，拿到 `edge.forgecdn.net` 直链）。
++- 用户填了自己的 Key 就用自己的；首选项里多一个「用回内置」，清空即恢复默认。
++- 环境变量 `PULSES_CF_KEY` 可覆盖或禁用（给空串 = 不查 CF）；端到端测试固定用它关掉，
++  保证离线可重复。
++- 顺手把 401 也归入「授权失败」（以前只认 403），Key 无效时提示更准确。
++
++### 更新日志：长按钮 + 独立窗口（所见即所得）
++- 右栏底部压成一个长按钮（显示"还没写 / 首行 · 字数"），点开是**独立窗口**：
++  Tiptap 富文本编辑（H1–H3、粗体、斜体、删除线、无序/有序列表、引用、代码块、分割线、链接、撤销），
++  写的时候就是成品的样子。
++- 三个视图同一份内容：**编辑**（富文本）/ **预览**（玩家端「更新日志」抽屉的同一套排版）/
++  **Markdown**（真正写进 `.eapack` 的原文，可直接改，改完回填富文本）。
++- 改动 400ms 防抖回写后端，关窗不丢；编辑器单独切 chunk（548 kB / gzip 188 kB），
++  主包保持 433 kB（gzip 140 kB）。
++
++### 修一个真问题
++- 从实例导出的 `.eapack` 里，`ea_manifest.json` 少了 `excluded_folders`（从 zip 导出的那条路径有），
++  按清单读取的校验/工具会漏掉"排除了哪些目录"；已补齐，两条导出路径的清单字段现在一致。
++
++### 测试
++- 单测 **647 项**（新增 17：特殊导出选项 11 + 流程 6；另含包源判断 15、STEP 1 流程 12 是上一轮的）
++- 浏览器端到端 **156 条断言全过**：导出内容面板已移除 / 特殊选项默认不勾、勾选后进范围、取消后退出 /
++  编辑器三视图 + 写回 / 导出包字段
++- 另有 18 项真机核对脚本（编辑器三种视图、特殊选项、首选项 CF Key），连跑两次全过
++
+ ## v0.11.2 — 更新途中被外部改动：停下，问你
+ 
+ 玩家在更新过程中用别的程序改了整合包里的文件（编辑器保存、启动器再解压、手动删改），
+diff --git a/app/core/cf_key.py b/app/core/cf_key.py
+new file mode 100644
+index 0000000..1cab134
+--- /dev/null
++++ b/app/core/cf_key.py
+@@ -0,0 +1,49 @@
++"""
++cf_key.py — CurseForge API Key 的默认值与解析
++------------------------------------------------
++默认用 **PCL2 内置的那把**（NS 2026-11-08 明确要求：以前也是这么做的）。
++用户自己在首选项里填了，就用用户的；没填就用内置，开箱即用。
++
++⚠️ 两句实话：
++1. 主仓库是 public，这把 key 写在这里等于公开（PCL 的 key 本身就随客户端分发，
++   公开程度差不多）。要轮换/隐藏就走环境变量 `PULSES_CF_KEY`，不用改代码。
++2. 允许用户覆盖，是因为内置 key 可能被限流；覆盖后立刻生效，清空即回到内置。
++
++解析顺序：
++    环境变量 PULSES_CF_KEY（显式给了就用它，给空串 = 禁用 CF 查询）
++    → 用户保存的 key（首选项「CurseForge API Key」）
++    → 内置默认 key
++"""
++
++from __future__ import annotations
++
++import os
++
++#: PCL2 内置的 CurseForge API Key（2026-11-08 实测：指纹查询命中 Sodium 394468）
++DEFAULT_CF_API_KEY = ("$2a$10$fdQjum78EUUUcJIw2a6gb.m1DNZCQzwvf0EBcfm"
++                      ".YgwIrmFX/1K3m")
++
++ENV_NAME = "PULSES_CF_KEY"
++
++SOURCE_USER = "user"
++SOURCE_BUILTIN = "builtin"
++SOURCE_OFF = "off"
++
++
++def resolve(saved: str | None = None) -> str:
++    """算出这次真正要用的 key；空串 = 不查 CurseForge。"""
++    env = os.environ.get(ENV_NAME)
++    if env is not None:                 # 显式设置（哪怕是空串）优先
++        return env.strip()
++    text = str(saved or "").strip()
++    if text:
++        return text
++    return DEFAULT_CF_API_KEY
++
++
++def source(saved: str | None = None) -> str:
++    """key 从哪来：user（用户填的）/ builtin（内置）/ off（被环境变量禁掉）。"""
++    env = os.environ.get(ENV_NAME)
++    if env is not None:
++        return SOURCE_USER if env.strip() else SOURCE_OFF
++    return SOURCE_USER if str(saved or "").strip() else SOURCE_BUILTIN
+diff --git a/app/core/export_specials.py b/app/core/export_specials.py
+new file mode 100644
+index 0000000..93651a4
+--- /dev/null
++++ b/app/core/export_specials.py
+@@ -0,0 +1,193 @@
++"""
++export_specials.py — 「特殊导出内容」：更新范围表表达不了的那些
++------------------------------------------------
++更新范围表是按**顶层条目**给策略的（mods/、config/、options.txt……），
++管不到目录内部；而 PCL 的导出选项里有一批正好是目录内部的细碎内容
++（已禁用的 mod、JEI 书签、地图数据、截图……）。
++
++这些就放在这里，规则**复用** `export_rules.DEFAULT_OPTIONS` 的同名 key
++（展开、优先级、固定排除段全部由那边负责），本模块只干两件事：
++
++1. 说清楚有哪些、默认不导出（`SPECIALS`）；
++2. **扫到了才算数**（`detect`）——没这个文件就不该出现在界面上。
++
++判定要便宜：只 stat 与列目录，不读内容、不算哈希；单个选项最多数
++`MAX_FILES` 个文件就收手。
++"""
++
++from __future__ import annotations
++
++import fnmatch
++import os
++from dataclasses import dataclass
++from pathlib import Path
++
++#: 单个特殊选项最多统计多少个文件（再多也没意义，只是显示个数量）
++MAX_FILES = 4000
++#: 每个选项最多留几个样本路径给界面做提示
++SAMPLE_SIZE = 3
++
++
++@dataclass(frozen=True)
++class Special:
++    """一个「特殊导出内容」勾选项。
++
++    `roots` 相对实例根；命中规则由 `export_rules` 里同名 key 负责，
++    这里只用来判断"这个实例里到底有没有"。
++    """
++
++    key: str
++    title: str
++    desc: str
++    roots: tuple[str, ...]
++    patterns: tuple[str, ...] = ()   # 只看 roots 的直接子项名（fnmatch）
++
++
++#: 全部特殊选项。**默认一个都不导出**——它们都是"本机产生的东西"，
++#: 跟本项目对 options.txt 的一贯口径一致：更新包只装整合包该带的。
++SPECIALS: tuple[Special, ...] = (
++    Special("optifine", "OptiFine 画质设置",
++            "optionsof.txt / optionsshaders.txt，跟显卡与光影走",
++            ("optionsof.txt", "optionsshaders.txt")),
++    Special("mods-disabled", "已禁用的 Mod",
++            "mods/*.disabled、mods/*.old，玩家自己禁用的",
++            ("mods",), ("*.disabled", "*.old")),
++    Special("jei", "JEI 个人信息",
++            "config/jei/world/：书签、作弊记录",
++            ("config/jei/world",)),
++    Special("patchouli", "帕秋莉手册个人数据",
++            "patchouli_data.json",
++            ("patchouli_data.json",)),
++    Special("emi", "EMI 个人信息",
++            "emi.json",
++            ("emi.json",)),
++    Special("personal", "本机操作记录",
++            "hotbar.nbt / command_history.txt",
++            ("hotbar.nbt", "command_history.txt")),
++    Special("maps", "已绘制的地图",
++            "journeymap/data/：玩家自己跑出来的",
++            ("journeymap/data",)),
++    Special("screenshots", "截图",
++            "screenshots/",
++            ("screenshots",)),
++    Special("replay", "录像回放",
++            "replay_recordings/、replay_videos/",
++            ("replay_recordings", "replay_videos")),
++)
++
++
++def keys() -> frozenset[str]:
++    """所有特殊选项的 key（开发者端默认要把这些从勾选里去掉）。"""
++    return frozenset(s.key for s in SPECIALS)
++
++
++def _scan_dir(target: Path, base: Path, budget: list[int],
++              sample: list[str]) -> tuple[int, int]:
++    """递归数文件、累加字节；返回 (files, bytes)。"""
++    files = 0
++    total = 0
++    stack = [target]
++    while stack:
++        current = stack.pop()
++        try:
++            with os.scandir(current) as it:
++                for entry in it:
++                    if budget[0] <= 0:
++                        return files, total
++                    try:
++                        if entry.is_dir(follow_symlinks=False):
++                            stack.append(Path(entry.path))
++                            continue
++                        stat = entry.stat(follow_symlinks=False)
++                    except OSError:
++                        continue
++                    files += 1
++                    total += stat.st_size
++                    budget[0] -= 1
++                    if len(sample) < SAMPLE_SIZE:
++                        try:
++                            sample.append(str(Path(entry.path).relative_to(base)))
++                        except ValueError:
++                            pass
++        except OSError:
++            continue
++    return files, total
++
++
++def _scan_flat(target: Path, base: Path, patterns: tuple[str, ...],
++               sample: list[str]) -> tuple[int, int]:
++    """只看一层，按文件名通配（mods/*.disabled 这种）。"""
++    files = 0
++    total = 0
++    try:
++        with os.scandir(target) as it:
++            for entry in it:
++                name = entry.name
++                if not any(fnmatch.fnmatch(name, pat) for pat in patterns):
++                    continue
++                try:
++                    if not entry.is_file(follow_symlinks=False):
++                        continue
++                    stat = entry.stat(follow_symlinks=False)
++                except OSError:
++                    continue
++                files += 1
++                total += stat.st_size
++                if len(sample) < SAMPLE_SIZE:
++                    try:
++                        sample.append(str(Path(entry.path).relative_to(base)))
++                    except ValueError:
++                        pass
++    except OSError:
++        pass
++    return files, total
++
++
++def _probe(root: Path, special: Special) -> dict | None:
++    """这个实例里有没有这个特殊选项的内容？有就返回统计，没有返回 None。"""
++    files = 0
++    total = 0
++    sample: list[str] = []
++    budget = [MAX_FILES]
++    for raw in special.roots:
++        target = root / raw
++        try:
++            if special.patterns:
++                if not target.is_dir():
++                    continue
++                got = _scan_flat(target, root, special.patterns, sample)
++            elif target.is_file():
++                got = (1, target.stat().st_size)
++                if len(sample) < SAMPLE_SIZE:
++                    sample.append(raw)
++            elif target.is_dir():
++                got = _scan_dir(target, root, budget, sample)
++            else:
++                continue
++        except OSError:
++            continue
++        files += got[0]
++        total += got[1]
++        if files >= MAX_FILES:
++            break
++    if not files:
++        return None
++    return {"key": special.key, "title": special.title, "desc": special.desc,
++            "files": files, "bytes": total, "sample": sample}
++
++
++def detect(root: str | Path) -> list[dict]:
++    """扫一遍实例，返回**确实存在**的特殊选项（保持 SPECIALS 的顺序）。
++
++    只做 stat / 列目录，不读任何文件内容；不存在的直接不返回，
++    所以界面不需要"灰掉"这一类状态。
++    """
++    base = Path(str(root or "")).expanduser()
++    if not base.is_dir():
++        return []
++    found: list[dict] = []
++    for special in SPECIALS:
++        hit = _probe(base, special)
++        if hit:
++            found.append(hit)
++    return found
+diff --git a/app/core/instance_export.py b/app/core/instance_export.py
+index 45c175e..d7c767a 100644
+--- a/app/core/instance_export.py
++++ b/app/core/instance_export.py
+@@ -286,6 +286,9 @@ def export_from_instance(
+             "whitelist": whitelist,
+             "has_changelog": bool(changelog_md and changelog_md.strip()),
+             "source": "instance",
++            # 与 zip 那条导出路径保持一致：两边写出来的清单字段必须一样，
++            # 否则玩家端/校验脚本按其中一个读就会漏（历史上就是这么漏的）
++            "excluded_folders": sorted(set(excluded_tops or [])),
+         }
+ 
+         out_path.parent.mkdir(parents=True, exist_ok=True)
+diff --git a/app/core/lookup.py b/app/core/lookup.py
+index 1bf1742..0d2380e 100644
+--- a/app/core/lookup.py
++++ b/app/core/lookup.py
+@@ -71,8 +71,9 @@ def _call(fetch, url: str, payload: dict, headers: dict, *,
+         try:
+             return fetch(url, payload, headers, timeout)
+         except urllib.error.HTTPError as exc:
+-            if exc.code == 403:
+-                raise LookupDenied(f"API 授权失败（403）：{url}") from exc
++            if exc.code in (401, 403):
++                raise LookupDenied(
++                    f"API 授权失败（{exc.code}）：{url}") from exc
+             last = exc
+             if exc.code not in (429, 500, 502, 503, 504):
+                 raise LookupError(f"HTTP {exc.code}：{url}") from exc
+diff --git a/app/core/pack_source.py b/app/core/pack_source.py
+new file mode 100644
+index 0000000..4a08c52
+--- /dev/null
++++ b/app/core/pack_source.py
+@@ -0,0 +1,137 @@
++"""
++pack_source.py — 一次 stat / 一次中央目录，判断「这个路径是什么」
++------------------------------------------------
++开发者端的 STEP 1 现在只有一个入口：整合包定位。用户可能给的东西很杂
++（实例目录、版本目录、拖进来的导出包 zip、甚至误拖的更新包），
++所以要有一处统一的判断，并且**必须便宜**：
++
++* 只看目录项与 zip 的中央目录（`namelist()`），**绝不读成员内容**、绝不解压、绝不哈希；
++* 目录最多向上找 `pack_locator.MAX_DEPTH` 层，每层一次 `scandir`；
++* 条目数超过 `MAX_ENTRIES` 直接判"不像整合包"，避免被超大包拖住。
++
++判定结果只有三种：实例目录（instance）/ 导出包 zip（zip）/ 其它（抛 SourceError）。
++"其它"里最常见的是**更新包**（`.eapack`）——那是玩家端吃的东西，这里要明确拒绝并说清楚，
++否则用户会以为拖错了软件。
++"""
++
++from __future__ import annotations
++
++import zipfile
++from dataclasses import dataclass
++from pathlib import Path
++
++from . import pack_locator
++
++KIND_INSTANCE = "instance"
++KIND_ZIP = "zip"
++
++#: 只有这两种后缀会被当成"启动器导出的整合包"
++ZIP_SUFFIXES = (".zip", ".mrpack")
++#: 玩家端的更新包（开发者端不接受）
++UPDATE_SUFFIXES = (".eapack",)
++
++#: zip 里找这个才算 Modrinth 格式（与 mrpack.parse_mrpack 的判据一致）
++INDEX_NAME = "modrinth.index.json"
++#: 条目上限：再多就不像整合包了（真实整合包通常几百到几千）
++MAX_ENTRIES = 200_000
++
++
++class SourceError(RuntimeError):
++    """路径不能当整合包源用；`code` 会原样回给界面。"""
++
++    def __init__(self, code: str, message: str):
++        super().__init__(message)
++        self.code = code
++        self.message = message
++
++
++@dataclass(frozen=True)
++class SourceRef:
++    """判断结果。`root` 只有 instance 有；`entries` 只有 zip 有。"""
++
++    kind: str
++    path: Path
++    label: str
++    root: str = ""
++    note: str = ""
++    entries: int = 0
++
++
++def _zip_names(path: Path) -> list[str]:
++    """只取中央目录里的名字，不碰任何成员内容。"""
++    try:
++        with zipfile.ZipFile(path, "r") as zf:
++            names = zf.namelist()
++    except zipfile.BadZipFile:
++        raise SourceError("BAD_ZIP", "这个文件不是有效的 ZIP（可能没下完或被改坏）")
++    except OSError as exc:
++        raise SourceError("READ_FAILED", f"读不了这个文件：{exc}")
++    if len(names) > MAX_ENTRIES:
++        raise SourceError("TOO_MANY_ENTRIES",
++                          f"包内条目超过 {MAX_ENTRIES} 个，不像整合包")
++    return names
++
++
++def _has_index(names: list[str]) -> bool:
++    """modrinth.index.json 可以在根，也可以在一层目录里（mrpack 允许）。"""
++    for name in names:
++        if name == INDEX_NAME or name.endswith("/" + INDEX_NAME):
++            return True
++    return False
++
++
++def classify(raw: str | Path) -> SourceRef:
++    """判断路径类型。快：目录两次 stat 级操作，zip 一次中央目录读。"""
++    text = str(raw or "").strip()
++    if not text:
++        raise SourceError("INVALID_INPUT", "没有拿到路径")
++    try:
++        path = Path(text).expanduser()
++    except (OSError, ValueError):
++        raise SourceError("INVALID_INPUT", f"路径不合法：{text}")
++
++    try:
++        is_dir = path.is_dir()
++        is_file = path.is_file()
++    except OSError as exc:
++        raise SourceError("READ_FAILED", f"看不了这个路径：{exc}")
++    if not is_dir and not is_file:
++        raise SourceError("NOT_FOUND", f"路径不存在：{path}")
++
++    if is_dir:
++        root = pack_locator.locate_modpack(path)
++        if not root:
++            raise SourceError(
++                "NOT_A_PACK",
++                "这个目录里没找到整合包（需要有 mods/ 和 config/）。"
++                "如果拿到的是启动器导出的包，请直接拖入 .zip / .mrpack。")
++        return SourceRef(kind=KIND_INSTANCE, path=Path(root),
++                         label=Path(root).name, root=str(root))
++
++    suffix = path.suffix.lower()
++    if suffix in UPDATE_SUFFIXES:
++        raise SourceError(
++            "IS_UPDATE_PACK",
++            "这是更新包（玩家端用的），开发者端要的是整合包本身："
++            "请选整合包实例目录，或 Modrinth 格式的 .mrpack。")
++    if suffix in ZIP_SUFFIXES:
++        names = _zip_names(path)
++        if not _has_index(names):
++            raise SourceError(
++                "NOT_A_PACK",
++                "这个 zip 里没有 modrinth.index.json —— 目前只认 Modrinth 格式的导出包。"
++                "其它启动器导出的包，请先解压成实例目录，再用整合包定位选目录。")
++        return SourceRef(kind=KIND_ZIP, path=path, label=path.stem,
++                         note="modrinth", entries=len(names))
++
++    # 其它文件：和侧边栏一样，认「整合包里的任意文件」（mods/x.jar、config/y.toml…），
++    # 向上找根目录。这一步只是 scandir，不会读文件内容。
++    root = pack_locator.locate_modpack(path)
++    if root:
++        return SourceRef(kind=KIND_INSTANCE, path=Path(root),
++                         label=Path(root).name, root=str(root))
++    raise SourceError(
++        "NOT_SUPPORTED",
++        f"不认识这个文件（{suffix or '无后缀'}）：请选整合包目录、整合包里的任意文件，"
++        "或 Modrinth 格式的 .zip / .mrpack。")
++
+diff --git a/app/ui_web/api.py b/app/ui_web/api.py
+index c99231c..e66ec63 100644
+--- a/app/ui_web/api.py
++++ b/app/ui_web/api.py
+@@ -124,6 +124,9 @@ class Api:
+             "update.config.import": lambda p: self.controller.flow.import_config(
+                 p.get("path", "")),
+             # ---- 开发者：制作更新包 ----
++            # dev.open 是界面用的唯一入口：实例目录 / 导出包都认，认出类型就返回，
++            # 扫描与解析在后台线程（见 dev.DevFlow.open）。
++            "dev.open": lambda p: self.controller.dev.open(p.get("path", "")),
+             "dev.pick": lambda p: self.controller.dev.import_zip(p.get("path", "")),
+             "dev.instance.pick": lambda p: self.controller.dev.import_instance(
+                 p.get("path", "")),
+@@ -390,6 +393,11 @@ class Api:
+         except ApiError as exc:
+             self.bus.dnd("error", exc.message)
+             return _err(exc.code, exc.message)
++        except Exception as exc:                       # noqa: BLE001
++            # 开发者端的分类错误（例如误拖了 .eapack）走这里：要让玩家看见原因
++            message = str(exc) or "打不开这个文件"
++            self.bus.dnd("error", message)
++            return _err(getattr(exc, "code", "DROP_FAILED"), message)
+         return {"ok": True, "data": {"paths": clean}}
+ 
+ 
+diff --git a/app/ui_web/controller.py b/app/ui_web/controller.py
+index c87bc23..c452c7b 100644
+--- a/app/ui_web/controller.py
++++ b/app/ui_web/controller.py
+@@ -122,14 +122,25 @@ class AppController:
+     def open_path(self, raw: str) -> dict:
+         if not raw:
+             raise ApiError("INVALID_INPUT", "缺少路径")
++        return self._open_by_role(raw)
++
++    def pick_pack(self, raw: str) -> dict:
++        return self._open_by_role(raw)
++
++    def _open_by_role(self, raw: str) -> dict:
++        """两个角色的 STEP 1 是同一个动作：先看角色，再决定交给谁判断。
++
++        玩家端 = 定位整合包；开发者端 = 整合包定位（实例目录或导出包都认）。
++        开发者端那次判断很快、识别在后台，所以这里拿到的是 loading 快照。
++        """
++        if self._role == "developer":
++            self.dev.open(raw)
++            return {"state": self.snapshot()}
+         root = pack_locator.locate_modpack(raw)
+         if not root:
+             raise ApiError("NOT_A_PACK", "这个路径里没有找到整合包（需要 mods/ 与 config/）")
+         return self._load_pack(Path(root))
+ 
+-    def pick_pack(self, raw: str) -> dict:
+-        return self.open_path(raw)
+-
+     def _load_pack(self, root: Path) -> dict:
+         info = pack_info.read_modpack_info(root)
+         self.flow.pack_root = Path(root)
+diff --git a/app/ui_web/dev.py b/app/ui_web/dev.py
+index 195c422..86aae04 100644
+--- a/app/ui_web/dev.py
++++ b/app/ui_web/dev.py
+@@ -16,8 +16,11 @@ from pathlib import Path
+ from ..core import database as db
+ from ..core import eapack as eapack_mod
+ from ..core import export_rules as rules_mod
++from ..core import export_specials
+ from ..core import instance_export as inst_export
+ from ..core import instance_scan
++from ..core import cf_key
++from ..core import pack_source
+ from ..config import NEVER_PACK_FILES
+ from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
+                            parse_mrpack)
+@@ -29,6 +32,12 @@ EXPORT_KEYS = ("include_hashes", "tamper_proof", "precompute_overrides",
+ class DevError(RuntimeError):
+     code = "DEV_ERROR"
+ 
++    def __init__(self, message: str, code: str = ""):
++        super().__init__(message)
++        self.message = message
++        if code:
++            self.code = code
++
+ 
+ class DevFlow:
+     def __init__(self, controller, bus):
+@@ -36,10 +45,14 @@ class DevFlow:
+         self.bus = bus
+         self._lock = threading.RLock()
+ 
+-        self.phase = "idle"           # idle | exporting | done | error
++        self.phase = "idle"           # idle | loading | exporting | done | error
+         self.mode = "zip"             # zip（导入启动器整合包）| instance（本地实例）
++        self.pending: dict | None = None   # loading 时的目标（kind / path / name / note）
++        self._open_seq = 0                 # 连续拖入时只让最后一次生效
+         self.scan: dict | None = None
+-        self.rule_keys: set[str] = rules_mod.default_keys()
++        # 特殊选项（本机数据）默认一律不导出：从默认勾选里剔掉
++        self.rule_keys: set[str] = rules_mod.default_keys() - export_specials.keys()
++        self.specials: list[dict] = []
+         self.cf_key = ""
+         try:
+             self.cf_key = str(db.load_app_config().get("cf_api_key") or "")
+@@ -71,13 +84,14 @@ class DevFlow:
+ 
+     # ------------------------------------------------------------------
+     def busy(self) -> bool:
+-        return self.phase == "exporting"
++        return self.phase in ("loading", "exporting")
+ 
+     def snapshot(self) -> dict:
+         with self._lock:
+             return {
+                 "phase": self.phase,
+                 "mode": self.mode,
++                "pending": dict(self.pending) if self.pending else None,
+                 "instance": self._scan_summary(),
+                 "ruleOptions": [{"key": g.key, "title": g.title,
+                                  "checked": g.key in self.rule_keys,
+@@ -85,7 +99,10 @@ class DevFlow:
+                                                "checked": c.key in self.rule_keys}
+                                               for c in g.children]}
+                                 for g in rules_mod.DEFAULT_OPTIONS],
++                "specials": [dict(item, checked=item["key"] in self.rule_keys)
++                             for item in self.specials],
+                 "hasCfKey": bool(self.cf_key),
++                "cfKeySource": cf_key.source(self.cf_key),
+                 "source": ({"path": str(self.source_zip),
+                             "name": self.source_zip.name}
+                            if self.source_zip else None),
+@@ -103,16 +120,73 @@ class DevFlow:
+                 "progress": dict(self.progress),
+             }
+ 
++    # ------------------------------------------------------------------
++    # 入口：统一判断 + 后台识别（界面只走这一个）
++    # ------------------------------------------------------------------
++    def open(self, raw: str) -> dict:
++        """整合包定位：实例目录 / 启动器导出包都行。
++
++        判断本身很便宜（见 `core.pack_source`），但"扫描 / 解析"是重活，
++        所以这里只做到"认出是什么"，然后立刻返回（phase=loading），
++        真正的读取交给后台线程，界面不会卡在点击上。
++        """
++        if self.phase == "exporting":
++            raise DevError("上一步还没完成，稍等一下")
++        try:
++            ref = pack_source.classify(raw)
++        except pack_source.SourceError as exc:
++            raise DevError(exc.message, code=exc.code)
++
++        with self._lock:
++            self._open_seq += 1
++            seq = self._open_seq
++            self.phase = "loading"
++            self.error = None
++            self.progress = {}
++            self.pending = {"kind": ref.kind, "path": str(ref.path),
++                            "name": ref.label, "note": ref.note}
++        snap = self.snapshot()
++        self.controller.push_state()
++        threading.Thread(target=self._open_worker, args=(seq, ref),
++                         name="dev-open", daemon=True).start()
++        return snap
++
++    def _open_worker(self, seq: int, ref: pack_source.SourceRef) -> None:
++        try:
++            if ref.kind == pack_source.KIND_INSTANCE:
++                self._load_instance(ref.root, seq=seq)
++            else:
++                self._load_zip(ref.path, seq=seq)
++        except Exception as exc:                        # noqa: BLE001
++            with self._lock:
++                if seq != self._open_seq:               # 后来居上，丢弃这次结果
++                    return
++                self.phase = "error"
++                self.error = str(exc) or "识别失败"
++                self.pending = None
++            self.bus.log(f"整合包识别失败：{self.error}", "ERROR")
++        else:
++            with self._lock:
++                if seq != self._open_seq:
++                    return
++                self.pending = None
++        finally:
++            self.controller.push_state()
++
+     # ------------------------------------------------------------------
+     def import_zip(self, raw: str) -> dict:
++        """同步导入启动器导出的 zip（老入口，兼容脚本与用例；界面走 open）。"""
+         if self.busy():
+-            raise DevError("正在导出，暂时不能更换整合包")
+-        path = Path(raw).expanduser()
++            raise DevError("上一步还没完成，稍等一下")
++        path = Path(str(raw or "")).expanduser()
+         if not path.is_file():
+             raise DevError(f"文件不存在：{path}")
+         if path.suffix.lower() not in (".zip", ".mrpack"):
+             raise DevError("请选择启动器导出的整合包（.zip / .mrpack）")
++        self._load_zip(path)
++        return self.snapshot()
+ 
++    def _load_zip(self, path: Path, seq: int | None = None) -> None:
+         pack, err = parse_mrpack(path)
+         if pack is None:
+             raise DevError(f"不是有效的整合包：{err}")
+@@ -123,8 +197,11 @@ class DevFlow:
+                         if "/" not in p and not is_reserved_root_name(p)})
+ 
+         with self._lock:
++            if seq is not None and seq != self._open_seq:
++                return                                   # 后来居上：这次结果作废
+             self.mode = "zip"
+             self.scan = None
++            self.specials = []
+             self.source_zip = path
+             self.pack = pack
+             self.merged = merged
+@@ -139,7 +216,6 @@ class DevFlow:
+             self.out_path = ""
+         self.bus.log(f"已导入整合包：{path.name}（{len(merged)} 个文件）", "SUCCESS")
+         self.controller.push_state()
+-        return self.snapshot()
+ 
+     # ------------------------------------------------------------------
+     def _scan_summary(self) -> dict | None:
+@@ -214,15 +290,20 @@ class DevFlow:
+             self.root_files = kept_files
+ 
+     def import_instance(self, raw: str) -> dict:
+-        """从本地整合包目录直接制作更新包（不需要启动器导出的 zip）。"""
++        """从本地整合包目录直接制作更新包（老入口，界面走 open）。"""
+         if self.busy():
+-            raise DevError("正在导出，暂时不能更换整合包")
++            raise DevError("上一步还没完成，稍等一下")
+         raw = str(raw or "").strip()
+         if not raw:
+             raise DevError("请选择整合包目录")
+         path = Path(raw).expanduser()
+         if not path.is_dir():
+             raise DevError(f"目录不存在：{path}")
++        self._load_instance(raw)
++        return self.snapshot()
++
++    def _load_instance(self, raw: str, seq: int | None = None) -> None:
++        path = Path(str(raw or "")).expanduser()
+         root = instance_scan.pack_locator.locate_modpack(path)
+         if not root:
+             raise DevError("这个目录里没有找到整合包（需要 mods/ 与 config/）")
+@@ -235,9 +316,13 @@ class DevFlow:
+         files = [r["name"] for r in scan["rows"]
+                  if r["isFile"] and r["files"]
+                  and r["name"] not in NEVER_PACK_FILES]
++        specials = export_specials.detect(root)
+         with self._lock:
++            if seq is not None and seq != self._open_seq:
++                return                                   # 后来居上：这次结果作废
+             self.mode = "instance"
+             self.scan = scan
++            self.specials = specials
+             self.source_zip = None
+             self.pack = None
+             self.merged = []
+@@ -267,7 +352,7 @@ class DevFlow:
+     def set_rule(self, key: str, value: bool) -> dict:
+         """勾选/取消一个「导出内容」选项，并立即重扫。"""
+         if self.busy():
+-            raise DevError("正在导出")
++            raise DevError("上一步还没完成，稍等一下")
+         known = {g.key for g in rules_mod.DEFAULT_OPTIONS}
+         for g in rules_mod.DEFAULT_OPTIONS:
+             known.update(c.key for c in g.children)
+@@ -282,6 +367,7 @@ class DevFlow:
+         return self.snapshot()
+ 
+     def set_cf_key(self, key: str) -> dict:
++        """保存用户自己的 CurseForge API Key；传空串 = 清掉，回到内置默认。"""
+         self.cf_key = str(key or "").strip()
+         try:
+             cfg = db.load_app_config()
+@@ -289,15 +375,19 @@ class DevFlow:
+             db.save_app_config(cfg)
+         except Exception:                                  # noqa: BLE001
+             pass
++        self.controller.push_state()
+         return self.snapshot()
+ 
+     def clear(self) -> dict:
+         if self.busy():
+-            raise DevError("正在导出")
++            raise DevError("上一步还没完成，稍等一下")
+         self._cleanup_temp()
+         with self._lock:
++            self._open_seq += 1                          # 清空后，晚到的识别结果不再写入
++            self.pending = None
+             self.mode = "zip"
+             self.scan = None
++            self.specials = []
+             self.source_zip = None
+             self.pack = None
+             self.merged = []
+@@ -315,7 +405,7 @@ class DevFlow:
+     # ------------------------------------------------------------------
+     def set_option(self, key: str, value: bool) -> dict:
+         if self.busy():
+-            raise DevError("正在导出，暂时不能修改导出选项")
++            raise DevError("上一步还没完成，稍等一下")
+         if key not in EXPORT_KEYS:
+             raise DevError(f"未知选项：{key}")
+         with self._lock:
+@@ -329,14 +419,14 @@ class DevFlow:
+ 
+     def set_changelog(self, text: str) -> dict:
+         if self.busy():
+-            raise DevError("正在导出，暂时不能修改更新日志")
++            raise DevError("上一步还没完成，稍等一下")
+         with self._lock:
+             self.changelog = str(text or "")
+         return self.snapshot()
+ 
+     def set_strategy(self, name: str, value: str = "", excluded: bool | None = None) -> dict:
+         if self.busy():
+-            raise DevError("正在导出，暂时不能修改更新范围")
++            raise DevError("上一步还没完成，稍等一下")
+         if name not in self.strategies and name not in self.excluded:
+             raise DevError(f"没有这个条目：{name}")
+         before = set(self.excluded)
+@@ -363,7 +453,9 @@ class DevFlow:
+             if self.mode == "instance" else len(self.merged)
+         with self._lock:
+             if self.phase == "exporting":
+-                raise DevError("正在导出")
++                raise DevError("正在导出中，稍等一下")
++            if self.phase == "loading":
++                raise DevError("还在识别整合包，稍等一下")
+             if self.mode == "instance":
+                 if not self.scan:
+                     raise DevError("请先选择整合包目录")
+@@ -408,7 +500,7 @@ class DevFlow:
+                 pack_version=self.version or "1.0.0",
+                 opts=dict(self.options),
+                 excluded_tops=sorted(self.excluded),
+-                cf_key=self.cf_key,
++                cf_key=cf_key.resolve(self.cf_key),
+                 cancel=self._cancel,
+                 progress=self._progress,
+                 log=lambda level, msg: self.bus.log(msg, level.upper()))
+diff --git a/scripts/dev/e2e_ui.mjs b/scripts/dev/e2e_ui.mjs
+index 56e0d9c..ab4cd67 100644
+--- a/scripts/dev/e2e_ui.mjs
++++ b/scripts/dev/e2e_ui.mjs
+@@ -9,7 +9,7 @@
+ // 用法：node scripts/dev/e2e_ui.mjs <bridgeUrl> <workdir> [basic|download]
+ // 依赖从 web/node_modules 解析（本脚本不在 web/ 下，直接 import 'playwright' 找不到）。
+ import { createRequire } from 'node:module'
+-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
++import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+ import { createHash } from 'node:crypto'
+ import { join } from 'node:path'
+ 
+@@ -319,6 +319,10 @@ async function basicSuite() {
+   await pref.waitFor({ state: 'visible', timeout: 15000 })
+   const prefText = await pref.innerText()
+   check(/界面/.test(prefText), '首选项有「界面」一栏', prefText.replace(/\n/g, ' | ').slice(0, 120))
++  // CurseForge Key 挪到这里了；端到端用 PULSES_CF_KEY="" 关掉查询，状态要如实显示
++  check(prefText.includes('CurseForge API Key'), '首选项有 CurseForge API Key')
++  check(/已禁用（环境变量/.test(prefText), 'CF Key 状态如实显示（端到端禁用）',
++        prefText.replace(/\n/g, ' | ').slice(0, 200))
+   for (const label of ['自动', '旧界面', '新界面']) {
+     check(prefText.includes(label), `「界面」有「${label}」选项`)
+   }
+@@ -387,34 +391,108 @@ async function basicSuite() {
+   // ---- G. 开发者端：导入 → 选项 → 导出 ----
+   await clickText('开发者', { exact: true })
+   check(await waitBody(/开始制作更新包/), '切到开发者视图')
+-  await setPicks([fixture.zip])
+-  await clickText('拖入整合包')
+-  check(await waitBody(/更新范围/), '开发者导入整合包')
+-  let dev = await devState()
++
++  // 识别在后台跑：等 phase 离开 loading，别用"标题一直在"的页面文案当判据
++  const waitDevIdle = () => waitFor(async () => {
++    const d = await devState()
++    return d && d.phase !== 'loading' ? d : null
++  }, 60000)
++
++  // STEP 1 = 整合包定位，主路径是本地实例目录（不用先让启动器导出）
++  await setPicks([fixture.pack])
++  await clickText('开发者端整合包定位', { exact: true })
++  let dev = await waitDevIdle()
++  check(dev?.mode === 'instance' && Boolean(dev?.instance?.root),
++        '开发者定位本地实例', JSON.stringify(dev?.mode))
+   check((dev?.strategies ?? []).length >= 2, '开发者列出更新范围',
+         JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
++
++  // 同一个入口也认启动器导出的包
++  await setPicks([fixture.zip])
++  await clickText('开发者端整合包定位', { exact: true })
++  dev = await waitDevIdle()
++  check(dev?.mode === 'zip' && dev?.source?.name === 'E2EPack.zip',
++        '导出包也认（zip）', JSON.stringify(dev?.source))
++
++  // 误拖更新包：要明确拒绝，而且不能把已有来源弄丢
++  const rejected = await invoke('dev.open', { path: fixture.update })
++  check(rejected?.ok === false && rejected?.error?.code === 'IS_UPDATE_PACK',
++        '更新包被明确拒绝', JSON.stringify(rejected?.error?.code))
++  dev = await devState()
++  check(dev?.mode === 'zip' && Boolean(dev?.source), '拒绝后来源没丢',
++        JSON.stringify({ mode: dev?.mode, source: dev?.source }))
++  // 导出内容面板已经去掉：顶层目录交给「更新范围」自己表达
++  check(!(await bodyText()).includes('导出内容'), '「导出内容」面板已移除')
++
++  // ---- 特殊导出选项：扫到才出现，默认一个都不勾 ----
++  mkdirSync(join(fixture.pack, 'screenshots'), { recursive: true })
++  writeFileSync(join(fixture.pack, 'optionsof.txt'), 'fov:90\n')
++  writeFileSync(join(fixture.pack, 'mods', 'extra.jar.disabled'), 'DISABLED')
++  writeFileSync(join(fixture.pack, 'screenshots', 'shot.png'), 'PNG')
++  await setPicks([fixture.pack])
++  await clickText('开发者端整合包定位', { exact: true })
++  dev = await waitDevIdle()
++  const specialKeys = (dev?.specials ?? []).map((x) => x.key)
++  check(['optifine', 'mods-disabled', 'screenshots'].every((k) => specialKeys.includes(k)),
++        '特殊导出选项只列出扫到的内容', JSON.stringify(specialKeys))
++  check((dev?.specials ?? []).every((x) => x.checked === false),
++        '特殊导出选项默认都不勾', JSON.stringify((dev?.specials ?? []).map((x) => [x.key, x.checked])))
++  check(await waitBody(/特殊导出选项/), '右栏出现「特殊导出选项」')
++  check(!(dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
++        '没勾之前它不该混进更新范围')
++
++  // 勾上 → 重扫后 optionsof.txt 出现在更新范围；再关掉恢复原样
++  const waitDev = (fn) => waitFor(async () => {
++    const d = await devState()
++    return d && fn(d) ? d : null
++  }, 60000)
++  await clickText('OptiFine 画质设置')
++  dev = await waitDev((d) => (d.specials ?? []).find((x) => x.key === 'optifine')?.checked === true)
++  check(!!dev, '勾选特殊选项后状态回写')
++  check((dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
++        '勾选后文件进入更新范围', JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
++  await clickText('OptiFine 画质设置')
++  dev = await waitDev((d) => (d.specials ?? []).find((x) => x.key === 'optifine')?.checked === false)
++  check(!!dev && !(dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
++        '取消后文件退出更新范围')
++
+   // 排除 config（点目录名）—— 快照到了不代表行已经画出来
+   await waitRow('config')
+   await clickRowName('config')
+-  dev = await devState()
+-  check((dev?.strategies ?? []).find((r) => r.name === 'config')?.excluded === true,
+-        '目录可被排除（config）')
++  dev = await waitDev((d) => (d.strategies ?? []).find((r) => r.name === 'config')?.excluded === true)
++  check(!!dev, '目录可被排除（config）')
+   // 改策略
+   await waitRow('mods')
+   await clickRowChip('mods', '替换重名')
+-  dev = await devState()
+-  check((dev?.strategies ?? []).find((r) => r.name === 'mods')?.current === '替换重名',
+-        '开发者策略可改（mods → 替换重名）')
++  dev = await waitDev((d) => (d.strategies ?? []).find((r) => r.name === 'mods')?.current === '替换重名')
++  check(!!dev, '开发者策略可改（mods → 替换重名）')
+   // 导出选项
+   await clickText('压缩到最小体积')
+-  dev = await devState()
+-  check(dev?.options?.min_size === true, '导出选项可切换（min_size）')
+-  // 更新日志
+-  const changelog = '# 导出夹具\n\n- 开发者端\n'
+-  await page.locator('textarea').first().fill(changelog)
+-  await sleep(1200)                       // 视图里有 500ms 防抖
+-  dev = await devState()
+-  check(dev?.changelog === changelog, '更新日志写回后端', JSON.stringify(dev?.changelog))
++  dev = await waitDev((d) => d.options?.min_size === true)
++  check(!!dev, '导出选项可切换（min_size）')
++
++  // ---- 更新日志：长按钮 → 独立窗口，所见即所得 ----
++  await clickText('编写更新日志', { exact: true })
++  // 判据必须是"抽屉里有可编辑正文"，不能靠文案：长按钮上本来就有「所见即所得」
++  check(await waitFor(async () =>
++    (await page.locator('[role="dialog"] [contenteditable="true"]').count()) === 1, 20000),
++    '更新日志编辑器打开')
++  await page.locator('[contenteditable="true"]').first().click()
++  await page.keyboard.type('导出夹具')
++  await page.keyboard.press('Enter')
++  await clickText('无序列表', { exact: true })        // 工具栏：无序列表
++  await page.keyboard.type('开发者端')
++  await sleep(300)
++  await clickText('预览', { exact: true })
++  check(await waitBody(/导出夹具/), '预览里能看到刚写的内容')
++  await clickText('Markdown', { exact: true })
++  const md = await page.locator('textarea').last().inputValue()
++  check(md.includes('导出夹具') && md.includes('开发者端'),
++        'Markdown 原文同步（两种视图同一份内容）', md)
++  await clickText('完成', { exact: true })
++  const changelog = md
++  dev = await waitDev((d) => (d.changelog ?? '').includes('导出夹具'))
++  check(!!dev, '更新日志写回后端', JSON.stringify(dev?.changelog))
+   // 输出位置（走 pick_path 的 save 分支）+ 开始制作
+   const outFile = join(work, 'dev-out', 'E2EExport.eapack')
+   await setPicks([outFile])
+diff --git a/scripts/dev/run_ui_e2e.py b/scripts/dev/run_ui_e2e.py
+index 4786cc9..6976d2f 100644
+--- a/scripts/dev/run_ui_e2e.py
++++ b/scripts/dev/run_ui_e2e.py
+@@ -69,7 +69,10 @@ def child_env(home: Path) -> dict:
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "PYTHONUTF8": "1",
+-           "PYTHONIOENCODING": "utf-8"}
++           "PYTHONIOENCODING": "utf-8",
++           # 端到端一律不查 CurseForge：要联网、会受额度影响，还可能把
++           # 夹具里的假 jar 当成"没命中"多跑几秒。查 CF 这条路由单测覆盖。
++           "PULSES_CF_KEY": ""}
+     env.pop("PULSES_UI", None)
+     env.pop("PULSES_E2E", None)
+     return env
+diff --git a/tests/test_cf_key.py b/tests/test_cf_key.py
+new file mode 100644
+index 0000000..29c1ac2
+--- /dev/null
++++ b/tests/test_cf_key.py
+@@ -0,0 +1,138 @@
++"""CurseForge API Key：默认用 PCL 内置那把，用户填的优先，环境变量可覆盖/禁用。"""
++
++from __future__ import annotations
++
++import os
++import shutil
++import tempfile
++import time
++import unittest
++from pathlib import Path
++from unittest import mock
++
++from app.core import cf_key, database as db, instance_export, lookup
++from app.ui_web.api import Api
++from app.ui_web.controller import AppController
++from app.ui_web.events import EventBus
++
++
++def _write(p: Path, text: str = "x") -> None:
++    p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(text, encoding="utf-8")
++
++
++class ResolveCase(unittest.TestCase):
++    def test_builtin_by_default(self):
++        with mock.patch.dict(os.environ, {}, clear=False):
++            os.environ.pop(cf_key.ENV_NAME, None)
++            self.assertEqual(cf_key.resolve(""), cf_key.DEFAULT_CF_API_KEY)
++            self.assertEqual(cf_key.resolve(None), cf_key.DEFAULT_CF_API_KEY)
++            self.assertEqual(cf_key.source(""), cf_key.SOURCE_BUILTIN)
++
++    def test_user_key_wins(self):
++        with mock.patch.dict(os.environ, {}, clear=False):
++            os.environ.pop(cf_key.ENV_NAME, None)
++            self.assertEqual(cf_key.resolve("my-key"), "my-key")
++            self.assertEqual(cf_key.source("my-key"), cf_key.SOURCE_USER)
++
++    def test_env_overrides_everything(self):
++        with mock.patch.dict(os.environ, {cf_key.ENV_NAME: "env-key"}):
++            self.assertEqual(cf_key.resolve("my-key"), "env-key")
++            self.assertEqual(cf_key.source("my-key"), cf_key.SOURCE_USER)
++
++    def test_env_empty_disables_curseforge(self):
++        """测试/CI 用 PULSES_CF_KEY="" 关掉 CF 查询，保持离线可重复。"""
++        with mock.patch.dict(os.environ, {cf_key.ENV_NAME: ""}):
++            self.assertEqual(cf_key.resolve("my-key"), "")
++            self.assertEqual(cf_key.source("my-key"), cf_key.SOURCE_OFF)
++
++    def test_builtin_looks_like_a_key(self):
++        self.assertTrue(cf_key.DEFAULT_CF_API_KEY.startswith("$2a$10$"))
++        self.assertGreater(len(cf_key.DEFAULT_CF_API_KEY), 50)
++
++
++class AuthCase(unittest.TestCase):
++    def test_401_is_auth_failure(self):
++        def boom(*_a, **_k):
++            raise __import__("urllib.error", fromlist=["HTTPError"]).HTTPError(
++                "https://api.curseforge.com/v1/fingerprints/432", 401, "no", {}, None)
++
++        client = lookup.CurseForgeClient("bad", fetch=boom, retries=0,
++                                         sleep=lambda _s: None)
++        with self.assertRaises(lookup.LookupDenied):
++            client.match([123])
++
++    def test_no_key_is_denied(self):
++        with self.assertRaises(lookup.LookupDenied):
++            lookup.CurseForgeClient("").match([123])
++
++
++class ExportUsesResolvedKeyCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = Path(tempfile.mkdtemp(prefix="pe-cfkey-"))
++        self.addCleanup(shutil.rmtree, self.tmp, True)
++        dbdir = self.tmp / "db"
++        db.create_database(dbdir)
++        self._appcfg = mock.patch.object(db, "_APP_CFG", self.tmp / "app-config.json")
++        self._appcfg.start()
++        self.addCleanup(self._appcfg.stop)
++        db.set_db_path(dbdir)
++
++        self.pack = self.tmp / "Pack"
++        _write(self.pack / "mods" / "a.jar", "A")
++        _write(self.pack / "config" / "c.toml", "c")
++
++        self.bus = EventBus()
++        self.ctl = AppController(self.bus)
++        self.api = Api(self.ctl, self.bus)
++        self.ctl.set_role("developer")
++
++    def load(self) -> dict:
++        self.api.invoke("dev.open", {"path": str(self.pack)})
++        for _ in range(300):
++            snap = self.api.invoke("dev.state", {})["data"]
++            if snap["phase"] != "loading":
++                return snap
++            time.sleep(0.02)
++        self.fail("识别没结束")
++
++    def test_snapshot_and_export_key(self):
++        with mock.patch.dict(os.environ, {}, clear=False):
++            os.environ.pop(cf_key.ENV_NAME, None)
++            snap = self.load()
++            self.assertEqual(snap["cfKeySource"], cf_key.SOURCE_BUILTIN)
++            self.assertFalse(snap["hasCfKey"])
++
++            seen: dict = {}
++
++            def fake_export(root, out, **kw):
++                seen.update(kw)
++                out.write_bytes(b"PK\x03\x04" + b"0" * 600)
++                return {"out": str(out)}
++
++            with mock.patch.object(instance_export, "export_from_instance", fake_export):
++                self.api.invoke("dev.export", {"path": str(self.tmp / "o.eapack")})
++                for _ in range(300):
++                    if seen:
++                        break
++                    time.sleep(0.02)
++            self.assertEqual(seen.get("cf_key"), cf_key.DEFAULT_CF_API_KEY)
++
++            # 用户填自己的 → 用用户的；清空 → 回到内置
++            snap = self.api.invoke("dev.cfkey.set", {"key": "user-key"})["data"]
++            self.assertEqual(snap["cfKeySource"], cf_key.SOURCE_USER)
++            with mock.patch.object(instance_export, "export_from_instance", fake_export):
++                seen.clear()
++                self.api.invoke("dev.export", {"path": str(self.tmp / "o2.eapack")})
++                for _ in range(300):
++                    if seen:
++                        break
++                    time.sleep(0.02)
++            self.assertEqual(seen.get("cf_key"), "user-key")
++
++            snap = self.api.invoke("dev.cfkey.set", {"key": ""})["data"]
++            self.assertEqual(snap["cfKeySource"], cf_key.SOURCE_BUILTIN)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_export_specials.py b/tests/test_export_specials.py
+new file mode 100644
+index 0000000..c3eba0c
+--- /dev/null
++++ b/tests/test_export_specials.py
+@@ -0,0 +1,108 @@
++"""特殊导出内容：扫到了才出现，默认都不导出。"""
++
++from __future__ import annotations
++
++import shutil
++import tempfile
++import unittest
++from pathlib import Path
++from unittest import mock
++
++from app.core import export_rules
++from app.core import export_specials
++
++
++def _write(p: Path, text: str = "x") -> None:
++    p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(text, encoding="utf-8")
++
++
++class DetectCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = Path(tempfile.mkdtemp(prefix="pe-special-"))
++        self.addCleanup(shutil.rmtree, self.tmp, True)
++        self.root = self.tmp / "Pack"
++        (self.root / "mods").mkdir(parents=True)
++        (self.root / "config").mkdir()
++        _write(self.root / "mods" / "normal.jar", "J")
++
++    def keys(self) -> list[str]:
++        return [item["key"] for item in export_specials.detect(self.root)]
++
++    def test_empty_instance_has_none(self):
++        self.assertEqual(self.keys(), [])
++
++    def test_not_fooled_by_unrelated_files(self):
++        _write(self.root / "config" / "jei" / "other.toml", "x")
++        _write(self.root / "mods" / "disabled.txt", "x")
++        _write(self.root / "screenshots2" / "a.png", "x")
++        self.assertEqual(self.keys(), [])
++
++    def test_optifine(self):
++        _write(self.root / "optionsof.txt", "fov:90")
++        found = export_specials.detect(self.root)
++        self.assertEqual([f["key"] for f in found], ["optifine"])
++        self.assertEqual(found[0]["files"], 1)
++        self.assertEqual(found[0]["bytes"], len("fov:90"))
++        self.assertEqual(found[0]["sample"], ["optionsof.txt"])
++
++    def test_disabled_mods(self):
++        _write(self.root / "mods" / "sodium.jar.disabled", "x")
++        _write(self.root / "mods" / "old.jar.old", "x")
++        found = export_specials.detect(self.root)
++        self.assertEqual([f["key"] for f in found], ["mods-disabled"])
++        self.assertEqual(found[0]["files"], 2)
++
++    def test_nested_dirs(self):
++        _write(self.root / "config" / "jei" / "world" / "bookmarks.ini", "x")
++        _write(self.root / "journeymap" / "data" / "sp" / "world" / "a.dat", "x")
++        _write(self.root / "screenshots" / "2026-01-01.png", "x")
++        self.assertEqual(self.keys(), ["jei", "maps", "screenshots"])
++
++    def test_order_follows_specials(self):
++        _write(self.root / "replay_recordings" / "a.mcpr", "x")
++        _write(self.root / "emi.json", "{}")
++        _write(self.root / "optionsshaders.txt", "x")
++        self.assertEqual(self.keys(), ["optifine", "emi", "replay"])
++
++    def test_does_not_read_file_contents(self):
++        _write(self.root / "screenshots" / "a.png", "x")
++        real_stat = Path.stat
++        reads: list[str] = []
++
++        def spy(self_path, *a, **kw):             # noqa: ANN001
++            return real_stat(self_path, *a, **kw)
++
++        with mock.patch.object(Path, "read_bytes", lambda *a, **k: reads.append("read")), \
++                mock.patch.object(Path, "read_text", lambda *a, **k: reads.append("read")), \
++                mock.patch.object(Path, "open", lambda *a, **k: reads.append("open")):
++            found = export_specials.detect(self.root)
++        self.assertEqual([f["key"] for f in found], ["screenshots"])
++        self.assertEqual(reads, [], "detect 不该读文件内容")
++
++    def test_cap(self):
++        for i in range(12):
++            _write(self.root / "screenshots" / f"s{i}.png", "x")
++        with mock.patch.object(export_specials, "MAX_FILES", 5):
++            found = export_specials.detect(self.root)
++        self.assertEqual(found[0]["files"], 5)
++
++    def test_not_a_directory(self):
++        self.assertEqual(export_specials.detect(self.root / "optionsof.txt"), [])
++
++    def test_keys_are_known_to_rule_engine(self):
++        """每个特殊选项都必须能在 export_rules 里找到同名 key，否则勾了没效果。"""
++        known = {g.key for g in export_rules.DEFAULT_OPTIONS}
++        for group in export_rules.DEFAULT_OPTIONS:
++            known.update(c.key for c in group.children)
++        self.assertTrue(export_specials.keys())
++        self.assertTrue(export_specials.keys() <= known,
++                        export_specials.keys() - known)
++
++    def test_optifine_is_default_on_in_engine(self):
++        """PCL 语义里 optifine 默认是勾的；本项目在 DevFlow 里把它剔掉（见另一个用例）。"""
++        self.assertIn("optifine", export_rules.default_keys())
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_pack_source.py b/tests/test_pack_source.py
+new file mode 100644
+index 0000000..c7e8eb9
+--- /dev/null
++++ b/tests/test_pack_source.py
+@@ -0,0 +1,165 @@
++"""pack_source.classify —— 开发者端 STEP 1 的"这是什么"判断。
++
++重点不只是判对，还要证明它**便宜**：只读中央目录/目录项，不读成员内容。
++"""
++
++from __future__ import annotations
++
++import json
++import shutil
++import tempfile
++import unittest
++import zipfile
++from pathlib import Path
++from unittest import mock
++
++from app.core import pack_source
++
++
++def _write(path: Path, text: str = "x") -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(text, encoding="utf-8")
++
++
++def _zip(path: Path, names: list[str], members: dict[str, str] | None = None) -> Path:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
++        for name in names:
++            zf.writestr(name, (members or {}).get(name, ""))
++    return path
++
++
++class ClassifyCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = Path(tempfile.mkdtemp(prefix="pe-src-"))
++        self.addCleanup(shutil.rmtree, self.tmp, True)
++        self.pack = self.tmp / "versions" / "DemoPack"
++        (self.pack / "mods").mkdir(parents=True)
++        (self.pack / "config").mkdir()
++        _write(self.pack / "mods" / "sodium.jar", "J")
++
++    # ---- 目录 ----
++    def test_instance_dir(self):
++        ref = pack_source.classify(self.pack)
++        self.assertEqual(ref.kind, pack_source.KIND_INSTANCE)
++        self.assertEqual(Path(ref.root), self.pack.resolve())
++        self.assertEqual(ref.label, "DemoPack")
++
++    def test_nested_dir_walks_up(self):
++        ref = pack_source.classify(self.pack / "mods")
++        self.assertEqual(ref.kind, pack_source.KIND_INSTANCE)
++        self.assertEqual(Path(ref.root), self.pack.resolve())
++
++    def test_any_file_inside_pack_walks_up(self):
++        """和侧边栏一样：选整合包里的任意文件也算定位到整合包。"""
++        ref = pack_source.classify(self.pack / "mods" / "sodium.jar")
++        self.assertEqual(ref.kind, pack_source.KIND_INSTANCE)
++        self.assertEqual(Path(ref.root), self.pack.resolve())
++
++    def test_dir_without_mods_config(self):
++        bare = self.tmp / "bare"
++        bare.mkdir()
++        with self.assertRaises(pack_source.SourceError) as ctx:
++            pack_source.classify(bare)
++        self.assertEqual(ctx.exception.code, "NOT_A_PACK")
++        self.assertIn("mods", ctx.exception.message)
++
++    # ---- zip ----
++    def test_zip_with_index(self):
++        path = _zip(self.tmp / "ok.zip", ["modrinth.index.json", "overrides/mods/a.jar"])
++        ref = pack_source.classify(path)
++        self.assertEqual(ref.kind, pack_source.KIND_ZIP)
++        self.assertEqual(ref.label, "ok")
++        self.assertEqual(ref.entries, 2)
++
++    def test_mrpack_suffix_and_nested_index(self):
++        path = _zip(self.tmp / "pack.mrpack",
++                    ["DemoPack/modrinth.index.json", "DemoPack/overrides/config/a.toml"])
++        ref = pack_source.classify(path)
++        self.assertEqual(ref.kind, pack_source.KIND_ZIP)
++
++    def test_zip_without_index_is_rejected(self):
++        path = _zip(self.tmp / "curseforge.zip", ["manifest.json", "overrides/mods/a.jar"])
++        with self.assertRaises(pack_source.SourceError) as ctx:
++            pack_source.classify(path)
++        self.assertEqual(ctx.exception.code, "NOT_A_PACK")
++        self.assertIn("modrinth.index.json", ctx.exception.message)
++
++    def test_broken_zip(self):
++        path = self.tmp / "broken.zip"
++        path.write_bytes(b"not a zip at all")
++        with self.assertRaises(pack_source.SourceError) as ctx:
++            pack_source.classify(path)
++        self.assertEqual(ctx.exception.code, "BAD_ZIP")
++
++    # ---- 明确的"拖错了" ----
++    def test_update_pack_is_rejected_with_reason(self):
++        path = self.tmp / "DemoPack_update.eapack"
++        path.write_bytes(b"PK\x03\x04")
++        with self.assertRaises(pack_source.SourceError) as ctx:
++            pack_source.classify(path)
++        self.assertEqual(ctx.exception.code, "IS_UPDATE_PACK")
++        self.assertIn("更新包", ctx.exception.message)
++
++    def test_unknown_suffix(self):
++        path = self.tmp / "notes.txt"
++        path.write_text("hi", encoding="utf-8")
++        with self.assertRaises(pack_source.SourceError) as ctx:
++            pack_source.classify(path)
++        self.assertEqual(ctx.exception.code, "NOT_SUPPORTED")
++
++    def test_missing_path(self):
++        with self.assertRaises(pack_source.SourceError) as ctx:
++            pack_source.classify(self.tmp / "nope")
++        self.assertEqual(ctx.exception.code, "NOT_FOUND")
++
++    def test_empty_input(self):
++        with self.assertRaises(pack_source.SourceError) as ctx:
++            pack_source.classify("   ")
++        self.assertEqual(ctx.exception.code, "INVALID_INPUT")
++
++    # ---- "便宜"是硬要求 ----
++    def test_never_reads_zip_members(self):
++        """判断阶段绝不能解压：成员读取一律炸掉，classify 仍要成功。"""
++        path = _zip(self.tmp / "big.zip",
++                    ["modrinth.index.json"] + [f"overrides/mods/m{i}.jar" for i in range(3000)])
++        boom = mock.Mock(side_effect=AssertionError("classify 不该读包内成员"))
++        with mock.patch.object(zipfile.ZipFile, "read", boom), \
++                mock.patch.object(zipfile.ZipFile, "open", boom), \
++                mock.patch.object(zipfile.ZipFile, "extract", boom), \
++                mock.patch.object(zipfile.ZipFile, "extractall", boom):
++            ref = pack_source.classify(path)
++        self.assertEqual(ref.kind, pack_source.KIND_ZIP)
++        self.assertEqual(ref.entries, 3001)
++        self.assertFalse(boom.called)
++
++    def test_too_many_entries_is_rejected_cheaply(self):
++        path = _zip(self.tmp / "huge.zip",
++                    ["modrinth.index.json"] + [f"f{i}" for i in range(50)])
++        with mock.patch.object(pack_source, "MAX_ENTRIES", 10):
++            with self.assertRaises(pack_source.SourceError) as ctx:
++                pack_source.classify(path)
++        self.assertEqual(ctx.exception.code, "TOO_MANY_ENTRIES")
++
++
++class IndexFixtureCase(unittest.TestCase):
++    """真 index 的最小合法形状（保证 classify 与 parse_mrpack 判据一致）。"""
++
++    def test_real_index_json_is_recognised(self):
++        tmp = Path(tempfile.mkdtemp(prefix="pe-src2-"))
++        self.addCleanup(shutil.rmtree, tmp, True)
++        index = {
++            "formatVersion": 1, "game": "minecraft", "name": "Demo",
++            "versionId": "1.0.0", "files": [],
++            "dependencies": {"minecraft": "1.20.1"},
++        }
++        path = tmp / "real.mrpack"
++        with zipfile.ZipFile(path, "w") as zf:
++            zf.writestr("modrinth.index.json", json.dumps(index))
++        ref = pack_source.classify(path)
++        self.assertEqual(ref.kind, pack_source.KIND_ZIP)
++        self.assertEqual(ref.note, "modrinth")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_web_dev_open.py b/tests/test_web_dev_open.py
+new file mode 100644
+index 0000000..c34849b
+--- /dev/null
++++ b/tests/test_web_dev_open.py
+@@ -0,0 +1,236 @@
++"""开发者端 STEP 1 的唯一入口 dev.open：快判断 + 后台识别 + 角色路由。
++
++要证明的三件事：
++1. 拖/选完立刻返回（phase=loading），不把界面卡在点击上；
++2. 识别完自己把状态推到位；晚到的旧结果不会覆盖新结果；
++3. 认错东西（.eapack / 没有 index 的 zip）要说清原因，并且不动已有来源。
++"""
++
++from __future__ import annotations
++
++import json
++import shutil
++import tempfile
++import threading
++import time
++import unittest
++import zipfile
++from pathlib import Path
++from unittest import mock
++
++from app.core import database as db
++from app.core import instance_scan
++from app.ui_web.api import Api
++from app.ui_web.controller import AppController
++from app.ui_web.events import EventBus
++
++
++def _write(p: Path, text: str = "x") -> None:
++    p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(text, encoding="utf-8")
++
++
++class DevOpenCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = Path(tempfile.mkdtemp(prefix="pe-devopen-"))
++        self.addCleanup(shutil.rmtree, self.tmp, True)
++        dbdir = self.tmp / "db"
++        db.create_database(dbdir)
++        self._appcfg = mock.patch.object(db, "_APP_CFG", self.tmp / "app-config.json")
++        self._appcfg.start()
++        self.addCleanup(self._appcfg.stop)
++        db.set_db_path(dbdir)
++
++        # 实例：mods/ + config/ + 一个根散文件
++        self.pack = self.tmp / "versions" / "DemoPack"
++        _write(self.pack / "mods" / "a.jar", "A")
++        _write(self.pack / "config" / "c.toml", "c = 1\n")
++        _write(self.pack / "options.txt", "fov:90\n")
++
++        self.pack2 = self.tmp / "versions" / "Second"
++        _write(self.pack2 / "mods" / "b.jar", "B")
++        _write(self.pack2 / "config" / "d.toml", "d = 2\n")
++
++        # Modrinth 导出包
++        self.zip_path = self.tmp / "DemoPack-1.0.0.mrpack"
++        with zipfile.ZipFile(self.zip_path, "w") as zf:
++            zf.writestr("modrinth.index.json", json.dumps({
++                "formatVersion": 1, "game": "minecraft", "name": "DemoPack",
++                "versionId": "1.0.0", "files": [],
++                "dependencies": {"minecraft": "1.20.1"}}))
++            zf.writestr("overrides/mods/a.jar", "A")
++            zf.writestr("overrides/config/c.toml", "c = 1\n")
++
++        # 坏 index（能过 classify，但 parse_mrpack 会失败）
++        self.bad_zip = self.tmp / "BadIndex.mrpack"
++        with zipfile.ZipFile(self.bad_zip, "w") as zf:
++            zf.writestr("modrinth.index.json", "{ not json")
++            zf.writestr("overrides/mods/a.jar", "A")
++
++        # 误拖的更新包
++        self.eapack = self.tmp / "Demo_update.eapack"
++        self.eapack.write_bytes(b"PK\x03\x04")
++
++        self.bus = EventBus()
++        self.ctl = AppController(self.bus)
++        self.api = Api(self.ctl, self.bus)
++
++    # ---- 小工具 ----
++    def dev(self) -> dict:
++        res = self.api.invoke("dev.state", {})
++        self.assertTrue(res["ok"], res)
++        return res["data"]
++
++    def wait_idle(self, timeout: float = 8.0) -> dict:
++        end = time.time() + timeout
++        snap = self.dev()
++        while time.time() < end:
++            snap = self.dev()
++            if snap["phase"] != "loading":
++                return snap
++            time.sleep(0.02)
++        self.fail(f"识别没有结束：{snap}")
++
++    def open(self, path) -> dict:
++        res = self.api.invoke("dev.open", {"path": str(path)})
++        self.assertTrue(res["ok"], res)
++        return res["data"]
++
++    # ---- 主路径 ----
++    def test_instance_returns_immediately_then_finishes(self):
++        real = instance_scan.scan_instance
++
++        def slow(*a, **kw):          # 让扫描慢下来，才能看出"没有同步等"
++            time.sleep(0.35)
++            return real(*a, **kw)
++
++        with mock.patch.object(instance_scan, "scan_instance", slow):
++            t0 = time.time()
++            snap = self.open(self.pack)
++            elapsed = time.time() - t0
++        self.assertLess(elapsed, 0.25, "dev.open 同步等了扫描")
++        self.assertEqual(snap["phase"], "loading")
++        self.assertEqual(snap["pending"]["kind"], "instance")
++        self.assertEqual(snap["pending"]["name"], "DemoPack")
++        self.assertTrue(self.ctl.dev.busy())
++
++        done = self.wait_idle()
++        self.assertEqual(done["phase"], "idle")
++        self.assertIsNone(done["pending"])
++        self.assertEqual(done["mode"], "instance")
++        self.assertEqual(done["instance"]["name"], "DemoPack")
++        self.assertEqual(sorted(s["name"] for s in done["strategies"]),
++                         ["config", "mods"])
++
++    def test_zip_source(self):
++        self.open(self.zip_path)
++        done = self.wait_idle()
++        self.assertEqual(done["phase"], "idle")
++        self.assertEqual(done["mode"], "zip")
++        self.assertEqual(done["source"]["name"], "DemoPack-1.0.0.mrpack")
++        self.assertEqual(sorted(s["name"] for s in done["strategies"]),
++                         ["config", "mods"])
++
++    def test_any_file_inside_instance_is_enough(self):
++        """和侧边栏一样：选整合包里的任意文件也能定位。"""
++        snap = self.open(self.pack / "mods" / "a.jar")
++        self.assertEqual(snap["pending"]["name"], "DemoPack")
++        done = self.wait_idle()
++        self.assertEqual(done["mode"], "instance")
++
++    # ---- 认错了要说清 ----
++    def test_update_pack_rejected(self):
++        res = self.api.invoke("dev.open", {"path": str(self.eapack)})
++        self.assertFalse(res["ok"])
++        self.assertEqual(res["error"]["code"], "IS_UPDATE_PACK")
++        self.assertIn("更新包", res["error"]["message"])
++        self.assertEqual(self.dev()["phase"], "idle")   # 没有进入识别
++
++    def test_zip_without_index_rejected(self):
++        path = self.tmp / "curseforge.zip"
++        with zipfile.ZipFile(path, "w") as zf:
++            zf.writestr("manifest.json", "{}")
++            zf.writestr("overrides/mods/a.jar", "A")
++        res = self.api.invoke("dev.open", {"path": str(path)})
++        self.assertFalse(res["ok"])
++        self.assertEqual(res["error"]["code"], "NOT_A_PACK")
++        self.assertIn("modrinth.index.json", res["error"]["message"])
++
++    def test_bad_index_keeps_previous_source(self):
++        self.open(self.pack)
++        self.assertEqual(self.wait_idle()["mode"], "instance")
++
++        res = self.api.invoke("dev.open", {"path": str(self.bad_zip)})
++        self.assertTrue(res["ok"], res)                  # 分类过了，识别时才失败
++        done = self.wait_idle()
++        self.assertEqual(done["phase"], "error")
++        self.assertIn("modrinth.index.json", done["error"])
++        # 之前的来源还在，不会被失败拖空
++        self.assertEqual(done["mode"], "instance")
++        self.assertEqual(done["instance"]["name"], "DemoPack")
++
++    # ---- 连续拖入：后来居上 ----
++    def test_second_open_wins(self):
++        real = instance_scan.scan_instance
++
++        def slow(*a, **kw):
++            time.sleep(0.3)
++            return real(*a, **kw)
++
++        with mock.patch.object(instance_scan, "scan_instance", slow):
++            self.open(self.pack)
++            time.sleep(0.02)
++            self.open(self.pack2)
++        done = self.wait_idle()
++        self.assertEqual(done["instance"]["name"], "Second",
++                         "先开始的旧结果覆盖了后来的选择")
++
++    # ---- 识别中不许导出 ----
++    def test_export_blocked_while_loading(self):
++        real = instance_scan.scan_instance
++        with mock.patch.object(instance_scan, "scan_instance",
++                               lambda *a, **k: (time.sleep(0.3), real(*a, **k))[1]):
++            self.open(self.pack)
++            res = self.api.invoke("dev.export", {"path": str(self.tmp / "out.eapack")})
++        self.assertFalse(res["ok"])
++        self.assertIn("识别", res["error"]["message"])
++
++    # ---- 角色路由：同一个 STEP 1 ----
++    def test_pick_pack_routes_by_role(self):
++        # 玩家端：定位到整合包本体
++        res = self.api.invoke("app.pick_pack", {"path": str(self.pack)})
++        self.assertTrue(res["ok"], res)
++        self.assertEqual(res["data"]["state"]["pack"]["name"], "DemoPack")
++
++        # 开发者端：同一个调用进 dev.open（立即 loading，不等扫描）
++        self.api.invoke("app.role.set", {"role": "developer"})
++        real = instance_scan.scan_instance
++        with mock.patch.object(instance_scan, "scan_instance",
++                               lambda *a, **k: (time.sleep(0.3), real(*a, **k))[1]):
++            res = self.api.invoke("app.pick_pack", {"path": str(self.pack2)})
++        self.assertTrue(res["ok"], res)
++        self.assertEqual(res["data"]["state"]["dev"]["phase"], "loading")
++        done = self.wait_idle()
++        self.assertEqual(done["instance"]["name"], "Second")
++
++    def test_player_role_still_rejects_non_pack(self):
++        res = self.api.invoke("app.pick_pack", {"path": str(self.eapack)})
++        self.assertFalse(res["ok"])
++        self.assertEqual(res["error"]["code"], "NOT_A_PACK")
++
++    def test_drop_routes_to_dev_when_developer(self):
++        self.api.invoke("app.role.set", {"role": "developer"})
++        res = self.api.handle_drop([str(self.pack)])
++        self.assertTrue(res["ok"], res)
++        done = self.wait_idle()
++        self.assertEqual(done["instance"]["name"], "DemoPack")
++
++    def test_drop_wrong_file_reports_reason(self):
++        self.api.invoke("app.role.set", {"role": "developer"})
++        res = self.api.handle_drop([str(self.eapack)])
++        self.assertFalse(res["ok"])
++        self.assertIn("更新包", res["error"]["message"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_web_dev_specials.py b/tests/test_web_dev_specials.py
+new file mode 100644
+index 0000000..a419327
+--- /dev/null
++++ b/tests/test_web_dev_specials.py
+@@ -0,0 +1,133 @@
++"""特殊导出选项与「更新范围」的关系：默认不导出、勾了才进包、zip 来源没有这些。"""
++
++from __future__ import annotations
++
++import json
++import shutil
++import tempfile
++import time
++import unittest
++import zipfile
++from pathlib import Path
++from unittest import mock
++
++from app.core import database as db
++from app.ui_web.api import Api
++from app.ui_web.controller import AppController
++from app.ui_web.events import EventBus
++
++
++def _write(p: Path, text: str = "x") -> None:
++    p.parent.mkdir(parents=True, exist_ok=True)
++    p.write_text(text, encoding="utf-8")
++
++
++class DevSpecialsCase(unittest.TestCase):
++    def setUp(self):
++        self.tmp = Path(tempfile.mkdtemp(prefix="pe-devspec-"))
++        self.addCleanup(shutil.rmtree, self.tmp, True)
++        dbdir = self.tmp / "db"
++        db.create_database(dbdir)
++        self._appcfg = mock.patch.object(db, "_APP_CFG", self.tmp / "app-config.json")
++        self._appcfg.start()
++        self.addCleanup(self._appcfg.stop)
++        db.set_db_path(dbdir)
++
++        self.pack = self.tmp / "versions" / "Pack"
++        _write(self.pack / "mods" / "a.jar", "A")
++        _write(self.pack / "config" / "c.toml", "c")
++        # 特殊内容
++        _write(self.pack / "optionsof.txt", "fov:90\n")
++        _write(self.pack / "mods" / "off.jar.disabled", "D")
++        _write(self.pack / "config" / "jei" / "world" / "bookmarks.ini", "B")
++        _write(self.pack / "screenshots" / "2026-01-01.png", "P")
++
++        self.zip = self.tmp / "Pack.mrpack"
++        with zipfile.ZipFile(self.zip, "w") as zf:
++            zf.writestr("modrinth.index.json", json.dumps({
++                "formatVersion": 1, "game": "minecraft", "name": "Pack",
++                "versionId": "1.0.0", "files": [],
++                "dependencies": {"minecraft": "1.20.1"}}))
++            zf.writestr("overrides/mods/a.jar", "A")
++
++        self.bus = EventBus()
++        self.ctl = AppController(self.bus)
++        self.api = Api(self.ctl, self.bus)
++        self.ctl.set_role("developer")
++
++    def dev(self) -> dict:
++        return self.api.invoke("dev.state", {})["data"]
++
++    def wait_idle(self, timeout: float = 10.0) -> dict:
++        end = time.time() + timeout
++        while time.time() < end:
++            snap = self.dev()
++            if snap["phase"] != "loading":
++                return snap
++            time.sleep(0.02)
++        self.fail(f"识别没结束：{snap}")
++
++    def open(self, path) -> dict:
++        res = self.api.invoke("dev.open", {"path": str(path)})
++        self.assertTrue(res["ok"], res)
++        return self.wait_idle()
++
++    def names(self, snap: dict) -> set[str]:
++        return {row["name"] for row in snap["strategies"]}
++
++    # ------------------------------------------------------------------
++    def test_specials_only_when_found_and_all_off(self):
++        snap = self.open(self.pack)
++        keys = [s["key"] for s in snap["specials"]]
++        self.assertEqual(keys, ["optifine", "mods-disabled", "jei", "screenshots"])
++        self.assertTrue(all(s["checked"] is False for s in snap["specials"]))
++        self.assertEqual(snap["specials"][0]["files"], 1)
++        # 默认不导出：这些内容不该出现在更新范围里
++        self.assertNotIn("optionsof.txt", self.names(snap))
++        self.assertNotIn("screenshots", self.names(snap))
++
++    def test_enabling_optifine_brings_file_into_scope(self):
++        before = self.open(self.pack)
++        files_before = before["instance"]["totals"]["files"]
++
++        snap = self.api.invoke("dev.rule.set", {"key": "optifine", "value": True})["data"]
++        self.assertIn("optionsof.txt", self.names(snap))
++        self.assertEqual(snap["instance"]["totals"]["files"], files_before + 1)
++        self.assertTrue(next(s for s in snap["specials"] if s["key"] == "optifine")["checked"])
++
++        # 关掉又回到原样（不会残留）
++        snap = self.api.invoke("dev.rule.set", {"key": "optifine", "value": False})["data"]
++        self.assertNotIn("optionsof.txt", self.names(snap))
++        self.assertEqual(snap["instance"]["totals"]["files"], files_before)
++
++    def test_enabling_screenshots_adds_row(self):
++        self.open(self.pack)
++        snap = self.api.invoke("dev.rule.set", {"key": "screenshots", "value": True})["data"]
++        self.assertIn("screenshots", self.names(snap))
++        self.assertEqual(next(s for s in snap["specials"] if s["key"] == "screenshots")["files"], 1)
++
++    def test_disabled_mod_is_not_a_row_until_enabled(self):
++        self.open(self.pack)
++        # mods 行在（普通 mod 会导出），但 .disabled 不算
++        snap = self.dev()
++        self.assertIn("mods", self.names(snap))
++        snap = self.api.invoke("dev.rule.set", {"key": "mods-disabled", "value": True})["data"]
++        mods = next(r for r in snap["strategies"] if r["name"] == "mods")
++        self.assertTrue(mods)  # 仍在
++        # 打开后文件数应该 +1
++        self.assertGreaterEqual(snap["instance"]["totals"]["files"], 2)
++
++    def test_zip_source_has_no_specials(self):
++        snap = self.open(self.zip)
++        self.assertEqual(snap["mode"], "zip")
++        self.assertEqual(snap["specials"], [])
++
++    def test_clear_drops_specials(self):
++        self.open(self.pack)
++        snap = self.api.invoke("dev.clear", {})["data"]
++        self.assertEqual(snap["specials"], [])
++        self.assertIsNone(snap["instance"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/web/package-lock.json b/web/package-lock.json
+index a9fcea1..ca79541 100644
+--- a/web/package-lock.json
++++ b/web/package-lock.json
+@@ -14,6 +14,7 @@
+         "framer-motion": "^12.23.0",
+         "react": "^19.2.0",
+         "react-dom": "^19.2.0",
++        "tiptap-markdown": "^0.9.0",
+         "zustand": "^5.0.8"
+       },
+       "devDependencies": {
+@@ -1710,6 +1711,28 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/@types/linkify-it": {
++      "version": "3.0.5",
++      "resolved": "https://registry.npmjs.org/@types/linkify-it/-/linkify-it-3.0.5.tgz",
++      "integrity": "sha512-yg6E+u0/+Zjva+buc3EIb+29XEg4wltq7cSmd4Uc2EE/1nUVmxyzpX6gUXD0V8jIrG0r7YeOGVIbYRkxeooCtw==",
++      "license": "MIT"
++    },
++    "node_modules/@types/markdown-it": {
++      "version": "13.0.9",
++      "resolved": "https://registry.npmjs.org/@types/markdown-it/-/markdown-it-13.0.9.tgz",
++      "integrity": "sha512-1XPwR0+MgXLWfTn9gCsZ55AHOKW1WN+P9vr0PaQh5aerR9LLQXUbjfEAFhjmEmyoYFWAyuN2Mqkn40MZ4ukjBw==",
++      "license": "MIT",
++      "dependencies": {
++        "@types/linkify-it": "^3",
++        "@types/mdurl": "^1"
++      }
++    },
++    "node_modules/@types/mdurl": {
++      "version": "1.0.5",
++      "resolved": "https://registry.npmjs.org/@types/mdurl/-/mdurl-1.0.5.tgz",
++      "integrity": "sha512-6L6VymKTzYSrEf4Nev4Xa1LCHKrlTlYCBMTlQKFuddo1CvQcE52I0mwfOJayueUC7MJuXOeHTcIU683lzd0cUA==",
++      "license": "MIT"
++    },
+     "node_modules/@types/react": {
+       "version": "19.3.0",
+       "resolved": "https://registry.npmjs.org/@types/react/-/react-19.3.0.tgz",
+@@ -1755,6 +1778,12 @@
+         "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0"
+       }
+     },
++    "node_modules/argparse": {
++      "version": "2.0.1",
++      "resolved": "https://registry.npmjs.org/argparse/-/argparse-2.0.1.tgz",
++      "integrity": "sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==",
++      "license": "Python-2.0"
++    },
+     "node_modules/baseline-browser-mapping": {
+       "version": "2.11.34",
+       "resolved": "https://registry.npmjs.org/baseline-browser-mapping/-/baseline-browser-mapping-2.11.34.tgz",
+@@ -1861,6 +1890,18 @@
+       "dev": true,
+       "license": "ISC"
+     },
++    "node_modules/entities": {
++      "version": "4.5.0",
++      "resolved": "https://registry.npmjs.org/entities/-/entities-4.5.0.tgz",
++      "integrity": "sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw==",
++      "license": "BSD-2-Clause",
++      "engines": {
++        "node": ">=0.12"
++      },
++      "funding": {
++        "url": "https://github.com/fb55/entities?sponsor=1"
++      }
++    },
+     "node_modules/esbuild": {
+       "version": "0.28.2",
+       "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
+@@ -2025,6 +2066,25 @@
+         "node": ">=6"
+       }
+     },
++    "node_modules/linkify-it": {
++      "version": "5.0.2",
++      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.2.tgz",
++      "integrity": "sha512-ONTm2jCMAVZjgQa/Fy1kScXsuOoF5NPTsoFBdE1KVIZ2vAh/r9+Bqo+0jINCBYnavTPQZz38QzFTme79ENoN3Q==",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/puzrin"
++        },
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/markdown-it"
++        }
++      ],
++      "license": "MIT",
++      "dependencies": {
++        "uc.micro": "^2.0.0"
++      }
++    },
+     "node_modules/linkifyjs": {
+       "version": "4.4.0",
+       "resolved": "https://registry.npmjs.org/linkifyjs/-/linkifyjs-4.4.0.tgz",
+@@ -2041,6 +2101,45 @@
+         "yallist": "^3.0.2"
+       }
+     },
++    "node_modules/markdown-it": {
++      "version": "14.3.3",
++      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.3.tgz",
++      "integrity": "sha512-L//tDAkjTjJCU6pBUSBTgs3Kg4InVaZuUZog/b6V12UKhcDQ7S78877ibbCanRExwPuYP1CZD7Gd2dxSy1GXRg==",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/puzrin"
++        },
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/markdown-it"
++        }
++      ],
++      "license": "MIT",
++      "dependencies": {
++        "argparse": "^2.0.1",
++        "entities": "^4.5.0",
++        "linkify-it": "^5.0.2",
++        "mdurl": "^2.0.0",
++        "punycode.js": "^2.3.1",
++        "uc.micro": "^2.1.0"
++      },
++      "bin": {
++        "markdown-it": "bin/markdown-it.mjs"
++      }
++    },
++    "node_modules/markdown-it-task-lists": {
++      "version": "2.1.1",
++      "resolved": "https://registry.npmjs.org/markdown-it-task-lists/-/markdown-it-task-lists-2.1.1.tgz",
++      "integrity": "sha512-TxFAc76Jnhb2OUu+n3yz9RMu4CwGfaT788br6HhEDlvWfdeJcLUsxk1Hgw2yJio0OXsxv7pyIPmvECY7bMbluA==",
++      "license": "ISC"
++    },
++    "node_modules/mdurl": {
++      "version": "2.1.0",
++      "resolved": "https://registry.npmjs.org/mdurl/-/mdurl-2.1.0.tgz",
++      "integrity": "sha512-1+HBaOx0zi/dQWht8rNv9MYf9qqpqL/kxI0hXImU6Y547zM6Sni8BQibt7ifgMcYtQg41ao3Ivd6cnSM86inpg==",
++      "license": "MIT"
++    },
+     "node_modules/motion-dom": {
+       "version": "12.43.0",
+       "resolved": "https://registry.npmjs.org/motion-dom/-/motion-dom-12.43.0.tgz",
+@@ -2269,6 +2368,39 @@
+         "w3c-keyname": "^2.2.0"
+       }
+     },
++    "node_modules/prosemirror-markdown": {
++      "version": "1.13.9",
++      "resolved": "https://registry.npmjs.org/prosemirror-markdown/-/prosemirror-markdown-1.13.9.tgz",
++      "integrity": "sha512-qAI3I9YdtjWHjTCBErc08ivr24KSrUjcTh5dYncCxFM+JS02kT0iHeWYjO35xeTPwt5t8rhFrelewXhXz16WZQ==",
++      "license": "MIT",
++      "dependencies": {
++        "@types/markdown-it": "^14.0.0",
++        "markdown-it": "^14.0.0",
++        "prosemirror-model": "^1.25.0"
++      }
++    },
++    "node_modules/prosemirror-markdown/node_modules/@types/linkify-it": {
++      "version": "5.0.0",
++      "resolved": "https://registry.npmjs.org/@types/linkify-it/-/linkify-it-5.0.0.tgz",
++      "integrity": "sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q==",
++      "license": "MIT"
++    },
++    "node_modules/prosemirror-markdown/node_modules/@types/markdown-it": {
++      "version": "14.2.0",
++      "resolved": "https://registry.npmjs.org/@types/markdown-it/-/markdown-it-14.2.0.tgz",
++      "integrity": "sha512-NoQ2yGlLWj4wpxMs+TYmRKk3thDrQ97agr7sFqfLsAlvoS8SNQuTrlObhFqG9iugdTtgOE9jpJ6FNM4ZGsa5xQ==",
++      "license": "MIT",
++      "dependencies": {
++        "@types/linkify-it": "^5",
++        "@types/mdurl": "^2"
++      }
++    },
++    "node_modules/prosemirror-markdown/node_modules/@types/mdurl": {
++      "version": "2.0.0",
++      "resolved": "https://registry.npmjs.org/@types/mdurl/-/mdurl-2.0.0.tgz",
++      "integrity": "sha512-RGdgjQUZba5p6QEFAVx2OGb8rQDL/cPRG7GiedRzMcJ1tYnUANBncjbSB1NRGwbvjcPeikRABz2nshyPk1bhWg==",
++      "license": "MIT"
++    },
+     "node_modules/prosemirror-model": {
+       "version": "1.25.12",
+       "resolved": "https://registry.npmjs.org/prosemirror-model/-/prosemirror-model-1.25.12.tgz",
+@@ -2333,6 +2465,15 @@
+         "prosemirror-transform": "^1.1.0"
+       }
+     },
++    "node_modules/punycode.js": {
++      "version": "2.3.1",
++      "resolved": "https://registry.npmjs.org/punycode.js/-/punycode.js-2.3.1.tgz",
++      "integrity": "sha512-uxFIHU0YlHYhDQtV4R9J6a52SLx28BCjT+4ieh7IGbgwVJWO+km431c4yRlREUAsAmt/uMjQUyQHNEPf0M39CA==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=6"
++      }
++    },
+     "node_modules/react": {
+       "version": "19.3.1",
+       "resolved": "https://registry.npmjs.org/react/-/react-19.3.1.tgz",
+@@ -2459,6 +2600,24 @@
+         "url": "https://github.com/sponsors/SuperchupuDev"
+       }
+     },
++    "node_modules/tiptap-markdown": {
++      "version": "0.9.0",
++      "resolved": "https://registry.npmjs.org/tiptap-markdown/-/tiptap-markdown-0.9.0.tgz",
++      "integrity": "sha512-dKLQ9iiuGNgrlGVjrNauF/UBzWu4LYOx5pkD0jNkmQt/GOwfCJsBuzZTsf1jZ204ANHOm572mZ9PYvGh1S7tpQ==",
++      "license": "MIT",
++      "workspaces": [
++        "example"
++      ],
++      "dependencies": {
++        "@types/markdown-it": "^13.0.7",
++        "markdown-it": "^14.1.0",
++        "markdown-it-task-lists": "^2.1.1",
++        "prosemirror-markdown": "^1.11.1"
++      },
++      "peerDependencies": {
++        "@tiptap/core": "^3.0.1"
++      }
++    },
+     "node_modules/tslib": {
+       "version": "2.8.1",
+       "resolved": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz",
+@@ -2479,6 +2638,12 @@
+         "node": ">=14.17"
+       }
+     },
++    "node_modules/uc.micro": {
++      "version": "2.1.0",
++      "resolved": "https://registry.npmjs.org/uc.micro/-/uc.micro-2.1.0.tgz",
++      "integrity": "sha512-ARDJmphmdvUk6Glw7y9DQ2bFkKBHwQHLi2lsaH6PPmz/Ka9sFOBsBluozhDltWmnv9u/cF6Rt87znRTPV+yp/A==",
++      "license": "MIT"
++    },
+     "node_modules/update-browserslist-db": {
+       "version": "1.3.4",
+       "resolved": "https://registry.npmjs.org/update-browserslist-db/-/update-browserslist-db-1.3.4.tgz",
+diff --git a/web/package.json b/web/package.json
+index 7fac573..f14b2fa 100644
+--- a/web/package.json
++++ b/web/package.json
+@@ -17,6 +17,7 @@
+     "framer-motion": "^12.23.0",
+     "react": "^19.2.0",
+     "react-dom": "^19.2.0",
++    "tiptap-markdown": "^0.9.0",
+     "zustand": "^5.0.8"
+   },
+   "devDependencies": {
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index 344564f..c4e77c5 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -1,4 +1,4 @@
+-import { useEffect } from 'react'
++import { Suspense, lazy, useEffect, useState } from 'react'
+ import { AnimatePresence } from 'framer-motion'
+ import { invoke, subscribe, whenReady } from '@/bridge'
+ import type { AppState } from '@/bridge/protocol'
+@@ -13,6 +13,10 @@ import ChangelogSheet from '@/components/ChangelogSheet'
+ import WhitelistSheet from '@/components/WhitelistSheet'
+ import DbSheet from '@/components/DbSheet'
+ import ToastHost from '@/components/ToastHost'
++import { useUi } from '@/store/ui'
++
++// 编辑器（Tiptap + markdown-it）单拉一个 chunk：不开就不下载、不解析
++const MarkdownEditorSheet = lazy(() => import('@/components/MarkdownEditorSheet'))
+ 
+ export default function App() {
+   const booting = useApp((s) => s.booting)
+@@ -21,6 +25,13 @@ export default function App() {
+   const setConnected = useApp((s) => s.setConnected)
+   const applyEvents = useApp((s) => s.applyEvents)
+   const pushToast = useApp((s) => s.pushToast)
++  const sheet = useUi((s) => s.sheet)
++  const [editorReady, setEditorReady] = useState(false)
++
++  // 第一次点开才加载编辑器；之后保活，关闭动画不丢
++  useEffect(() => {
++    if (sheet === 'changelog-editor') setEditorReady(true)
++  }, [sheet])
+ 
+   useEffect(() => {
+     const off = subscribe((events) => applyEvents(events))
+@@ -59,6 +70,11 @@ export default function App() {
+       <PreferencesSheet />
+       <PendingSheet />
+       <ChangelogSheet />
++      {editorReady && (
++        <Suspense fallback={null}>
++          <MarkdownEditorSheet />
++        </Suspense>
++      )}
+       <WhitelistSheet />
+       <DbSheet />
+       <DialogHost />
+diff --git a/web/src/bridge/protocol.ts b/web/src/bridge/protocol.ts
+index b00022f..231fbc2 100644
+--- a/web/src/bridge/protocol.ts
++++ b/web/src/bridge/protocol.ts
+@@ -139,13 +139,31 @@ export interface DevInstance {
+   rows: DevInstanceRow[];
+ }
+ 
++export interface DevSpecial {
++  key: string;
++  title: string;
++  desc: string;
++  /** 扫到的文件数 / 字节数（只统计，用来判断值不值得勾） */
++  files: number;
++  bytes: number;
++  sample: string[];
++  checked: boolean;
++}
++
+ export interface DevSnapshot {
+-  phase: 'idle' | 'exporting' | 'done' | 'error';
++  /** loading = 已认出是什么，正在读取（扫描/解析在后台线程） */
++  phase: 'idle' | 'loading' | 'exporting' | 'done' | 'error';
++  /** loading 时的目标；只有 phase=loading 才有值 */
++  pending: { kind: 'instance' | 'zip'; path: string; name: string; note?: string } | null;
+   /** zip = 导入启动器导出的整合包；instance = 直接读本地实例目录 */
+   mode: 'zip' | 'instance';
+   instance: DevInstance | null;
+   ruleOptions: DevRuleGroup[];
++  /** 特殊导出内容：只有扫到了才出现，默认都不勾 */
++  specials: DevSpecial[];
+   hasCfKey: boolean;
++  /** CurseForge Key 从哪来：内置默认 / 用户自己填的 / 被环境变量关掉 */
++  cfKeySource: 'user' | 'builtin' | 'off';
+   source: { path: string; name: string } | null;
+   name: string;
+   version: string;
+diff --git a/web/src/components/ChangelogSheet.tsx b/web/src/components/ChangelogSheet.tsx
+index 88b0c0e..1f980f5 100644
+--- a/web/src/components/ChangelogSheet.tsx
++++ b/web/src/components/ChangelogSheet.tsx
+@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
+ import { invoke } from '@/bridge'
+ import { useApp } from '@/store/app'
+ import { useUi } from '@/store/ui'
++import MarkdownPreview from './MarkdownPreview'
+ import Sheet from './Sheet'
+ 
+ /** 更新日志：后端直接给 markdown，这里只做轻量排版（标题/列表/段落）。 */
+@@ -23,36 +24,7 @@ export default function ChangelogSheet() {
+   return (
+     <Sheet open={open} title="更新日志" width={620} onClose={close}>
+       {text ? (
+-        <div className="selectable" style={{ display: 'grid', gap: 8, paddingTop: 4 }}>
+-          {text.split('\n').map((line, i) => {
+-            const t = line.trimEnd()
+-            if (!t) return <div key={i} style={{ height: 4 }} />
+-            if (t.startsWith('### '))
+-              return (
+-                <div key={i} className="t-title" style={{ marginTop: 6 }}>
+-                  {t.slice(4)}
+-                </div>
+-              )
+-            if (t.startsWith('## '))
+-              return (
+-                <div key={i} className="t-title" style={{ fontSize: 16, marginTop: 10 }}>
+-                  {t.slice(3)}
+-                </div>
+-              )
+-            if (/^[-*]\s/.test(t))
+-              return (
+-                <div key={i} className="t-body" style={{ display: 'flex', gap: 8 }}>
+-                  <span className="t-muted">·</span>
+-                  <span>{t.slice(2)}</span>
+-                </div>
+-              )
+-            return (
+-              <div key={i} className="t-body">
+-                {t}
+-              </div>
+-            )
+-          })}
+-        </div>
++        <MarkdownPreview text={text} />
+       ) : (
+         <div className="t-small" style={{ padding: '24px 0' }}>
+           {hasChangelog ? '正在读取…' : '这个更新包里没有更新日志。'}
+diff --git a/web/src/components/DeveloperView.module.css b/web/src/components/DeveloperView.module.css
+index f9b5227..ad7c6ea 100644
+--- a/web/src/components/DeveloperView.module.css
++++ b/web/src/components/DeveloperView.module.css
+@@ -22,6 +22,15 @@
+   gap: 12px;
+ }
+ 
++.pickRow {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 10px;
++  padding: 0 2px;
++  min-height: 22px;
++}
++
+ .actions {
+   display: flex;
+   justify-content: flex-end;
+@@ -44,11 +53,6 @@
+ }
+ 
+ /* 更新日志是右列唯一会长高的块（两列都不滚动时它吃掉余量） */
+-.changelogPanel {
+-  flex: 1;
+-  min-height: 0;
+-}
+-
+ .panelHead {
+   display: flex;
+   align-items: center;
+@@ -57,70 +61,12 @@
+ }
+ 
+ /* ---------- 来源切换 ---------- */
+-.sourceBar {
+-  display: flex;
+-  align-items: center;
+-  gap: 12px;
+-  min-height: 30px;
+-}
+-
+ /* 选中态只用中性提亮，强调色留给主按钮与勾选 */
+-.segOn {
+-  background: var(--c-card-2);
+-  color: var(--c-text);
+-}
+-
+ /* ---------- 实例摘要 ---------- */
+ .instance {
+   gap: 12px;
+ }
+ 
+-.instHead {
+-  display: flex;
+-  align-items: center;
+-  gap: 10px;
+-}
+-
+-.instIcon {
+-  flex: 0 0 auto;
+-  display: grid;
+-  place-items: center;
+-  width: 28px;
+-  height: 28px;
+-  border-radius: 9px;
+-  color: var(--c-text-2);
+-  background: var(--mat-2);
+-  border: 1px solid var(--hairline);
+-}
+-
+-.instText {
+-  flex: 1;
+-  min-width: 0;
+-  display: flex;
+-  flex-direction: column;
+-  gap: 2px;
+-}
+-
+-.instName {
+-  font-family: var(--font-display);
+-  font-size: var(--fs-title);
+-  font-weight: var(--fw-bold);
+-  color: var(--c-text);
+-  overflow: hidden;
+-  white-space: nowrap;
+-  text-overflow: ellipsis;
+-}
+-
+-.instPath {
+-  font-family: var(--font-mono);
+-  font-size: var(--fs-small);
+-  color: var(--c-text-2);
+-  overflow: hidden;
+-  white-space: nowrap;
+-  text-overflow: ellipsis;
+-  direction: ltr;
+-}
+-
+ .meta {
+   display: grid;
+   grid-template-columns: repeat(5, minmax(0, 1fr));
+@@ -158,135 +104,7 @@
+ }
+ 
+ /* ---------- 导出内容（两级勾选） ---------- */
+-.rules {
+-  display: flex;
+-  flex-direction: column;
+-  gap: 2px;
+-  max-height: 232px;          /* 正好 8 行，避免切在行中间 */
+-  min-height: 0;
+-  padding-right: 2px;
+-  overflow-y: auto;
+-  overflow-x: hidden;
+-  scrollbar-gutter: stable;
+-  mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent);
+-}
+-
+-.ruleGroup {
+-  display: flex;
+-  flex-direction: column;
+-  gap: 2px;
+-}
+-
+-.ruleGroup + .ruleGroup {
+-  margin-top: 4px;
+-}
+-
+-.rule {
+-  display: flex;
+-  align-items: center;
+-  gap: 10px;
+-  min-height: 27px;
+-  padding: 0 6px;
+-  border-radius: 8px;
+-  text-align: left;
+-  font-size: var(--fs-body);
+-  color: var(--c-text);
+-  transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast);
+-}
+-
+-.rule:hover {
+-  background: var(--mat-2);
+-}
+-
+-.rule[data-child='true'] {
+-  margin-left: 22px;
+-  min-height: 25px;
+-  font-size: var(--fs-small);
+-  color: var(--c-text-2);
+-}
+-
+-.rule[data-pending='true'] {
+-  opacity: 0.5;
+-}
+-
+-.rule:disabled {
+-  cursor: default;
+-}
+-
+-.check {
+-  position: relative;
+-  flex: 0 0 auto;
+-  width: 15px;
+-  height: 15px;
+-  border-radius: 5px;
+-  border: 1px solid var(--hairline-strong);
+-  background: transparent;
+-  transition: background var(--dur-fast) var(--ease-out),
+-    border-color var(--dur-fast) var(--ease-out);
+-}
+-
+-.check[data-on='true'] {
+-  background: var(--c-accent);
+-  border-color: var(--c-accent);
+-}
+-
+-.check[data-on='true']::after {
+-  content: '';
+-  position: absolute;
+-  left: 4.5px;
+-  top: 1.5px;
+-  width: 4px;
+-  height: 8px;
+-  border: solid var(--c-on-accent);
+-  border-width: 0 1.6px 1.6px 0;
+-  transform: rotate(42deg);
+-}
+-
+-.ruleTitle {
+-  flex: 1;
+-  min-width: 0;
+-  overflow: hidden;
+-  white-space: nowrap;
+-  text-overflow: ellipsis;
+-}
+-
+-.ruleCount {
+-  flex: 0 0 auto;
+-  font-size: var(--fs-tiny);
+-  color: var(--c-muted);
+-  font-variant-numeric: tabular-nums;
+-}
+-
+ /* ---------- CurseForge API Key ---------- */
+-.keyRow {
+-  display: flex;
+-  align-items: center;
+-  gap: 10px;
+-}
+-
+-.saved {
+-  font-size: var(--fs-small);
+-  color: var(--c-accent-text);
+-}
+-
+-.count {
+-  font-size: var(--fs-tiny);
+-  color: var(--c-muted);
+-}
+-
+-.editor {
+-  flex: 1;
+-  min-height: 160px;
+-  height: auto;
+-  padding: 12px 14px;
+-  resize: none;
+-  line-height: 1.7;
+-  font-family: var(--font-mono);
+-  font-size: 12.5px;
+-  background: rgba(0, 0, 0, 0.25);
+-  border-radius: 14px;
+-}
+-
+ .opts {
+   display: flex;
+   flex-direction: column;
+@@ -350,6 +168,66 @@
+   color: var(--c-muted);
+ }
+ 
++/* 特殊导出选项：标题后面跟"多少个 · 多大" */
++.optCount {
++  margin-left: 8px;
++  font-size: var(--fs-tiny);
++  color: var(--c-muted);
++  font-variant-numeric: tabular-nums;
++}
++
++/* ---------- 更新日志：压成一个长按钮 ---------- */
++.changelogButton {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 12px;
++  width: 100%;
++  min-height: 56px;
++  padding: 10px 14px;
++  border-radius: var(--r-card);
++  text-align: left;
++  cursor: pointer;
++  transition: border-color var(--dur-base) var(--ease-out),
++    background var(--dur-base) var(--ease-out);
++}
++
++.changelogButton:hover:not(:disabled) {
++  border-color: var(--hairline-strong);
++  background: var(--c-card-2);
++}
++
++.changelogButton:disabled {
++  opacity: 0.55;
++  cursor: default;
++}
++
++.changelogText {
++  display: flex;
++  flex-direction: column;
++  gap: 3px;
++  min-width: 0;
++}
++
++.changelogTitle {
++  font-size: var(--fs-body);
++  color: var(--c-text);
++}
++
++.changelogSub {
++  font-size: var(--fs-small);
++  color: var(--c-text-2);
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++
++.changelogGo {
++  flex: 0 0 auto;
++  font-size: var(--fs-small);
++  color: var(--c-accent-text);
++}
++
+ /* ---------- 更新范围表 ---------- */
+ .table {
+   flex: 1;
+@@ -471,6 +349,15 @@
+   transition: width var(--dur-base) var(--ease-out);
+ }
+ 
++.pickRow {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 10px;
++  padding: 0 2px;
++  min-height: 22px;
++}
++
+ .actions {
+   align-items: center;
+ }
+diff --git a/web/src/components/DeveloperView.tsx b/web/src/components/DeveloperView.tsx
+index dd8ed0b..80fa36f 100644
+--- a/web/src/components/DeveloperView.tsx
++++ b/web/src/components/DeveloperView.tsx
+@@ -1,7 +1,8 @@
+-import { useEffect, useRef, useState } from 'react'
++import { useEffect, useState } from 'react'
+ import { invoke, pickPath } from '@/bridge'
+-import type { DevRuleGroup, DevRuleNode, DevSnapshot, DevStrategy } from '@/bridge/protocol'
++import type { AppState, DevSnapshot, DevStrategy } from '@/bridge/protocol'
+ import { useApp } from '@/store/app'
++import { useUi } from '@/store/ui'
+ import DropZone from './DropZone'
+ import Icon from './Icon'
+ import styles from './DeveloperView.module.css'
+@@ -28,8 +29,6 @@ const LOADERS: Record<string, string> = {
+   vanilla: '原版',
+ }
+ 
+-type SourceMode = 'zip' | 'instance'
+-
+ const fmtInt = (n: number | undefined) => (n ?? 0).toLocaleString('zh-CN')
+ 
+ function fmtBytes(bytes: number | undefined): string {
+@@ -46,120 +45,76 @@ function fmtBytes(bytes: number | undefined): string {
+   return `${size.toFixed(digits)} ${units[index] ?? 'TB'}`
+ }
+ 
+-interface RuleRowProps {
+-  node: DevRuleNode
+-  child?: boolean
+-  count?: number
+-  pending?: boolean
+-  disabled?: boolean
+-  onToggle: (key: string, value: boolean) => void
+-}
+-
+-function RuleRow({ node, child = false, count, pending = false, disabled = false, onToggle }: RuleRowProps) {
+-  return (
+-    <button
+-      type="button"
+-      role="checkbox"
+-      aria-checked={node.checked}
+-      className={styles.rule}
+-      data-child={child}
+-      data-pending={pending}
+-      disabled={disabled}
+-      onClick={() => onToggle(node.key, !node.checked)}
+-    >
+-      <span className={styles.check} data-on={node.checked} aria-hidden />
+-      <span className={styles.ruleTitle}>{node.title}</span>
+-      {!child && count !== undefined && <span className={styles.ruleCount}>{fmtInt(count)} 个</span>}
+-    </button>
+-  )
+-}
+-
+ export default function DeveloperView() {
+   const dev = useApp((s) => s.state?.dev)
+   const connected = useApp((s) => s.connected)
+   const pushToast = useApp((s) => s.pushToast)
+   const patchState = useApp((s) => s.patchState)
+-  const [changelog, setChangelog] = useState('')
++  const setState = useApp((s) => s.setState)
++  const openSheet = useUi((s) => s.openSheet)
+   const [outName, setOutName] = useState('')
+   const [outPath, setOutPath] = useState('')
+-  // 来源是页面自己的意图：选「本地整合包目录」时后端还是 zip，直到真的选了一个目录
+-  const [source, setSource] = useState<SourceMode>(dev?.mode ?? 'zip')
+-  const [cfKey, setCfKey] = useState('')
+-  const [ruleBusy, setRuleBusy] = useState('')
+-  const seq = useRef(0)
++  const [specialBusy, setSpecialBusy] = useState('')
+ 
+   const instance = dev?.instance ?? null
+-  const ruleOptions: DevRuleGroup[] = dev?.ruleOptions ?? []
+-  const rows = instance?.rows ?? []
++  const specials = dev?.specials ?? []
+   const exporting = dev?.phase === 'exporting'
+-  const rootPath = source === 'instance' ? (instance?.root ?? '') : (dev?.source?.path ?? '')
+-
+-  // 后端是事实来源：它切了模式（导入 zip / 选实例 / 清空）就跟着切
+-  useEffect(() => {
+-    if (dev?.mode) setSource(dev.mode)
+-  }, [dev?.mode])
+-
+-  // 后端是事实来源；本地只在打字时短暂领先（防抖动回写）
+-  const sourceKey = dev?.source?.path ?? instance?.root ?? ''
+-  useEffect(() => {
+-    if (dev?.changelog !== undefined && dev.changelog !== changelog) {
+-      setChangelog(dev.changelog)
+-    }
+-    // eslint-disable-next-line react-hooks/exhaustive-deps
+-  }, [sourceKey])
++  const loading = dev?.phase === 'loading'
++  const pending = dev?.pending ?? null
++  const mode = instance ? 'instance' : 'zip'
++  const rootPath = instance?.root ?? dev?.source?.path ?? ''
+ 
+   useEffect(() => {
+     if (outName) return
+-    const base = source === 'instance' ? instance?.name : dev?.source?.name
++    const base = instance?.name ?? dev?.source?.name
+     if (!base) return
+     setOutName(`${base.replace(/\.(zip|mrpack)$/i, '')}_update.eapack`)
+-  }, [source, instance?.name, dev?.source?.name, outName])
++  }, [instance?.name, dev?.source?.name, outName])
+ 
+-  const importZip = async () => {
+-    if (!connected) return
++  // STEP 1 只有一个动作：把路径交给后端判断（实例目录 / 导出包都行）。
++  // 后端只做"认出是什么"就返回，扫描在后台；所以点完不会被卡住。
++  const openPath = async (path: string) => {
++    if (!connected || !path) return
+     try {
+-      const path = await pickPath('file', '')
+-      if (path) await invoke('dev.pick', { path })
++      const res = await invoke<{ state: AppState }>('app.pick_pack', { path })
++      const next = (res as unknown as { state?: AppState }).state
++      if (next) setState(next)
+     } catch (err) {
+-      pushToast(err instanceof Error ? err.message : '导入失败', 'error')
++      pushToast(err instanceof Error ? err.message : '打不开这个整合包', 'error')
+     }
+   }
+ 
+-  const pickInstance = async () => {
++  const openSource = async () => {
+     if (!connected) return
+     try {
+-      const path = await pickPath('folder', '')
+-      if (!path) return
+-      const snap = await invoke<DevSnapshot>('dev.instance.pick', { path })
+-      if (snap) patchState({ dev: snap })
++      const path = await pickPath('file', '')
++      if (path) await openPath(path)
+     } catch (err) {
+-      pushToast(err instanceof Error ? err.message : '无法读取这个目录', 'error')
++      pushToast(err instanceof Error ? err.message : '选择失败', 'error')
+     }
+   }
+ 
+-  const setRule = async (key: string, value: boolean) => {
+-    if (!connected || ruleBusy) return
+-    setRuleBusy(key)
++  const openDir = async () => {
++    if (!connected) return
+     try {
+-      const snap = await invoke<DevSnapshot>('dev.rule.set', { key, value })
+-      if (snap) patchState({ dev: snap })
++      const path = await pickPath('folder', '')
++      if (path) await openPath(path)
+     } catch (err) {
+-      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+-    } finally {
+-      setRuleBusy('')
++      pushToast(err instanceof Error ? err.message : '选择失败', 'error')
+     }
+   }
+ 
+-  const saveCfKey = async () => {
+-    if (!connected) return
+-    const key = cfKey.trim()
+-    if (!key) return
++  // 特殊导出内容：勾一个就重扫一次（后端 dev.rule.set），扫描期间禁用这一行
++  const setSpecial = async (key: string, value: boolean) => {
++    if (!connected || specialBusy) return
++    setSpecialBusy(key)
+     try {
+-      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key })
++      const snap = await invoke<DevSnapshot>('dev.rule.set', { key, value })
+       if (snap) patchState({ dev: snap })
+-      setCfKey('')
+     } catch (err) {
+       pushToast(err instanceof Error ? err.message : '保存失败', 'error')
++    } finally {
++      setSpecialBusy('')
+     }
+   }
+ 
+@@ -172,20 +127,6 @@ export default function DeveloperView() {
+     }
+   }
+ 
+-  const onChangelog = (text: string) => {
+-    setChangelog(text)
+-    if (!connected) return
+-    const mine = ++seq.current
+-    window.setTimeout(async () => {
+-      if (mine !== seq.current) return
+-      try {
+-        await invoke('dev.changelog.set', { text })
+-      } catch {
+-        /* 忽略 */
+-      }
+-    }, 500)
+-  }
+-
+   const setStrategy = async (name: string, value: string) => {
+     if (!connected) return
+     try {
+@@ -237,17 +178,8 @@ export default function DeveloperView() {
+     }
+   }
+ 
+-  // 顶层目录在当前扫描结果里被选中的文件数（按名字对 instance.rows）
+-  const topFiles = (key: string): number => {
+-    const want = key.toLowerCase()
+-    const exact = rows.find((r) => r.name.toLowerCase() === want)
+-    if (exact) return exact.files
+-    const prefixed = rows.find((r) => r.name.toLowerCase().startsWith(want))
+-    return prefixed ? prefixed.files : 0
+-  }
+-
+   const progressTotal =
+-    dev?.progress?.total || (source === 'instance' ? instance?.totals.files : undefined) || 0
++    dev?.progress?.total || instance?.totals.files || 0
+   const progressDone = dev?.progress?.done ?? 0
+   const percent = progressTotal > 0 ? Math.min(1, progressDone / progressTotal) : null
+   const loaderLabel = instance
+@@ -255,148 +187,98 @@ export default function DeveloperView() {
+         instance.loaderVersion ? ` ${instance.loaderVersion}` : ''
+       }`
+     : ''
+-  const checkedGroups = ruleOptions.filter((g) => g.checked).length
+   const hasSource = Boolean(dev?.source || instance)
+ 
++  // 更新日志按钮上的摘要：第一行有效内容 + 字数
++  const changelogText = (dev?.changelog ?? '').trim()
++  const changelogSummary = changelogText
++    ? `${changelogText.split('\n').find((line) => line.trim() && !line.trim().startsWith('#'))?.replace(/^[-*]\s*/, '') ?? '已写内容'} · ${changelogText.replace(/\s/g, '').length} 字`
++    : '还没写 · 点开编写（所见即所得）'
++
+   return (
+-    <div className={styles.page} data-mode={source}>
++    <div className={styles.page} data-mode={mode}>
+       <section className={styles.left}>
+-        <div className={styles.sourceBar}>
+-          <div className="seg">
+-            {(['zip', 'instance'] as SourceMode[]).map((m) => {
+-              const active = source === m
+-              const label = m === 'zip' ? '启动器整合包' : '本地整合包目录'
+-              return (
+-                <button
+-                  key={m}
+-                  type="button"
+-                  className={active ? `seg-item ${styles.segOn}` : 'seg-item'}
+-                  data-active={active}
+-                  aria-pressed={active}
+-                  onClick={() => setSource(m)}
+-                >
+-                  {label}
+-                </button>
+-              )
+-            })}
+-          </div>
++        <DropZone
++          step="STEP 1"
++          title={
++            loading
++              ? '识别中…'
++              : instance
++                ? instance.name
++                : dev?.source
++                  ? `导出包：${dev.source.name}`
++                  : '整合包定位'
++          }
++          subtitle={
++            loading
++              ? pending?.path ?? ''
++              : instance
++                ? `本地实例 · ${instance.root}`
++                : dev?.source
++                  ? `导出包 · ${dev.source.path}`
++                  : '整合包目录 / 整合包里的任意文件 / 启动器导出的 .zip'
++          }
++          hint={loading ? '' : hasSource ? '点击更换' : '拖入 · 或点击选择'}
++          height={96}
++          locked={exporting || loading}
++          ariaLabel="开发者端整合包定位"
++          onPick={() => void openSource()}
++        />
++
++        <div className={styles.pickRow}>
+           <span className="t-small">
+-            {source === 'instance' ? '直接读本地实例目录，不经过启动器导出' : '导入启动器导出的整合包'}
++            {loading
++              ? '正在读取整合包…（不挡界面，读完自动出现）'
++              : hasSource
++                ? '拖入 / 点击卡片可更换整合包'
++                : '本地实例直接选目录，不用先让启动器导出'}
+           </span>
++          <button
++            className="btn btn-ghost"
++            onClick={() => void openDir()}
++            disabled={!connected || exporting || loading}
++          >
++            选择目录…
++          </button>
+         </div>
+ 
+-        {source === 'zip' ? (
+-          <DropZone
+-            step="STEP 1"
+-            title={dev?.source ? `导出包：${dev.source.name}` : '拖入整合包，开始制作更新包'}
+-            subtitle={
+-              dev?.source
+-                ? `${dev.files} 个文件 · ${dev.version || '未标注版本'}`
+-                : '支持整合包根目录 / 版本目录'
+-            }
+-            hint={dev?.source ? '' : '或点击选择'}
+-            height={92}
+-            onPick={importZip}
+-          />
+-        ) : (
++        {instance && (
+           <div className={`${styles.surface} ${styles.panel} ${styles.instance}`}>
+-            <div className={styles.instHead}>
+-              <span className={styles.instIcon}>
+-                <Icon name="folder" size={15} />
+-              </span>
+-              <div className={styles.instText}>
+-                <span className={styles.instName}>{instance ? instance.name : '选择本地整合包目录'}</span>
+-                <span className={styles.instPath} title={instance?.root ?? ''}>
+-                  {instance ? instance.root : '实例根目录，需要包含 mods/ 与 config/'}
+-                </span>
++            <div className={styles.meta}>
++              <div className={styles.metaItem}>
++                <span className={styles.metaLabel}>MC 版本</span>
++                <span className={styles.metaValue}>{instance.minecraft || '未识别'}</span>
++              </div>
++              <div className={styles.metaItem}>
++                <span className={styles.metaLabel}>加载器</span>
++                <span className={styles.metaValue}>{loaderLabel || '未识别'}</span>
++              </div>
++              <div className={styles.metaItem}>
++                <span className={styles.metaLabel}>文件数</span>
++                <span className={styles.metaValue}>{fmtInt(instance.totals.files)}</span>
++              </div>
++              <div className={styles.metaItem}>
++                <span className={styles.metaLabel}>总体积</span>
++                <span className={styles.metaValue}>{fmtBytes(instance.totals.bytes)}</span>
++              </div>
++              <div className={styles.metaItem}>
++                <span className={styles.metaLabel}>候选资源</span>
++                <span className={styles.metaValue}>{fmtInt(instance.totals.candidates)}</span>
+               </div>
+-              <button
+-                className="btn"
+-                onClick={() => void pickInstance()}
+-                disabled={!connected || exporting}
+-              >
+-                {instance ? '更换目录' : '选择目录'}
+-              </button>
+             </div>
+-
+-            {instance && (
+-              <>
+-                <div className={styles.meta}>
+-                  <div className={styles.metaItem}>
+-                    <span className={styles.metaLabel}>MC 版本</span>
+-                    <span className={styles.metaValue}>{instance.minecraft || '未识别'}</span>
+-                  </div>
+-                  <div className={styles.metaItem}>
+-                    <span className={styles.metaLabel}>加载器</span>
+-                    <span className={styles.metaValue}>{loaderLabel || '未识别'}</span>
+-                  </div>
+-                  <div className={styles.metaItem}>
+-                    <span className={styles.metaLabel}>文件数</span>
+-                    <span className={styles.metaValue}>{fmtInt(instance.totals.files)}</span>
+-                  </div>
+-                  <div className={styles.metaItem}>
+-                    <span className={styles.metaLabel}>总体积</span>
+-                    <span className={styles.metaValue}>{fmtBytes(instance.totals.bytes)}</span>
+-                  </div>
+-                  <div className={styles.metaItem}>
+-                    <span className={styles.metaLabel}>候选资源</span>
+-                    <span className={styles.metaValue}>{fmtInt(instance.totals.candidates)}</span>
+-                  </div>
+-                </div>
+-                <p className={styles.note}>
+-                  候选：能查到 CurseForge 或 Modrinth 直链的模组，包里只写 index、不打包本体
+-              {(dev?.instance?.unsafeLinks?.length ?? 0) > 0 && (
++            <p className={styles.note}>
++              候选：能查到 CurseForge 或 Modrinth 直链的模组，包里只写 index、不打包本体
++              {(instance.unsafeLinks?.length ?? 0) > 0 && (
+                 <span className={styles.warnLine}>
+-                  已跳过 {dev?.instance?.unsafeLinks?.length} 个指向实例外的链接
++                  已跳过 {instance.unsafeLinks?.length} 个指向实例外的链接
+                 </span>
+               )}
+-              {(dev?.instance?.badNames?.length ?? 0) > 0 && (
++              {(instance.badNames?.length ?? 0) > 0 && (
+                 <span className={styles.warnLine}>
+-                  有 {dev?.instance?.badNames?.length} 个文件名不是 UTF-8，导出会失败
+-                </span>
+-              )}
+-                </p>
+-              </>
+-            )}
+-          </div>
+-        )}
+-
+-        {source === 'instance' && (
+-          <div className={`${styles.surface} ${styles.panel}`}>
+-            <div className={styles.panelHead}>
+-              <span className="t-title">导出内容</span>
+-              <span className="t-small">
+-                已选 {checkedGroups} / {ruleOptions.length} 组
+-              </span>
+-            </div>
+-            <div className={`${styles.rules} scroll`}>
+-              {ruleOptions.map((group) => (
+-                <div key={group.key} className={styles.ruleGroup}>
+-                  <RuleRow
+-                    node={group}
+-                    count={topFiles(group.key)}
+-                    pending={ruleBusy === group.key}
+-                    disabled={!connected || exporting || Boolean(ruleBusy)}
+-                    onToggle={setRule}
+-                  />
+-                  {group.children.map((child) => (
+-                    <RuleRow
+-                      key={child.key}
+-                      node={child}
+-                      child
+-                      pending={ruleBusy === child.key}
+-                      disabled={!connected || exporting || Boolean(ruleBusy)}
+-                      onToggle={setRule}
+-                    />
+-                  ))}
+-                </div>
+-              ))}
+-              {!ruleOptions.length && (
+-                <span className="t-small" style={{ padding: '14px 2px' }}>
+-                  选择目录后，这里会列出可以导出的内容。
++                  有 {instance.badNames?.length} 个文件名不是 UTF-8，导出会失败
+                 </span>
+               )}
+-            </div>
++            </p>
+           </div>
+         )}
+ 
+@@ -443,9 +325,7 @@ export default function DeveloperView() {
+             ))}
+             {!hasSource && (
+               <div className="t-small" style={{ padding: '18px 4px' }}>
+-                {source === 'instance'
+-                  ? '选择整合包目录后，这里会列出所有顶层目录与根目录文件。'
+-                  : '导入整合包后，这里会列出所有顶层目录与根目录文件。'}
++                定好整合包后，这里会列出所有顶层目录与根目录文件。
+               </div>
+             )}
+           </div>
+@@ -466,7 +346,7 @@ export default function DeveloperView() {
+             className="btn btn-primary"
+             style={{ height: 38, padding: '0 20px' }}
+             onClick={() => void build()}
+-            disabled={!rootPath || exporting}
++            disabled={!rootPath || exporting || loading}
+           >
+             {exporting ? '制作中…' : '开始制作更新包'}
+           </button>
+@@ -506,51 +386,41 @@ export default function DeveloperView() {
+       </section>
+ 
+       <section className={styles.right}>
+-        {source === 'instance' && (
++        {specials.length > 0 && (
+           <div className={`${styles.surface} ${styles.panel}`}>
+             <div className={styles.panelHead}>
+-              <span className="t-title">CurseForge API Key</span>
+-              {dev?.hasCfKey && <span className={styles.saved}>已保存</span>}
++              <span className="t-title">特殊导出选项</span>
++              <span className="t-small">扫到才出现 · 默认不带</span>
+             </div>
+-            <div className={styles.keyRow}>
+-              <input
+-                className="input"
+-                value={cfKey}
+-                onChange={(e) => setCfKey(e.target.value)}
+-                onKeyDown={(e) => {
+-                  if (e.key === 'Enter') void saveCfKey()
+-                }}
+-                placeholder={dev?.hasCfKey ? '已保存，重新填写可替换' : '粘贴 API Key'}
+-                spellCheck={false}
+-                autoComplete="off"
+-                style={{ flex: 1, minWidth: 0 }}
+-              />
+-              <button
+-                className="btn"
+-                onClick={() => void saveCfKey()}
+-                disabled={!connected || !cfKey.trim()}
+-              >
+-                保存
+-              </button>
++            <div className={`${styles.opts} scroll`}>
++              {specials.map((item) => (
++                <button
++                  key={item.key}
++                  type="button"
++                  className={styles.opt}
++                  data-on={item.checked}
++                  title={item.sample.join('\n')}
++                  onClick={() => void setSpecial(item.key, !item.checked)}
++                  disabled={!connected || exporting || Boolean(specialBusy)}
++                >
++                  <span className={styles.switch} data-on={item.checked}>
++                    <span className={styles.knob} />
++                  </span>
++                  <span className={styles.optText}>
++                    <span className={styles.optLabel}>
++                      {item.title}
++                      <span className={styles.optCount}>
++                        {fmtInt(item.files)} 个 · {fmtBytes(item.bytes)}
++                      </span>
++                    </span>
++                    <span className={styles.optDesc}>{item.desc}</span>
++                  </span>
++                </button>
++              ))}
+             </div>
+-            <p className={styles.note}>仅保存在本机，用于查模组直链；不填则只走 Modrinth</p>
+           </div>
+         )}
+ 
+-        <div className={`${styles.surface} ${styles.panel} ${styles.changelogPanel}`}>
+-          <div className={styles.panelHead}>
+-            <span className="t-title">更新日志</span>
+-            <span className={styles.count}>{changelog.length} 字</span>
+-          </div>
+-          <textarea
+-            className={`input selectable ${styles.editor}`}
+-            value={changelog}
+-            onChange={(e) => onChangelog(e.target.value)}
+-            placeholder="写点给玩家看的内容：新增了什么、修了什么、要注意什么。支持 Markdown。"
+-            spellCheck={false}
+-          />
+-        </div>
+-
+         <div className={`${styles.surface} ${styles.panel}`}>
+           <div className={styles.panelHead}>
+             <span className="t-title">导出选项</span>
+@@ -578,6 +448,20 @@ export default function DeveloperView() {
+             })}
+           </div>
+         </div>
++
++        <button
++          type="button"
++          className={`${styles.surface} ${styles.changelogButton}`}
++          onClick={() => openSheet('changelog-editor')}
++          disabled={!connected || exporting || loading}
++          aria-label="编写更新日志"
++        >
++          <span className={styles.changelogText}>
++            <span className={styles.changelogTitle}>更新日志</span>
++            <span className={styles.changelogSub}>{changelogSummary}</span>
++          </span>
++          <span className={styles.changelogGo}>编写 ›</span>
++        </button>
+       </section>
+     </div>
+   )
+diff --git a/web/src/components/DropZone.tsx b/web/src/components/DropZone.tsx
+index ebacc76..2bbe6c3 100644
+--- a/web/src/components/DropZone.tsx
++++ b/web/src/components/DropZone.tsx
+@@ -11,6 +11,8 @@ interface Props {
+   highlight?: boolean
+   locked?: boolean
+   variant?: 'sidebar' | 'work' | 'pending'
++  /** 无障碍名字，同时给端到端一个稳定的锚点（例如「开发者端整合包定位」） */
++  ariaLabel?: string
+   onPick?: () => void
+ }
+ 
+@@ -24,6 +26,7 @@ export default function DropZone({
+   highlight = true,
+   locked = false,
+   variant = 'work',
++  ariaLabel,
+   onPick,
+ }: Props) {
+   const [hover, setHover] = useState(false)
+@@ -44,6 +47,7 @@ export default function DropZone({
+       onDragLeave={() => setDragging(false)}
+       onDrop={() => setDragging(false)}
+       onClick={onPick}
++      aria-label={ariaLabel}
+       disabled={locked}
+       whileTap={locked ? undefined : { scale: 0.995 }}
+     >
+diff --git a/web/src/components/MarkdownEditorSheet.module.css b/web/src/components/MarkdownEditorSheet.module.css
+new file mode 100644
+index 0000000..5e3bf4b
+--- /dev/null
++++ b/web/src/components/MarkdownEditorSheet.module.css
+@@ -0,0 +1,207 @@
++/* 更新日志编辑器：哑光深色，和主界面同一套 tokens，不用任何发光/渐变 */
++
++.wrap {
++  display: flex;
++  flex-direction: column;
++  gap: 10px;
++}
++
++.bar {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  flex-wrap: wrap;
++  padding: 6px 8px;
++  border: 1px solid var(--hairline);
++  border-radius: 10px;
++  background: var(--c-card-2);
++}
++
++.barNote {
++  padding-left: 6px;
++}
++
++.divider {
++  width: 1px;
++  height: 18px;
++  margin: 0 4px;
++  background: var(--hairline);
++}
++
++.tool {
++  min-width: 26px;
++  height: 24px;
++  padding: 0 7px;
++  border: 1px solid transparent;
++  border-radius: 6px;
++  background: transparent;
++  color: var(--c-text-2);
++  font-size: 11.5px;
++  font-family: var(--font-mono);
++  line-height: 1;
++  cursor: pointer;
++  transition: background 140ms var(--ease-out), color 140ms var(--ease-out);
++}
++
++.tool:hover:not(:disabled) {
++  background: var(--mat-3);
++  color: var(--c-text);
++}
++
++.tool[data-on='true'] {
++  background: var(--c-accent-soft);
++  border-color: var(--c-accent-line);
++  color: var(--c-accent-text);
++}
++
++.tool:disabled {
++  opacity: 0.4;
++  cursor: default;
++}
++
++.linkRow {
++  display: flex;
++  gap: 8px;
++  align-items: center;
++}
++
++.area {
++  position: relative;
++  min-height: 320px;
++  max-height: min(52vh, 460px);
++  overflow: auto;
++  padding: 16px 20px;
++  border: 1px solid var(--hairline);
++  border-radius: 12px;
++  background: var(--c-card);
++  cursor: text;
++}
++
++.previewArea {
++  cursor: default;
++}
++
++.placeholder {
++  position: absolute;
++  top: 16px;
++  left: 20px;
++  right: 20px;
++  color: var(--c-muted);
++  font-size: var(--fs-body);
++  pointer-events: none;
++}
++
++/* ---- 富文本区（Tiptap / ProseMirror） ---- */
++.prose {
++  outline: none;
++  color: var(--c-text);
++  font-size: var(--fs-body);
++  line-height: 1.65;
++}
++
++.prose :global(p) {
++  margin: 0 0 8px;
++}
++
++.prose :global(h1) {
++  margin: 2px 0 10px;
++  font-size: 19px;
++  font-weight: 620;
++  font-family: var(--font-display);
++}
++
++.prose :global(h2) {
++  margin: 14px 0 8px;
++  font-size: 16px;
++  font-weight: 600;
++  font-family: var(--font-display);
++}
++
++.prose :global(h3) {
++  margin: 12px 0 6px;
++  font-size: 14px;
++  font-weight: 600;
++  color: var(--c-text);
++}
++
++.prose :global(ul),
++.prose :global(ol) {
++  margin: 0 0 8px;
++  padding-left: 20px;
++}
++
++.prose :global(li) {
++  margin: 3px 0;
++}
++
++.prose :global(li p) {
++  margin: 0;
++}
++
++.prose :global(blockquote) {
++  margin: 0 0 10px;
++  padding: 2px 0 2px 12px;
++  border-left: 2px solid var(--hairline-strong);
++  color: var(--c-text-2);
++}
++
++.prose :global(pre) {
++  margin: 0 0 10px;
++  padding: 10px 12px;
++  border: 1px solid var(--hairline);
++  border-radius: 8px;
++  background: var(--c-log);
++  font-family: var(--font-mono);
++  font-size: var(--fs-small);
++  white-space: pre-wrap;
++}
++
++.prose :global(code) {
++  font-family: var(--font-mono);
++  font-size: var(--fs-small);
++  color: var(--c-accent-text);
++}
++
++.prose :global(a) {
++  color: var(--c-accent-text);
++  text-decoration: underline;
++  text-underline-offset: 2px;
++}
++
++.prose :global(hr) {
++  margin: 14px 0;
++  border: none;
++  border-top: 1px solid var(--hairline);
++}
++
++.prose :global(strong) {
++  font-weight: 620;
++}
++
++.source {
++  min-height: 320px;
++  max-height: min(52vh, 460px);
++  padding: 14px 16px;
++  border: 1px solid var(--hairline);
++  border-radius: 12px;
++  background: var(--c-log);
++  color: var(--c-text-2);
++  font-family: var(--font-mono);
++  font-size: 12px;
++  line-height: 1.6;
++  resize: vertical;
++  outline: none;
++}
++
++.foot {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 12px;
++  width: 100%;
++}
++
++.footRight {
++  display: flex;
++  gap: 8px;
++}
+diff --git a/web/src/components/MarkdownEditorSheet.tsx b/web/src/components/MarkdownEditorSheet.tsx
+new file mode 100644
+index 0000000..162e62f
+--- /dev/null
++++ b/web/src/components/MarkdownEditorSheet.tsx
+@@ -0,0 +1,349 @@
++import { useEffect, useRef, useState } from 'react'
++import { EditorContent, useEditor, type Editor } from '@tiptap/react'
++import StarterKit from '@tiptap/starter-kit'
++import { Markdown } from 'tiptap-markdown'
++import { invoke } from '@/bridge'
++import { useApp } from '@/store/app'
++import { useUi } from '@/store/ui'
++import MarkdownPreview from './MarkdownPreview'
++import Sheet from './Sheet'
++import styles from './MarkdownEditorSheet.module.css'
++
++/** 扩展只建一次：重建扩展数组会让 Tiptap 整篇重建，光标跳回开头。 */
++const EXTENSIONS = [
++  // StarterKit 3 已经带 Link，不要再单独注册一份（重复会导致编辑器建不起来）
++  StarterKit.configure({
++    heading: { levels: [1, 2, 3] },
++    link: { openOnClick: false, autolink: true },
++  }),
++  Markdown.configure({
++    html: false,
++    tightLists: true,
++    linkify: true,
++    breaks: false,
++    transformPastedText: true,
++  }),
++]
++
++/** tiptap-markdown 没带类型声明，这里收口成一个小函数。 */
++const markdownOf = (editor: Editor): string =>
++  (editor.storage as unknown as { markdown: { getMarkdown: () => string } })
++    .markdown.getMarkdown()
++
++interface ToolButtonProps {
++  label: string
++  hint: string
++  on?: boolean
++  disabled?: boolean
++  onClick: () => void
++}
++
++function ToolButton({ label, hint, on = false, disabled = false, onClick }: ToolButtonProps) {
++  return (
++    <button
++      type="button"
++      className={styles.tool}
++      data-on={on}
++      title={hint}
++      aria-label={hint}
++      disabled={disabled}
++      onClick={onClick}
++    >
++      {label}
++    </button>
++  )
++}
++
++/**
++ * 更新日志编辑器：独立窗口，所见即所得（Tiptap + Markdown 序列化）。
++ *
++ * 三个视图：
++ *   edit    —— 富文本，写的时候就是成品的样子；
++ *   preview —— 玩家端抽屉里的同一套排版（ExportMarkdown 直接喂给 MarkdownPreview）；
++ *   source  —— 最终写进 .eapack 的 markdown 原文，可直接改。
++ * 内容改动 400ms 防抖回写后端（dev.changelog.set），关窗不丢。
++ */
++export default function MarkdownEditorSheet() {
++  const open = useUi((s) => s.sheet) === 'changelog-editor'
++  const close = useUi((s) => s.closeSheet)
++  const connected = useApp((s) => s.connected)
++  const stored = useApp((s) => s.state?.dev?.changelog ?? '')
++
++  const [view, setView] = useState<'edit' | 'preview' | 'source'>('edit')
++  const [text, setText] = useState('')
++  const [linkOpen, setLinkOpen] = useState(false)
++  const [href, setHref] = useState('https://')
++  const seq = useRef(0)
++  const loaded = useRef(false)
++
++  const editor = useEditor({
++    extensions: EXTENSIONS,
++    // 由 effect 里按需灌内容；immediatelyRender=false 走"挂载后创建"，
++    // 避免 React 19 下「创建 → 1ms 后判定未挂载 → destroy」留下已销毁实例
++    immediatelyRender: false,
++    content: '',
++    editorProps: { attributes: { class: styles.prose ?? '', spellcheck: 'false' } },
++    onUpdate: ({ editor: ed }) => {
++      const md = markdownOf(ed)
++      setText(md)
++      if (!connected) return
++      const mine = ++seq.current
++      window.setTimeout(() => {
++        if (mine !== seq.current) return
++        invoke('dev.changelog.set', { text: md }).catch(() => {
++          /* 忽略：离线/未连接时不打扰 */
++        })
++      }, 400)
++    },
++  })
++
++  // 打开时把后端的旧内容灌进去（只灌一次，避免打字过程中被回写覆盖）
++  useEffect(() => {
++    if (!open) {
++      loaded.current = false
++      return
++    }
++    if (!editor || editor.isDestroyed || loaded.current) return
++    loaded.current = true
++    setText(stored)
++    editor.commands.setContent(stored || '', { emitUpdate: false })
++    setView('edit')
++  }, [open, editor, stored])
++
++  // 源码视图改动 → 回写并同步进富文本
++  const onSource = (value: string) => {
++    setText(value)
++    editor?.commands.setContent(value || '', { emitUpdate: false })
++    if (!connected) return
++    invoke('dev.changelog.set', { text: value }).catch(() => {
++      /* 忽略 */
++    })
++  }
++
++  const applyLink = () => {
++    if (!editor) return
++    const url = href.trim()
++    if (!url || url === 'https://') {
++      editor.chain().focus().unsetLink().run()
++    } else {
++      editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
++    }
++    setLinkOpen(false)
++    setHref('https://')
++  }
++
++  const words = text.replace(/\s/g, '').length
++
++  return (
++    <Sheet
++      open={open}
++      title="更新日志"
++      subtitle="所见即所得；写的内容会一起打进更新包，玩家在「更新日志」里看到的就是它"
++      width={860}
++      onClose={close}
++      footer={
++        <div className={styles.foot}>
++          <span className="t-small">
++            {words ? `${words} 字` : '还没写内容'}
++            {text ? ` · ${text.split('\n').filter((l) => l.trim()).length} 行` : ''}
++          </span>
++          <div className={styles.footRight}>
++            <button
++              type="button"
++              className="btn btn-ghost"
++              onClick={() => {
++                onSource('')
++                editor?.commands.clearContent(true)
++              }}
++              disabled={!text}
++            >
++              清空
++            </button>
++            <button type="button" className="btn btn-primary" onClick={close}>
++              完成
++            </button>
++          </div>
++        </div>
++      }
++    >
++      <div className={styles.wrap}>
++        <div className={styles.bar}>
++          <div className="seg">
++            {(
++              [
++                ['edit', '编辑'],
++                ['preview', '预览'],
++                ['source', 'Markdown'],
++              ] as const
++            ).map(([key, label]) => (
++              <button
++                key={key}
++                type="button"
++                className="seg-item"
++                data-active={view === key}
++                onClick={() => setView(key)}
++              >
++                {label}
++              </button>
++            ))}
++          </div>
++
++          {view === 'edit' && (
++            <>
++              <span className={styles.divider} />
++              <ToolButton
++                label="H1"
++                hint="一级标题"
++                on={editor?.isActive('heading', { level: 1 })}
++                onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
++              />
++              <ToolButton
++                label="H2"
++                hint="二级标题"
++                on={editor?.isActive('heading', { level: 2 })}
++                onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
++              />
++              <ToolButton
++                label="H3"
++                hint="三级标题"
++                on={editor?.isActive('heading', { level: 3 })}
++                onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
++              />
++              <span className={styles.divider} />
++              <ToolButton
++                label="B"
++                hint="加粗"
++                on={editor?.isActive('bold')}
++                onClick={() => editor?.chain().focus().toggleBold().run()}
++              />
++              <ToolButton
++                label="I"
++                hint="斜体"
++                on={editor?.isActive('italic')}
++                onClick={() => editor?.chain().focus().toggleItalic().run()}
++              />
++              <ToolButton
++                label="S"
++                hint="删除线"
++                on={editor?.isActive('strike')}
++                onClick={() => editor?.chain().focus().toggleStrike().run()}
++              />
++              <span className={styles.divider} />
++              <ToolButton
++                label="•"
++                hint="无序列表"
++                on={editor?.isActive('bulletList')}
++                onClick={() => editor?.chain().focus().toggleBulletList().run()}
++              />
++              <ToolButton
++                label="1."
++                hint="有序列表"
++                on={editor?.isActive('orderedList')}
++                onClick={() => editor?.chain().focus().toggleOrderedList().run()}
++              />
++              <ToolButton
++                label="❝"
++                hint="引用"
++                on={editor?.isActive('blockquote')}
++                onClick={() => editor?.chain().focus().toggleBlockquote().run()}
++              />
++              <ToolButton
++                label="</>"
++                hint="代码块"
++                on={editor?.isActive('codeBlock')}
++                onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
++              />
++              <ToolButton
++                label="—"
++                hint="分割线"
++                onClick={() => editor?.chain().focus().setHorizontalRule().run()}
++              />
++              <span className={styles.divider} />
++              <ToolButton
++                label="链接"
++                hint="链接"
++                on={editor?.isActive('link')}
++                onClick={() => setLinkOpen((v) => !v)}
++              />
++              <ToolButton
++                label="撤销"
++                hint="撤销"
++                disabled={!editor?.can().undo()}
++                onClick={() => editor?.chain().focus().undo().run()}
++              />
++            </>
++          )}
++
++          {view !== 'edit' && (
++            <span className={`t-small ${styles.barNote}`}>
++              {view === 'preview'
++                ? '玩家端「更新日志」抽屉里的排版'
++                : '最终写进 .eapack 的原文，可直接改'}
++            </span>
++          )}
++        </div>
++
++        {linkOpen && view === 'edit' && (
++          <div className={styles.linkRow}>
++            <input
++              className="input"
++              autoFocus
++              value={href}
++              onChange={(e) => setHref(e.target.value)}
++              onKeyDown={(e) => {
++                if (e.key === 'Enter') applyLink()
++                if (e.key === 'Escape') setLinkOpen(false)
++              }}
++              placeholder="https://…"
++              spellCheck={false}
++            />
++            <button type="button" className="btn" onClick={applyLink}>
++              应用
++            </button>
++            <button type="button" className="btn btn-ghost" onClick={() => setLinkOpen(false)}>
++              取消
++            </button>
++          </div>
++        )}
++
++        {view === 'edit' && (
++          <div className={styles.area} onClick={() => editor?.chain().focus().run()}>
++            {!text.trim() && (
++              <div className={styles.placeholder}>
++                写点给玩家看的内容：新增了什么、修了什么、要注意什么。
++              </div>
++            )}
++            <EditorContent editor={editor} />
++          </div>
++        )}
++
++        {view === 'preview' && (
++          <div className={`${styles.area} ${styles.previewArea} scroll`}>
++            {text.trim() ? (
++              <MarkdownPreview text={text} />
++            ) : (
++              <div className="t-small">还没写内容。</div>
++            )}
++          </div>
++        )}
++
++        {view === 'source' && (
++          <textarea
++            className={`${styles.source} scroll`}
++            value={text}
++            spellCheck={false}
++            onChange={(e) => onSource(e.target.value)}
++            placeholder={'# 1.2.0\n\n- 新增 …\n- 修复 …'}
++          />
++        )}
++
++        {!connected && <div className="t-small">没连上后端，这次改动不会保存。</div>}
++        {connected && text.trim() && (
++          <div className="t-small">
++            已自动保存；关掉窗口也不会丢。
++          </div>
++        )}
++      </div>
++    </Sheet>
++  )
++}
+diff --git a/web/src/components/MarkdownPreview.tsx b/web/src/components/MarkdownPreview.tsx
+new file mode 100644
+index 0000000..3d7f1f6
+--- /dev/null
++++ b/web/src/components/MarkdownPreview.tsx
+@@ -0,0 +1,110 @@
++import type { ReactNode } from 'react'
++
++/**
++ * 更新日志的轻量 Markdown 渲染（标题 / 列表 / 段落 / 引用 / 代码块）。
++ *
++ * 玩家端的「更新日志」抽屉与开发者端的编辑器预览共用这一份，
++ * 保证"我编辑时看到的"和"玩家看到的"是同一套排版。
++ */
++export default function MarkdownPreview({ text }: { text: string }) {
++  const lines = (text || '').split('\n')
++  const blocks: ReactNode[] = []
++  let inCode = false
++  const codeLines: string[] = []
++
++  lines.forEach((line, i) => {
++    const t = line.trimEnd()
++    if (t.startsWith('```')) {
++      if (inCode) {
++        blocks.push(
++          <pre key={`c${i}`} className="md-code">
++            {codeLines.join('\n')}
++          </pre>,
++        )
++        codeLines.length = 0
++        inCode = false
++      } else {
++        inCode = true
++      }
++      return
++    }
++    if (inCode) {
++      codeLines.push(line)
++      return
++    }
++    if (!t) {
++      blocks.push(<div key={`s${i}`} style={{ height: 4 }} />)
++      return
++    }
++    if (t.startsWith('### ')) {
++      blocks.push(
++        <div key={i} className="t-title" style={{ marginTop: 6 }}>
++          {t.slice(4)}
++        </div>,
++      )
++      return
++    }
++    if (t.startsWith('## ')) {
++      blocks.push(
++        <div key={i} className="t-title" style={{ fontSize: 16, marginTop: 10 }}>
++          {t.slice(3)}
++        </div>,
++      )
++      return
++    }
++    if (t.startsWith('# ')) {
++      blocks.push(
++        <div key={i} className="t-title" style={{ fontSize: 18, marginTop: 10 }}>
++          {t.slice(2)}
++        </div>,
++      )
++      return
++    }
++    if (t.startsWith('> ')) {
++      blocks.push(
++        <div key={i} className="md-quote">
++          {t.slice(2)}
++        </div>,
++      )
++      return
++    }
++    if (/^\s*[-*]\s/.test(t)) {
++      blocks.push(
++        <div key={i} className="t-body md-li">
++          <span className="t-muted">·</span>
++          <span>{t.replace(/^\s*[-*]\s/, '')}</span>
++        </div>,
++      )
++      return
++    }
++    if (/^\s*\d+\.\s/.test(t)) {
++      const num = t.match(/^\s*(\d+)\.\s/)?.[1] ?? '1'
++      blocks.push(
++        <div key={i} className="t-body md-li">
++          <span className="t-muted">{num}.</span>
++          <span>{t.replace(/^\s*\d+\.\s/, '')}</span>
++        </div>,
++      )
++      return
++    }
++    blocks.push(
++      <div key={i} className="t-body">
++        {t}
++      </div>,
++    )
++  })
++
++  if (inCode && codeLines.length) {
++    blocks.push(
++      <pre key="c-end" className="md-code">
++        {codeLines.join('\n')}
++      </pre>,
++    )
++  }
++
++  return (
++    <div className="selectable md-preview" style={{ display: 'grid', gap: 6 }}>
++      {blocks}
++    </div>
++  )
++}
+diff --git a/web/src/components/PreferencesSheet.tsx b/web/src/components/PreferencesSheet.tsx
+index b8f0f96..72af3b7 100644
+--- a/web/src/components/PreferencesSheet.tsx
++++ b/web/src/components/PreferencesSheet.tsx
+@@ -1,5 +1,6 @@
+ import { useEffect, useState } from 'react'
+ import { invoke } from '@/bridge'
++import type { DevSnapshot } from '@/bridge/protocol'
+ import { useApp } from '@/store/app'
+ import { useUi } from '@/store/ui'
+ import Sheet from './Sheet'
+@@ -36,12 +37,48 @@ export default function PreferencesSheet() {
+   const raw = useApp((s) => s.state?.settings)
+   const state = (raw ?? EMPTY) as Settings
+   const pushToast = useApp((s) => s.pushToast)
++  const hasCfKey = useApp((s) => s.state?.dev?.hasCfKey ?? false)
++  const cfKeySource = useApp((s) => s.state?.dev?.cfKeySource ?? 'builtin')
++  const patchState = useApp((s) => s.patchState)
+   const [draft, setDraft] = useState<Settings>(state)
++  const [cfKey, setCfKey] = useState('')
++  const [cfBusy, setCfBusy] = useState(false)
+ 
+   useEffect(() => {
+     if (open) setDraft(state)
+   }, [open, state])
+ 
++  const clearCfKey = async () => {
++    if (!connected) return
++    setCfBusy(true)
++    try {
++      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key: '' })
++      if (snap) patchState({ dev: snap })
++      pushToast('已回到内置 Key', 'info')
++    } catch (err) {
++      pushToast(err instanceof Error ? err.message : '重置失败', 'error')
++    } finally {
++      setCfBusy(false)
++    }
++  }
++
++  const saveCfKey = async () => {
++    if (!connected || cfBusy) return
++    const key = cfKey.trim()
++    if (!key) return
++    setCfBusy(true)
++    try {
++      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key })
++      if (snap) patchState({ dev: snap })
++      setCfKey('')
++      pushToast('CurseForge API Key 已保存', 'info')
++    } catch (err) {
++      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
++    } finally {
++      setCfBusy(false)
++    }
++  }
++
+   const patch = async (next: Settings) => {
+     setDraft((d) => ({ ...d, ...next }))
+     if (!connected) return
+@@ -116,7 +153,57 @@ export default function PreferencesSheet() {
+           />
+         </Row>
+ 
+-        <Row label="界面" note="「自动」先试新界面、起不来自动退回旧界面；重启后生效">
++        <div className="t-small" style={{ marginTop: 4, color: 'var(--c-muted)' }}>
++          开发者端
++        </div>
++
++        <Row label="CurseForge API Key" note="默认用 PCL 内置的那把，开箱即用；填自己的会覆盖（仅存本机）">
++          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
++            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
++              <input
++                className="input"
++                value={cfKey}
++                onChange={(e) => setCfKey(e.target.value)}
++                onKeyDown={(e) => {
++                  if (e.key === 'Enter') void saveCfKey()
++                }}
++                placeholder={hasCfKey ? '已自定义，留空保存可回到内置' : '留空即用内置'}
++                spellCheck={false}
++                autoComplete="off"
++                style={{ width: 168 }}
++              />
++              <button
++                className="btn"
++                onClick={() => void saveCfKey()}
++                disabled={!connected || !cfKey.trim() || cfBusy}
++              >
++                {hasCfKey ? '更换' : '保存'}
++              </button>
++              {hasCfKey && (
++                <button
++                  className="btn btn-ghost"
++                  onClick={() => void clearCfKey()}
++                  disabled={!connected || cfBusy}
++                >
++                  用回内置
++                </button>
++              )}
++            </div>
++            <span className="t-small">
++              {cfKeySource === 'user'
++                ? '正在使用：你自己的 Key'
++                : cfKeySource === 'off'
++                  ? '已禁用（环境变量 PULSES_CF_KEY）'
++                  : '正在使用：内置（PCL 默认）'}
++            </span>
++          </div>
++        </Row>
++
++        <div className="t-small" style={{ marginTop: 4, color: 'var(--c-muted)' }}>
++          界面
++        </div>
++
++        <Row label="默认界面" note="「自动」先试新界面、起不来自动退回旧界面；重启后生效">
+           <div className="seg">
+             {UI_MODES.map((m) => {
+               const active = (draft.ui_mode ?? 'auto') === m.id
+diff --git a/web/src/components/Sidebar.tsx b/web/src/components/Sidebar.tsx
+index af1cbb8..0b7e45d 100644
+--- a/web/src/components/Sidebar.tsx
++++ b/web/src/components/Sidebar.tsx
+@@ -56,10 +56,12 @@ export default function Sidebar() {
+ 
+       <DropZone
+         step="STEP 1"
+-        title={state?.role === 'developer' ? '导入整合包' : '定位整合包'}
++        title={state?.role === 'developer' ? '整合包定位' : '定位整合包'}
+         subtitle={
+           state?.role === 'developer'
+-            ? '启动器导出的 .zip / .mrpack'
++            ? state?.dev?.instance?.name ??
++              state?.dev?.source?.name ??
++              '整合包目录 / 导出包'
+             : state?.pack
+               ? state.pack.name
+               : '拖入整合包内任意文件'
+diff --git a/web/src/e2e/harness.ts b/web/src/e2e/harness.ts
+index 947aa44..5610c9d 100644
+--- a/web/src/e2e/harness.ts
++++ b/web/src/e2e/harness.ts
+@@ -186,7 +186,9 @@ function findButton(label: string, exact = false): HTMLButtonElement | null {
+   for (const btn of allButtons()) {
+     if (!isShown(btn)) continue
+     const text = squeeze(btn.innerText || '')
+-    if (exact ? text === want : text.includes(want)) return btn
++    const aria = squeeze(btn.getAttribute('aria-label') || '')
++    if (exact ? (text === want || aria === want)
++      : (text.includes(want) || aria.includes(want))) return btn
+   }
+   return null
+ }
+@@ -685,12 +687,26 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
+   }
+   await clickText('开发者', { exact: true })
+   need(await waitText(/开始制作更新包/), '切到开发者视图')
+-  setPicks([fx.zip])
+-  await clickText('拖入整合包')
+-  need(await waitText(/更新范围/), '开发者导入整合包')
+-  let dev = await devSnap()
++  const waitDevIdle = () => waitFor(async () => {
++    const d = await devSnap()
++    return d && d.phase !== 'loading' ? d : null
++  }, 60000)
++  // STEP 1 = 整合包定位：先走实例目录（不用启动器导出），再验导出包也认
++  setPicks([fx.pack])
++  await clickText('开发者端整合包定位', { exact: true })
++  let dev = await waitDevIdle()
++  check(dev?.mode === 'instance' && Boolean(dev?.instance?.root),
++    '开发者定位本地实例', JSON.stringify(dev?.mode))
+   check((dev?.strategies ?? []).length >= 2, '开发者列出更新范围',
+     JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
++  setPicks([fx.zip])
++  await clickText('开发者端整合包定位', { exact: true })
++  dev = await waitDevIdle()
++  check(dev?.mode === 'zip' && Boolean(dev?.source), '导出包也认（zip）',
++    JSON.stringify(dev?.source))
++  const rejected = await bridgeInvoke('dev.open', { path: fx.update })
++  const rejectedCode = rejected && rejected.ok === false ? rejected.error.code : ''
++  check(rejectedCode === 'IS_UPDATE_PACK', '更新包被明确拒绝', rejectedCode)
+   // 排除 config（点目录名）—— 快照到了不代表行已经画出来
+   await waitRow('config')
+   await clickRowName('config')
+@@ -707,12 +723,21 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
+   await clickText('压缩到最小体积')
+   dev = await devSnap()
+   check(dev?.options?.min_size === true, '导出选项可切换（min_size）')
+-  // 更新日志（视图里有 500ms 防抖）
++  // 导出内容面板已去掉：顶层目录交给「更新范围」
++  check(!(await bodyText()).includes('导出内容'), '「导出内容」面板已移除')
++  // 更新日志：长按钮 → 独立窗口（这里走 Markdown 视图，Windows 上最稳）
+   const changelog = '# 导出夹具\n\n- 开发者端\n'
++  await clickText('编写更新日志', { exact: true })
++  need(await waitText(/所见即所得/), '更新日志编辑器打开')
++  await clickText('Markdown', { exact: true })
+   setInput('textarea', changelog)
+-  await sleep(1200)
+-  dev = await devSnap()
+-  check(dev?.changelog === changelog, '更新日志写回后端', JSON.stringify(dev?.changelog))
++  await sleep(800)
++  await clickText('完成', { exact: true })
++  const changelogBack = await waitFor(async () => {
++    const d = await devSnap()
++    return d && (d.changelog ?? '').includes('导出夹具') ? d : null
++  }, 20000)
++  check(!!changelogBack, '更新日志写回后端', JSON.stringify(changelogBack?.changelog))
+   // 输出位置（走 pick_path 的 save 分支）+ 开始制作
+   const outFile = joinPath(work, 'dev-out/E2EExport.eapack')
+   setPicks([outFile])
+diff --git a/web/src/store/ui.ts b/web/src/store/ui.ts
+index 4643bd2..e1baba5 100644
+--- a/web/src/store/ui.ts
++++ b/web/src/store/ui.ts
+@@ -4,6 +4,7 @@ export type SheetKind =
+   | 'preferences'
+   | 'pending'
+   | 'changelog'
++  | 'changelog-editor'
+   | 'db'
+   | 'whitelist'
+   | null
+diff --git a/web/src/styles/global.css b/web/src/styles/global.css
+index f343128..a6f7e85 100644
+--- a/web/src/styles/global.css
++++ b/web/src/styles/global.css
+@@ -106,3 +106,29 @@ textarea:focus {
+ img {
+   -webkit-user-drag: none;
+ }
++
++/* ---- Markdown 渲染（更新日志抽屉 / 编辑器预览共用） ---- */
++.md-preview .md-li {
++  display: flex;
++  gap: 8px;
++}
++
++.md-preview .md-quote {
++  border-left: 2px solid var(--hairline-strong);
++  padding: 2px 0 2px 10px;
++  color: var(--c-text-2);
++  font-size: var(--fs-body);
++}
++
++.md-preview .md-code {
++  margin: 0;
++  padding: 10px 12px;
++  background: var(--c-log);
++  border: 1px solid var(--hairline);
++  border-radius: 8px;
++  font-family: var(--font-mono);
++  font-size: var(--fs-small);
++  color: var(--c-text-2);
++  white-space: pre-wrap;
++  word-break: break-word;
++}

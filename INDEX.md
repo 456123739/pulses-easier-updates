@@ -86,3 +86,31 @@ git worktree add ../pulses-resources resources
 * `logs/` 是历次单元 / 端到端测试的运行日志（`tests/logs/` 在 main 里已被忽略）。
   结论汇总在 `CHANGELOG.md` 与 `docs/测试记录-*.md`，原始日志只在这里留档。
 * 校验：`sha256sum` 值与上表比对；`manifest.json` 里有完整值。
+
+## 追加：2026-11-08 dev-ui 界面证据与交付包
+
+开发者端 UI 重做（整合包定位 / 特殊导出选项 / 更新日志编辑器 / CF Key）的验收证据与交付物，
+对应源码提交 `26ec806`（分支 `feat/dev-ui-rework`）。文件放在 `artifacts/2026-11-08-dev-ui/`。
+
+| 路径 | 大小 | 日期 | sha256 |
+|---|---|---|---|
+| `artifacts/2026-11-08-dev-ui/shots/01-player-empty.png` | 0.10 MB | 2026-11-08 | `5fabec77580a1267…` |
+| `artifacts/2026-11-08-dev-ui/shots/02-player-imported.png` | 0.10 MB | 2026-11-08 | `753953530acfd926…` |
+| `artifacts/2026-11-08-dev-ui/shots/03-player-compared.png` | 0.12 MB | 2026-11-08 | `a951eeedb4dbbbcd…` |
+| `artifacts/2026-11-08-dev-ui/shots/04-preferences.png` | 0.13 MB | 2026-11-08 | `cb09ab2b697fffd9…` |
+| `artifacts/2026-11-08-dev-ui/shots/05-developer-empty.png` | 0.12 MB | 2026-11-08 | `a21b69386ec99b90…` |
+| `artifacts/2026-11-08-dev-ui/shots/06-developer-instance.png` | 0.16 MB | 2026-11-08 | `371cfee8b6da87dc…` |
+| `artifacts/2026-11-08-dev-ui/shots/07-developer-zip.png` | 0.12 MB | 2026-11-08 | `f954be40222462a2…` |
+| `artifacts/2026-11-08-dev-ui/shots/08-changelog-editor.png` | 0.12 MB | 2026-11-08 | `672482f7f91ef091…` |
+| `artifacts/2026-11-08-dev-ui/shots/09-preferences-cf.png` | 0.18 MB | 2026-11-08 | `7f068b2046aa5b9f…` |
+| `artifacts/2026-11-08-dev-ui/deliver/05-developer-empty.png` | 0.12 MB | 2026-11-08 | `a21b69386ec99b90…` |
+| `artifacts/2026-11-08-dev-ui/deliver/06-developer-instance.png` | 0.16 MB | 2026-11-08 | `371cfee8b6da87dc…` |
+| `artifacts/2026-11-08-dev-ui/deliver/07-developer-zip.png` | 0.12 MB | 2026-11-08 | `f954be40222462a2…` |
+| `artifacts/2026-11-08-dev-ui/deliver/08-changelog-editor.png` | 0.12 MB | 2026-11-08 | `672482f7f91ef091…` |
+| `artifacts/2026-11-08-dev-ui/deliver/09-preferences-cf.png` | 0.18 MB | 2026-11-08 | `7f068b2046aa5b9f…` |
+| `artifacts/2026-11-08-dev-ui/deliver/dev-ui-rework.patch` | 0.15 MB | 2026-11-08 | `5f86d88da8aac032…` |
+| `artifacts/2026-11-08-dev-ui/deliver/交付说明.md` | 0.00 MB | 2026-11-08 | `ce12b815f81e11a1…` |
+| `artifacts/2026-11-08-dev-ui/e2e-ui.png` | 0.13 MB | 2026-11-08 | `07b8e5f32d900683…` |
+
+* 本轮合计：**17 个 / 2.15 MB**
+* 全分支合计：**70 个 / 42.4 MB**

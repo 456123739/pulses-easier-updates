@@ -6,8 +6,8 @@
   "source_repo": "https://github.com/456123739/pulses-easier-updates",
   "branch": "resources",
   "tag": "resources-2026-11",
-  "total_bytes": 42211124,
-  "total_files": 53,
+  "total_bytes": 44461444,
+  "total_files": 70,
   "items": [
     {
       "path": "releases/pulses-easier-download-engine-v0.2.3.zip",
@@ -379,6 +379,147 @@
       "bytes": 4282,
       "sha256": "bbd56be03f655af1b20bbe811eceb6f0e273f4c1f1095cbd1d42a555b43bc4e2",
       "mtime": "2026-10-05"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/01-player-empty.png",
+      "group": "screenshots",
+      "bytes": 106149,
+      "sha256": "5fabec77580a12672f21c65f279e7a5d2c9059760001ed351141d8a6e5783f67",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/02-player-imported.png",
+      "group": "screenshots",
+      "bytes": 109820,
+      "sha256": "753953530acfd92634cbff0242d43ce357fc48c9a9b296a64a453b5bfbe2ca53",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/03-player-compared.png",
+      "group": "screenshots",
+      "bytes": 124695,
+      "sha256": "a951eeedb4dbbbcdec6491c7bbf66955a49790c727e08f7f2229c073588cca13",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/04-preferences.png",
+      "group": "screenshots",
+      "bytes": 136926,
+      "sha256": "cb09ab2b697fffd9e56457bdfd914db9aa03107378627deab41d2d9a433f04d8",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/05-developer-empty.png",
+      "group": "screenshots",
+      "bytes": 121758,
+      "sha256": "a21b69386ec99b90a982d3064418c1b06208be8350a70ea68f7beb08a76a37d6",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/06-developer-instance.png",
+      "group": "screenshots",
+      "bytes": 167622,
+      "sha256": "371cfee8b6da87dc01dfc8351811ad34724b0cd768313350b2738c8e83e197ca",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/07-developer-zip.png",
+      "group": "screenshots",
+      "bytes": 129604,
+      "sha256": "f954be40222462a200fb90c1929704fc8b855f60e2d14a9a4bf13ab5efffa90a",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/08-changelog-editor.png",
+      "group": "screenshots",
+      "bytes": 124601,
+      "sha256": "672482f7f91ef091254824bcc25331d7bb9a395cb1bf09d3fcb7c74ad7fa659f",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/shots/09-preferences-cf.png",
+      "group": "screenshots",
+      "bytes": 193614,
+      "sha256": "7f068b2046aa5b9f324f1050995435c1e308c902d6d5380c55e03e7212478362",
+      "mtime": "2026-11-08",
+      "purpose": "玩家端/开发者端界面证据（2026-11-08）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/deliver/05-developer-empty.png",
+      "group": "deliverables",
+      "bytes": 121758,
+      "sha256": "a21b69386ec99b90a982d3064418c1b06208be8350a70ea68f7beb08a76a37d6",
+      "mtime": "2026-11-08",
+      "purpose": "开发者端重做的交付包（补丁 + 说明 + 截图）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/deliver/06-developer-instance.png",
+      "group": "deliverables",
+      "bytes": 167622,
+      "sha256": "371cfee8b6da87dc01dfc8351811ad34724b0cd768313350b2738c8e83e197ca",
+      "mtime": "2026-11-08",
+      "purpose": "开发者端重做的交付包（补丁 + 说明 + 截图）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/deliver/07-developer-zip.png",
+      "group": "deliverables",
+      "bytes": 129604,
+      "sha256": "f954be40222462a200fb90c1929704fc8b855f60e2d14a9a4bf13ab5efffa90a",
+      "mtime": "2026-11-08",
+      "purpose": "开发者端重做的交付包（补丁 + 说明 + 截图）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/deliver/08-changelog-editor.png",
+      "group": "deliverables",
+      "bytes": 124601,
+      "sha256": "672482f7f91ef091254824bcc25331d7bb9a395cb1bf09d3fcb7c74ad7fa659f",
+      "mtime": "2026-11-08",
+      "purpose": "开发者端重做的交付包（补丁 + 说明 + 截图）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/deliver/09-preferences-cf.png",
+      "group": "deliverables",
+      "bytes": 193614,
+      "sha256": "7f068b2046aa5b9f324f1050995435c1e308c902d6d5380c55e03e7212478362",
+      "mtime": "2026-11-08",
+      "purpose": "开发者端重做的交付包（补丁 + 说明 + 截图）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/deliver/dev-ui-rework.patch",
+      "group": "deliverables",
+      "bytes": 155182,
+      "sha256": "5f86d88da8aac03249f21d543c9c14dd5528d6cee3d2bb54f4b1e1f8512ea43d",
+      "mtime": "2026-11-08",
+      "purpose": "开发者端重做的交付包（补丁 + 说明 + 截图）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/deliver/交付说明.md",
+      "group": "deliverables",
+      "bytes": 5222,
+      "sha256": "ce12b815f81e11a1b0eb4509459c49d0e1b8668df2d805788129d515addfd51e",
+      "mtime": "2026-11-08",
+      "purpose": "开发者端重做的交付包（补丁 + 说明 + 截图）"
+    },
+    {
+      "path": "artifacts/2026-11-08-dev-ui/e2e-ui.png",
+      "group": "screenshots",
+      "bytes": 137928,
+      "sha256": "07b8e5f32d9006837cdfae0e37bbbb4e08547c0c1508ad937f36ddb3724908bb",
+      "mtime": "2026-11-08",
+      "purpose": "e2e 界面截图"
     }
-  ]
+  ],
+  "rounds": [
+    "2026-11-builds-logs",
+    "2026-11-08-dev-ui"
+  ],
+  "updated": "2026-11-15"
 }
