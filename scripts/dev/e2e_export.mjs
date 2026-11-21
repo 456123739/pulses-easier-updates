@@ -83,11 +83,20 @@ await page.getByRole('button', { name: '开发者', exact: true }).click()
 await page.waitForTimeout(500)
 check(await page.getByText('开始制作更新包').first().isVisible(), '开发者端可见')
 
-// 2) 切到「本地整合包目录」并选目录
-await page.getByRole('button', { name: '本地整合包目录', exact: true }).click()
+// 2) STEP 1 现在是统一入口：直接选目录（实例目录 / 导出包都走这里）
+await page.getByRole('button', { name: /选择目录/ }).first().click()
+// 等后台扫描结束（phase 回 idle 且有实例），别拿"正在识别"的界面做断言
+let devReady = null
+for (let i = 0; i < 150; i++) {
+  await page.waitForTimeout(200)
+  devReady = await page.evaluate(async () => {
+    const r = await window.pywebview.api.invoke('dev.state', {})
+    return r?.data ?? null
+  })
+  if (devReady?.phase === 'idle' && devReady?.instance) break
+}
+check(Boolean(devReady?.instance), '实例已识别（phase=idle）')
 await page.waitForTimeout(300)
-await page.getByRole('button', { name: /选择目录|更换目录/ }).first().click()
-await page.waitForTimeout(1200)
 const box = await page.locator('body').innerText()
 check(box.includes(basename(INSTANCE)), '实例名显示在摘要卡里', basename(INSTANCE))
 check(/1\.20\.1/.test(box), 'MC 版本显示')
