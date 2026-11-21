@@ -1,5 +1,6 @@
 """更新看门狗：只盯计划目标、区分自己改的和别人改的。"""
 
+import os
 import tempfile
 import time
 import unittest
@@ -21,6 +22,11 @@ class WatchCase(unittest.TestCase):
         path = self.root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+        # Windows 的文件时间戳粒度较粗：连续两次写可能拿到同一个 mtime_ns，
+        # 看门狗就"看不见"这次修改。这里显式把 mtime 往前推 10ms，
+        # 让测试只验证逻辑，不依赖文件系统时钟精度。
+        st = path.stat()
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
 
     def test_quiet_when_nothing_changes(self):
         w = W.PackWatch(self.root, files=["mods/a.jar"])
