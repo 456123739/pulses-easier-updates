@@ -1,0 +1,36 @@
+.grip {
+  position: absolute;
+  z-index: 90;
+  touch-action: none;
+}
+.grip[data-edge='n'],
+.grip[data-edge='s'] {
+  left: 10px;
+  right: 10px;
+  height: 5px;
+  cursor: ns-resize;
+}
+.grip[data-edge='n'] { top: 0; }
+.grip[data-edge='s'] { bottom: 0; }
+
+.grip[data-edge='e'],
+.grip[data-edge='w'] {
+  top: 10px;
+  bottom: 10px;
+  width: 5px;
+  cursor: ew-resize;
+}
+.grip[data-edge='e'] { right: 0; }
+.grip[data-edge='w'] { left: 0; }
+
+.grip[data-edge='ne'],
+.grip[data-edge='nw'],
+.grip[data-edge='se'],
+.grip[data-edge='sw'] {
+  width: 14px;
+  height: 14px;
+}
+.grip[data-edge='ne'] { top: 0; right: 0; cursor: nesw-resize; }
+.grip[data-edge='nw'] { top: 0; left: 0; cursor: nwse-resize; }
+.grip[data-edge='se'] { bottom: 0; right: 0; cursor: nwse-resize; }
+.grip[data-edge='sw'] { bottom: 0; left: 0; cursor: nesw-resize; }

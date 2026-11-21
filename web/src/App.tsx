@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { invoke, subscribe, whenReady } from '@/bridge'
+import { expandWindow, isDesktop } from '@/window'
 import type { AppState } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import Splash from '@/components/Splash'
@@ -50,6 +51,11 @@ export default function App() {
         const state = await invoke<AppState>('app.bootstrap')
         if (cancelled) return
         setState(state)
+        if (isDesktop()) {
+          // logo 小窗 → 主窗口：窗口动画与内容切换同时进行
+          await expandWindow()
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        }
       } catch (err) {
         pushToast(err instanceof Error ? err.message : '启动失败', 'error')
       } finally {

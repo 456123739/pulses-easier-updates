@@ -140,6 +140,19 @@ def build_hash_manifest(
                 continue
             if entry.name in exclude_set:
                 continue
+            if entry.name == "saves":
+                # 存档按"世界"记哈希：玩家端可以一个世界一条变更（存档级），
+                # 不再整目录一刀切。recorded 形如 {"saves": {...}} 的旧包
+                # 由 differ 自动退回整目录粒度。
+                try:
+                    for world in sorted(entry.iterdir()):
+                        if world.is_dir():
+                            wh = folder_hash(world)
+                            if wh:
+                                folders[f"saves/{world.name}"] = wh
+                except OSError:
+                    pass
+                continue
             h = folder_hash(entry)
             if h:
                 folders[entry.name] = h

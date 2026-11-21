@@ -4,21 +4,12 @@ import type { AppState, DevSnapshot, DevStrategy } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { useUi } from '@/store/ui'
 import DropZone from './DropZone'
-import Floating3DLayer, { type LayerVariant } from './Floating3DLayer'
+import Floating3DLayer from './Floating3DLayer'
 import Icon from './Icon'
 import SpecialPeek from './SpecialPeek'
 import SubScopeLayer from './SubScopeLayer'
 import styles from './DeveloperView.module.css'
 
-/** 三种悬浮层方案，用 ?layer=tilt|stack|slide 切换，选型后固定默认。 */
-const LAYER_VARIANTS: LayerVariant[] = ['tilt', 'stack', 'slide']
-const LAYER_VARIANT: LayerVariant = (() => {
-  if (typeof location === 'undefined') return 'tilt'
-  const raw = new URLSearchParams(location.search).get('layer')
-  return (LAYER_VARIANTS as string[]).includes(raw ?? '')
-    ? (raw as LayerVariant)
-    : 'tilt'
-})()
 
 const OPTIONS = [
   { id: 'include_hashes', label: '写入文件哈希', desc: '更新时可以逐文件校验，强烈建议保留' },
@@ -483,7 +474,6 @@ export default function DeveloperView() {
               draggingRef.current = value
               if (value) clearLayerTimers()
             }}
-            variant={LAYER_VARIANT}
             kind="sub"
             label={activeRow ? `${activeRow.title || activeRow.name}的子项` : undefined}
           >
@@ -503,7 +493,6 @@ export default function DeveloperView() {
             onRequestClose={() => setPeek(null)}
             onPointerEnter={clearPeek}
             onPointerLeave={leavePeek}
-            variant={LAYER_VARIANT}
             kind="peek"
             width={304}
             overlap={22}

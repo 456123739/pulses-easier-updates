@@ -28,20 +28,9 @@
   transform: translate3d(8px, 6px, -18px) scale(0.988) rotateY(-6deg);
   opacity: 0.7;
 }
-.plateFar {
-  transform: translate3d(17px, 12px, -40px) scale(0.975) rotateY(-6deg);
-  opacity: 0.45;
-  background: var(--c-card, #1e1f22);
-}
-.host[data-variant='tilt'] .plateFar {
-  display: none;
-}
 .host[data-variant='tilt'] .plateNear {
   transform: translate3d(6px, 4px, -14px) scale(0.99) rotateY(-3deg);
   opacity: 0.5;
-}
-.host[data-variant='slide'] .plate {
-  display: none;
 }
 .host[data-reduced='true'] .plate {
   display: none;

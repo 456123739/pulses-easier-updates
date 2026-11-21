@@ -23,6 +23,8 @@ from ..paths import bundle_dir, exe_dir, project_root
 from .api import Api
 from .controller import AppController
 from .events import EventBus, EventPump
+from .window_shell import (SPLASH_H, SPLASH_W, center_rect, expand as expand_window,
+                           screen_size)
 
 WINDOW_TITLE = "Pulses Easier"
 WINDOW_W, WINDOW_H = 1440, 860
@@ -43,6 +45,21 @@ def fit_to_screen() -> tuple[tuple[int, int], tuple[int, int]]:
         except Exception:                            # noqa: BLE001, S110
             pass
     return (w, h), (min(WINDOW_MIN[0], w), min(WINDOW_MIN[1], h))
+
+def _later_expand(window, api, target):
+    """兜底：页面若因为脚本错误没调 window.expand，2.5 秒后自己长开，
+    避免玩家永远停在一个 300×300 的小窗上。"""
+    import time as _t
+    _t.sleep(2.5)
+    try:
+        if getattr(api, "expanded", False):
+            return
+        api.expanded = True
+        expand_window(window, target)
+    except Exception:                                # noqa: BLE001, S110
+        pass
+
+
 BG = "#101011"          # 与新界面底色一致，避免启动时闪一下浅灰
 
 
@@ -188,21 +205,41 @@ def run(argv: list[str] | None = None) -> int:
     api = Api(controller, bus, e2e=True if e2e_on else None)
 
     size, min_size = fit_to_screen()
+    # 启动先给一个圆角 logo 小窗，页面加载完由前端调 window.expand 长成主窗口。
+    # 端到端/受监督启动仍按完整尺寸起（截图与断言按 1440×860 写）。
+    splash_first = not e2e_on and os.environ.get("PULSES_SPLASH", "1") != "0"
+    start_w, start_h = (SPLASH_W, SPLASH_H) if splash_first else size
+    start_x, start_y = center_rect(start_w, start_h, screen_size()) if splash_first else (None, None)
+    frameless = os.environ.get("PULSES_FRAMELESS", "1") != "0"
+    transparent = frameless and sys.platform == "win32"
     window = webview.create_window(
         WINDOW_TITLE,
         target,
         js_api=api,
-        width=size[0],
-        height=size[1],
-        min_size=min_size,
+        width=start_w,
+        height=start_h,
+        x=start_x,
+        y=start_y,
+        min_size=(SPLASH_W, SPLASH_H) if splash_first else min_size,
         background_color=BG,
         text_select=True,
         confirm_close=False,
+        frameless=frameless,
+        easy_drag=False,
+        transparent=transparent,
+        shadow=False,
         # 建窗即可见：0.10.0 用 hidden=True + loaded 里 show()，在真机上出现过
         # "进程在跑、CPU 在转、窗口不出现"，干脆不要这个依赖
         hidden=False,
     )
     api.bind_window(window)
+    api.window_target = size
+    api.window_min_size = min_size
+    api.start_frameless = frameless
+    if splash_first:
+        threading.Thread(
+            target=lambda: _later_expand(window, api, size),
+            daemon=True).start()
     _note("window-created")
 
     def e2e_mark(stage: str) -> None:

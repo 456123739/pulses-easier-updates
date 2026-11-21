@@ -154,6 +154,16 @@ class Api:
                 p.get("items") or []),
             "app.db.get": lambda p: self.controller.db_path(),
             "app.db.set": lambda p: self.controller.set_db_path(p.get("path", "")),
+            # ---- 无边框窗口的控制（浏览器里没有 window，一律 NO_WINDOW）----
+            "window.expand": lambda p: self.window_expand(),
+            "window.minimize": lambda p: self.window_minimize(),
+            "window.toggle_max": lambda p: self.window_toggle_max(),
+            "window.close": lambda p: self.window_close(),
+            "window.move": lambda p: self.window_move(
+                int(p.get("x", 0)), int(p.get("y", 0))),
+            "window.resize": lambda p: self.window_resize(
+                int(p.get("width", 0)), int(p.get("height", 0)),
+                p.get("x"), p.get("y")),
         }
         if self.e2e:
             self._methods.update({
@@ -168,6 +178,65 @@ class Api:
             # 直接暴露成 js_api 方法：页面跑完后 `api.e2e_report(payload)`。
             # 平时不注册 → 产品里没有这个入口。
             setattr(self, "e2e_report", self._e2e_report)
+
+    # ------------------------------------------------------------------
+    # 无边框窗口
+    # ------------------------------------------------------------------
+    def _win(self):
+        if self.window is None:
+            raise ApiError("NO_WINDOW", "当前不是桌面窗口")
+        return self.window
+
+    def window_expand(self) -> dict:
+        """logo 小窗 → 主窗口：Python 侧做尺寸动画，页面只管画内容。"""
+        win = self._win()
+        if getattr(self, "expanded", False):          # 前端与兜底线程只展开一次
+            return {"expanding": False}
+        target = getattr(self, "window_target", (1440, 860))
+
+        def _run():
+            try:
+                from .window_shell import expand
+                expand(win, target)
+            except Exception:                          # noqa: BLE001, S110
+                pass
+
+        self.expanded = True
+        threading.Thread(target=_run, daemon=True).start()
+        return {"expanding": True, "target": list(target)}
+
+    def window_minimize(self) -> dict:
+        self._win().minimize()
+        return {"minimized": True}
+
+    def window_toggle_max(self) -> dict:
+        win = self._win()
+        if bool(getattr(win, "maximized", False)):
+            win.restore()
+            return {"maximized": False}
+        win.maximize()
+        return {"maximized": True}
+
+    def window_close(self) -> dict:
+        win = self._win()
+        if not self.controller.can_close():
+            return {"closed": False, "blocked": True}
+        win.destroy()
+        return {"closed": True}
+
+    def window_move(self, x: int, y: int) -> dict:
+        self._win().move(int(x), int(y))
+        return {"x": int(x), "y": int(y)}
+
+    def window_resize(self, width: int, height: int,
+                      x=None, y=None) -> dict:
+        win = self._win()
+        w = max(200, int(width))
+        h = max(120, int(height))
+        win.resize(w, h)
+        if x is not None and y is not None:
+            win.move(int(x), int(y))
+        return {"width": w, "height": h}
 
     def bind_window(self, window) -> None:
         self.window = window

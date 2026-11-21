@@ -132,3 +132,10 @@ img {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+
+/* 桌面版（pywebview 无边框 + 透明）：圆角外必须透出桌面，不能是直角黑底 */
+html[data-desktop='1'],
+html[data-desktop='1'] body {
+  background: transparent;
+}

@@ -397,6 +397,66 @@ def _root_files(root: Path) -> list[Path]:
     return result
 
 
+
+# ----------------------------------------------------------------------
+# 存档级比对：saves 仍按"文件夹"比，但一个世界一条 Change
+# ----------------------------------------------------------------------
+SAVES_TOP = "saves"
+
+
+def _saves_worlds(root) -> dict[str, Path]:
+    """saves/ 下的一级子目录 = 一个存档（世界）。"""
+    if root is None:
+        return {}
+    base = Path(root) / SAVES_TOP
+    worlds: dict[str, Path] = {}
+    try:
+        for entry in base.iterdir():
+            if entry.is_dir():
+                worlds[entry.name] = entry
+    except OSError:
+        pass
+    return worlds
+
+
+def _diff_saves(old_root, new_root, index_by_top, folder_hashes) -> list[Change]:
+    """
+    存档级：每个 `saves/<世界>` 是一条**文件夹级**变更，不细到文件。
+
+    - 新包有、本地没有 → ADDED
+    - 两侧都有、内容不同 → MODIFIED（优先用 ea_hashes 里 `saves/<世界>` 的记录）
+    - 本地有、新包没有且新包确实管存档 → DELETED
+    - 新旧包都没有逐世界记录（老包只记了 `saves` 整目录）→ 返回 None，
+      调用方退回原来的"整个 saves 目录"粒度，保证兼容。
+    """
+    old_worlds = _saves_worlds(old_root)
+    new_worlds = _saves_worlds(new_root) if new_root is not None else {}
+    idx = (index_by_top or {}).get(SAVES_TOP, {})
+    idx_worlds = {rel.split("/", 1)[1] for rel in idx if "/" in rel}
+    recorded = {k.split("/", 1)[1]: v for k, v in (folder_hashes or {}).items()
+                if k.startswith(SAVES_TOP + "/") and v}
+    if not recorded and not new_worlds and not idx_worlds:
+        return None                                     # 老包：叫调用方走原路
+    known = set(recorded) | set(new_worlds) | set(idx_worlds)
+    has_pack_saves = bool(known)
+    out: list[Change] = []
+    for name in sorted(set(old_worlds) | known):
+        rel = Path(SAVES_TOP) / name
+        if name not in old_worlds:
+            out.append(Change(rel, ChangeKind.ADDED, is_folder_level=True))
+            continue
+        if name not in known:
+            if has_pack_saves:
+                out.append(Change(rel, ChangeKind.DELETED, is_folder_level=True))
+            continue
+        target = recorded.get(name)
+        if target is None and name in new_worlds:
+            target = folder_hash(new_worlds[name], content=True)
+        old_hash = folder_hash(old_worlds[name], content=True)
+        if target and old_hash and target != old_hash:
+            out.append(Change(rel, ChangeKind.MODIFIED, is_folder_level=True))
+    return out
+
 # ----------------------------------------------------------------------
 # 主比对
 # ----------------------------------------------------------------------
@@ -443,6 +503,18 @@ def diff_packs_parallel(
         old_dir = old_dirs.get(name)
         new_dir = new_dirs.get(name)
         has_index = name in index_by_top
+
+        if name == SAVES_TOP and name not in wl_top:
+            per_world = _diff_saves(old_root, new_root, index_by_top, f_hashes)
+            if per_world is not None:
+                result.added.extend(c for c in per_world
+                                    if c.kind == ChangeKind.ADDED)
+                result.modified.extend(c for c in per_world
+                                       if c.kind == ChangeKind.MODIFIED)
+                result.deleted.extend(c for c in per_world
+                                      if c.kind == ChangeKind.DELETED)
+                _p(i + 1, max(1, total_dirs), "merge")
+                continue
 
         if not has_old and (has_new or has_index):
             if name in wl_top:
@@ -623,7 +695,9 @@ def diff_from_manifest(
 
     # 顶层目录 = 包里的目录（调用方给的）+ 白名单文件清单 + index 清单
     # + 非白名单目录哈希清单
-    tops = set(per_top) | set(index_by_top) | set(f_hashes)
+    # folders 里可能记的是 `saves/<世界>`：顶层仍要出现，交给存档级比对
+    folder_tops = {str(k).split("/", 1)[0] for k in f_hashes}
+    tops = set(per_top) | set(index_by_top) | set(f_hashes) | folder_tops
     if pack_tops:
         tops |= set(pack_tops)
 
@@ -653,7 +727,10 @@ def diff_from_manifest(
             # 白名单目录，或者已经有逐文件清单 → 不需要 folder 哈希
             continue
         # 非白名单目录：既没有记录哈希、包里又确实有这个目录 → 判不了
-        if top not in f_hashes and (top in (pack_tops or set())
+        # （saves 可以只记逐世界哈希，视作"有记录"）
+        has_folder_hash = (top in f_hashes
+                           or any(str(k).startswith(top + "/") for k in f_hashes))
+        if not has_folder_hash and (top in (pack_tops or set())
                                     or (old_root / top).is_dir()):
             return None
 
@@ -673,6 +750,18 @@ def diff_from_manifest(
         has_local = local_top.is_dir()
         entries = per_top.get(top, {})
         idx_entries = index_by_top.get(top, {})
+
+        if top == SAVES_TOP and top not in wl_top:
+            per_world = _diff_saves(old_root, compare_root, index_by_top, f_hashes)
+            if per_world is not None:
+                result.added.extend(c for c in per_world
+                                    if c.kind == ChangeKind.ADDED)
+                result.modified.extend(c for c in per_world
+                                       if c.kind == ChangeKind.MODIFIED)
+                result.deleted.extend(c for c in per_world
+                                      if c.kind == ChangeKind.DELETED)
+                _p(i + 1)
+                continue
 
         if top not in wl_top and top not in per_top:
             # 非白名单、也没有逐文件清单：整目录级（和文件系统比对一致）

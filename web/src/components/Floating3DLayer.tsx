@@ -13,14 +13,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import styles from './Floating3DLayer.module.css'
 
-export type LayerVariant = 'tilt' | 'stack' | 'slide'
-
 type Props = {
   open: boolean
   anchor: HTMLElement | null
   onRequestClose: () => void
   children: React.ReactNode
-  variant?: LayerVariant
   width?: number
   /** 往左压进主栏多少像素（部分重叠，缩短鼠标行程） */
   overlap?: number
@@ -71,7 +68,6 @@ export default function Floating3DLayer({
   anchor,
   onRequestClose,
   children,
-  variant = 'tilt',
   width = 392,
   overlap = 132,
   label,
@@ -329,29 +325,13 @@ export default function Floating3DLayer({
         transition: { duration: 0.14 },
       }
     }
-    if (variant === 'stack') {
-      return {
-        initial: { opacity: 0, x: -20, rotateY: -20, rotateX: 5, scale: 0.92, filter: 'blur(12px)' },
-        animate: { opacity: 1, x: 0, rotateY: -6, rotateX: 0, scale: 1, filter: 'blur(0px)' },
-        exit: { opacity: 0, x: -12, rotateY: -12, scale: 0.97, filter: 'blur(8px)', transition: { duration: 0.16 } },
-        transition: { type: 'spring' as const, stiffness: 240, damping: 22, mass: 0.8 },
-      }
-    }
-    if (variant === 'slide') {
-      return {
-        initial: { opacity: 0, x: -28, scale: 0.985, filter: 'blur(10px)' },
-        animate: { opacity: 1, x: 0, scale: 1, filter: 'blur(0px)' },
-        exit: { opacity: 0, x: -18, filter: 'blur(7px)', transition: { duration: 0.15 } },
-        transition: { type: 'spring' as const, stiffness: 330, damping: 32 },
-      }
-    }
     return {
       initial: { opacity: 0, x: -14, y: 6, rotateY: -13, rotateX: 2, scale: 0.965, filter: 'blur(12px)' },
       animate: { opacity: 1, x: 0, y: 0, rotateY: -3, rotateX: 0, scale: 1, filter: 'blur(0px)' },
       exit: { opacity: 0, x: -6, rotateY: -7, scale: 0.985, filter: 'blur(8px)', transition: { duration: 0.16 } },
       transition: { type: 'spring' as const, stiffness: 300, damping: 28, mass: 0.75 },
     }
-  }, [reduce, variant])
+  }, [reduce])
 
   if (typeof document === 'undefined') return null
 
@@ -385,7 +365,7 @@ export default function Floating3DLayer({
           <div
             ref={hostRef}
             className={styles.host}
-            data-variant={variant}
+            data-variant="tilt"
             data-kind={kind}
             data-reduced={reduce ? 'true' : 'false'}
             data-moved={moved ? 'true' : 'false'}
@@ -401,11 +381,8 @@ export default function Floating3DLayer({
               perspectiveOrigin: '0px 34px',
             }}
           >
-            {!reduce && variant !== 'slide' && (
-              <>
-                <span className={`${styles.plate} ${styles.plateFar}`} aria-hidden />
-                <span className={`${styles.plate} ${styles.plateNear}`} aria-hidden />
-              </>
+            {!reduce && (
+              <span className={`${styles.plate} ${styles.plateNear}`} aria-hidden />
             )}
             <motion.div
               ref={bodyRef}
