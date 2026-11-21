@@ -1,11 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { invoke, pickPath } from '@/bridge'
 import type { AppState, DevSnapshot, DevStrategy } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { useUi } from '@/store/ui'
 import DropZone from './DropZone'
+import Floating3DLayer, { type LayerVariant } from './Floating3DLayer'
 import Icon from './Icon'
+import SpecialPeek from './SpecialPeek'
+import SubScopeLayer from './SubScopeLayer'
 import styles from './DeveloperView.module.css'
+
+/** 三种悬浮层方案，用 ?layer=tilt|stack|slide 切换，选型后固定默认。 */
+const LAYER_VARIANTS: LayerVariant[] = ['tilt', 'stack', 'slide']
+const LAYER_VARIANT: LayerVariant = (() => {
+  if (typeof location === 'undefined') return 'tilt'
+  const raw = new URLSearchParams(location.search).get('layer')
+  return (LAYER_VARIANTS as string[]).includes(raw ?? '')
+    ? (raw as LayerVariant)
+    : 'tilt'
+})()
 
 const OPTIONS = [
   { id: 'include_hashes', label: '写入文件哈希', desc: '更新时可以逐文件校验，强烈建议保留' },
@@ -55,6 +68,99 @@ export default function DeveloperView() {
   const [outName, setOutName] = useState('')
   const [outPath, setOutPath] = useState('')
   const [specialBusy, setSpecialBusy] = useState('')
+  const [subBusy, setSubBusy] = useState(false)
+  // 特殊导出选项的悬浮详情（同一套 3D 叠层）
+  const [peek, setPeek] = useState<{ key: string; anchor: HTMLElement } | null>(null)
+  const peekOpen = useRef<number | null>(null)
+  const peekClose = useRef<number | null>(null)
+  // 子项浮层：悬停 160ms 展开，移开 200ms 收起；点了箭头就固定住
+  const [layer, setLayer] = useState<{ name: string; anchor: HTMLElement } | null>(null)
+  const rowRefs = useRef(new Map<string, HTMLElement>())
+  const openTimer = useRef<number | null>(null)
+  const closeTimer = useRef<number | null>(null)
+  const draggingRef = useRef(false)
+
+  const clearLayerTimers = () => {
+    if (openTimer.current !== null) {
+      window.clearTimeout(openTimer.current)
+      openTimer.current = null
+    }
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+  }
+
+  const scheduleOpen = (row: DevStrategy, anchor: HTMLElement) => {
+    if (!row.subs?.length) return
+    clearLayerTimers()
+    openTimer.current = window.setTimeout(() => {
+      setLayer({ name: row.name, anchor })
+    }, 160)
+  }
+
+  const scheduleClose = () => {
+    clearLayerTimers()
+    if (draggingRef.current) return
+    closeTimer.current = window.setTimeout(() => setLayer(null), 200)
+  }
+
+  const keepLayer = () => {
+    clearLayerTimers()
+  }
+
+  const toggleLayer = (row: DevStrategy) => {
+    clearLayerTimers()
+    if (layer?.name === row.name) {
+      setLayer(null)
+      return
+    }
+    const anchor = rowRefs.current.get(row.name)
+    if (anchor) setLayer({ name: row.name, anchor })
+  }
+
+  const clearPeek = () => {
+    if (peekOpen.current !== null) window.clearTimeout(peekOpen.current)
+    if (peekClose.current !== null) window.clearTimeout(peekClose.current)
+    peekOpen.current = null
+    peekClose.current = null
+  }
+
+  const hoverPeek = (key: string, anchor: HTMLElement) => {
+    clearPeek()
+    peekOpen.current = window.setTimeout(() => setPeek({ key, anchor }), 170)
+  }
+
+  const leavePeek = () => {
+    clearPeek()
+    peekClose.current = window.setTimeout(() => setPeek(null), 180)
+  }
+
+  const setSub = async (path: string, checked?: boolean, strategy?: string) => {
+    if (!connected || subBusy) return
+    setSubBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.sub.set', { path, checked, strategy })
+      if (snap) patchState({ dev: snap })
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+    } finally {
+      setSubBusy(false)
+    }
+  }
+
+  const setSubAll = async (folder: string, checked: boolean) => {
+    if (!connected || subBusy) return
+    setSubBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.sub.all', { folder, checked })
+      if (snap) patchState({ dev: snap })
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+    } finally {
+      setSubBusy(false)
+    }
+  }
 
   const instance = dev?.instance ?? null
   const specials = dev?.specials ?? []
@@ -195,6 +301,14 @@ export default function DeveloperView() {
     ? `${changelogText.split('\n').find((line) => line.trim() && !line.trim().startsWith('#'))?.replace(/^[-*]\s*/, '') ?? '已写内容'} · ${changelogText.replace(/\s/g, '').length} 字`
     : '还没写 · 点开编写（所见即所得）'
 
+  const peekItem = peek
+    ? (dev?.specials ?? []).find((item) => item.key === peek.key) ?? null
+    : null
+
+  const activeRow = layer
+    ? (dev?.strategies ?? []).find((row) => row.name === layer.name) ?? null
+    : null
+
   return (
     <div className={styles.page} data-mode={mode}>
       <section className={styles.left}>
@@ -303,11 +417,41 @@ export default function DeveloperView() {
           </div>
           <div className={`${styles.rows} scroll`}>
             {(dev?.strategies ?? []).map((row) => (
-              <div key={row.name} className={styles.row} data-off={row.excluded}>
+              <div
+                key={row.name}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(row.name, el)
+                  else rowRefs.current.delete(row.name)
+                }}
+                className={styles.row}
+                data-off={row.excluded}
+                data-layer={layer?.name === row.name ? 'true' : undefined}
+                onPointerEnter={(e) => scheduleOpen(row, e.currentTarget)}
+                onPointerLeave={scheduleClose}
+              >
                 <button className={styles.rowName} onClick={() => void toggleExcluded(row)}>
                   <Icon name={row.isFile ? 'file' : 'folder'} size={13} />
                   <span>{row.name}</span>
                 </button>
+                {row.subs && row.subs.length > 0 && (
+                  <button
+                    type="button"
+                    className={styles.subBtn}
+                    data-layer-toggle="true"
+                    data-on={layer?.name === row.name}
+                    aria-expanded={layer?.name === row.name}
+                    aria-label={`${row.title || row.name}：${row.subs.length} 项可单独设置`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleLayer(row)
+                    }}
+                  >
+                    <span className={styles.subCount}>
+                      {row.subs.filter((x) => x.checked).length}/{row.subs.length}
+                    </span>
+                    <Icon name="chevron" size={11} />
+                  </button>
+                )}
                 <div className={styles.chips}>
                   {DIR_STRATEGIES.map((s) => (
                     <button
@@ -329,6 +473,44 @@ export default function DeveloperView() {
               </div>
             )}
           </div>
+          <Floating3DLayer
+            open={Boolean(activeRow && layer)}
+            anchor={layer?.anchor ?? null}
+            onRequestClose={() => setLayer(null)}
+            onPointerEnter={keepLayer}
+            onPointerLeave={scheduleClose}
+            onDragChange={(value) => {
+              draggingRef.current = value
+              if (value) clearLayerTimers()
+            }}
+            variant={LAYER_VARIANT}
+            kind="sub"
+            label={activeRow ? `${activeRow.title || activeRow.name}的子项` : undefined}
+          >
+            {activeRow && (
+              <SubScopeLayer
+                row={activeRow}
+                busy={subBusy}
+                onToggle={(path, checked) => void setSub(path, checked)}
+                onStrategy={(path, strategy) => void setSub(path, undefined, strategy)}
+                onAll={(checked) => void setSubAll(activeRow.name, checked)}
+              />
+            )}
+          </Floating3DLayer>
+          <Floating3DLayer
+            open={Boolean(peekItem)}
+            anchor={peek?.anchor ?? null}
+            onRequestClose={() => setPeek(null)}
+            onPointerEnter={clearPeek}
+            onPointerLeave={leavePeek}
+            variant={LAYER_VARIANT}
+            kind="peek"
+            width={304}
+            overlap={22}
+            label={peekItem ? `${peekItem.title} 的详情` : undefined}
+          >
+            {peekItem && <SpecialPeek item={peekItem} />}
+          </Floating3DLayer>
         </div>
 
         <div className={styles.actions}>
@@ -399,7 +581,8 @@ export default function DeveloperView() {
                   type="button"
                   className={styles.opt}
                   data-on={item.checked}
-                  title={item.sample.join('\n')}
+                  onPointerEnter={(e) => hoverPeek(item.key, e.currentTarget)}
+                  onPointerLeave={leavePeek}
                   onClick={() => void setSpecial(item.key, !item.checked)}
                   disabled={!connected || exporting || Boolean(specialBusy)}
                 >

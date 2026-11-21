@@ -471,6 +471,51 @@ async function basicSuite() {
   dev = await waitDev((d) => d.options?.min_size === true)
   check(!!dev, '导出选项可切换（min_size）')
 
+  // ---- 子项浮层：资源包（PCL 的动态子项：逐项是否导出 + 更新策略） ----
+  await waitRow('resourcepacks')
+  const packRow = page.locator('button', { hasText: /^resourcepacks$/ }).first()
+  await packRow.hover()
+  check(await waitFor(async () => (await page.locator('[data-kind="sub"]').count()) === 1, 4000),
+        '悬停父条目自动展开子项浮层（不用点）')
+  const layer = page.locator('[data-kind="sub"]').first()
+  const layerText = await layer.innerText()
+  check(layerText.includes('资源包') && layerText.includes('keep.zip'),
+        '浮层列出资源包里的每一项', layerText.slice(0, 120))
+  check(layerText.includes('全选') && layerText.includes('父级'),
+        '浮层带全选与父级策略提示')
+
+  // 取消一项：计数回到 0/1，快照里 checked=false
+  await layer.locator('button[aria-label="导出 keep.zip"]').click()
+  dev = await waitDev((d) => {
+    const row = (d.strategies ?? []).find((r) => r.name === 'resourcepacks')
+    return row?.subs?.find((s) => s.name === 'keep.zip')?.checked === false
+  })
+  check(!!dev, '子项可以单独取消导出')
+  check(await waitFor(async () =>
+    (await packRow.evaluate((el) => el.parentElement?.innerText ?? '')).includes('0/1'), 3000),
+        '父条目的已选计数同步（0/1）')
+
+  // 单独给这一项设置策略：跳过重名
+  await layer.locator('button', { hasText: /^跳过重名$/ }).first().click()
+  dev = await waitDev((d) => {
+    const row = (d.strategies ?? []).find((r) => r.name === 'resourcepacks')
+    return row?.subs?.find((s) => s.name === 'keep.zip')?.strategy === '跳过重名'
+  })
+  check(!!dev, '子项可以单独设置更新策略')
+
+  // 全选：全部回到导出状态
+  await layer.locator('button', { hasText: '全选' }).first().click()
+  dev = await waitDev((d) => {
+    const row = (d.strategies ?? []).find((r) => r.name === 'resourcepacks')
+    return row?.subs?.every((s) => s.checked) === true
+  })
+  check(!!dev, '浮层底部「全选」可用')
+
+  // Esc 收起
+  await page.keyboard.press('Escape')
+  check(await waitFor(async () => (await page.locator('[data-kind="sub"]').count()) === 0, 3000),
+        'Esc 收起浮层')
+
   // ---- 更新日志：长按钮 → 独立窗口，所见即所得 ----
   await clickText('编写更新日志', { exact: true })
   // 判据必须是"抽屉里有可编辑正文"，不能靠文案：长按钮上本来就有「所见即所得」

@@ -120,6 +120,28 @@ DYNAMIC_FOLDERS = ("resourcepacks", "texturepacks", "saves", "shaderpacks")
 SUB_OPTION_BLACKLIST = ("Quark Programmer Art.zip", "+ EuphoriaPatches_",
                         "PCL2 Skin.zip")
 
+# 子项表格的目录顺序与中文名（顺序即界面顺序；texturepacks 是 1.6 以前的旧材质包目录）
+SUB_SCOPE_TITLES: dict[str, str] = {
+    "saves": "存档",
+    "resourcepacks": "资源包",
+    "texturepacks": "旧版材质包",
+    "shaderpacks": "光影包",
+}
+
+# 压缩包形态的子项：规则写裸文件名；其余当目录，规则带尾斜杠
+SUB_ARCHIVE_SUFFIXES = (".zip", ".rar")
+
+
+def is_sub_archive(name: str) -> bool:
+    """这个子项是压缩包（文件）还是目录。"""
+    return str(name).lower().endswith(SUB_ARCHIVE_SUFFIXES)
+
+
+def sub_rule(rel_path: str, is_file: bool) -> str:
+    """子项排除规则：目录带尾斜杠（`!saves\\World\\` → `saves\\World\\*`），文件写裸名。"""
+    text = str(rel_path).replace("/", "\\")
+    return f"!{text}" if is_file else f"!{text}\\"
+
 
 # ----------------------------------------------------------------------
 # 规则语法

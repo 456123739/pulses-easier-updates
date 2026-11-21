@@ -142,6 +142,10 @@ class Api:
                 p.get("text", "")),
             "dev.strategy.set": lambda p: self.controller.dev.set_strategy(
                 p.get("name", ""), p.get("value", ""), p.get("excluded")),
+            "dev.sub.set": lambda p: self.controller.dev.set_sub(
+                p.get("path", ""), p.get("checked"), p.get("strategy")),
+            "dev.sub.all": lambda p: self.controller.dev.set_sub_all(
+                p.get("folder", ""), bool(p.get("checked"))),
             "dev.export": lambda p: self.controller.dev.start_export(p.get("path", "")),
             "dev.abort": lambda p: self.controller.dev.abort(),
             # ---- 白名单 / 数据库 ----

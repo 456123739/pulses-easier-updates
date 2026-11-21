@@ -90,11 +90,32 @@ export interface FlowSnapshot {
   paused?: { stage: string; count: number; files: string[] } | null;
 }
 
+/** 动态子项：存档 / 资源包 / 光影包里的某一项（PCL 的动态子选项）。 */
+export interface DevSubScope {
+  /** 相对实例根的路径，如 saves/World、resourcepacks/foo.zip */
+  path: string;
+  name: string;
+  kind: 'dir' | 'file';
+  files: number;
+  bytes: number;
+  /** 是否导出（父目录整体仍可排除） */
+  checked: boolean;
+  /** 单独策略；空串 = 跟随父目录 */
+  strategy: string;
+  /** 父目录当前策略，用于界面显示继承值 */
+  inherited: string;
+  strategies: string[];
+}
+
 export interface DevStrategy {
   name: string;
   current: string;
   excluded: boolean;
   isFile: boolean;
+  /** 目录的中文名（只有子项表格的目录带） */
+  title?: string;
+  /** 子项表：saves / resourcepacks / texturepacks / shaderpacks */
+  subs?: DevSubScope[];
 }
 
 /** 「导出内容」勾选项：父项 + 子项（只有父项带 children）。 */

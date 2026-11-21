@@ -21,7 +21,7 @@ from ..core import instance_export as inst_export
 from ..core import instance_scan
 from ..core import cf_key
 from ..core import pack_source
-from ..config import NEVER_PACK_FILES
+from ..config import NEVER_PACK_FILES, STRATEGY_LIST
 from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
                            parse_mrpack)
 
@@ -65,6 +65,10 @@ class DevFlow:
         self.root_files: list[str] = []
         self.strategies: dict[str, str] = {}
         self.excluded: set[str] = set()
+        # 动态子项：key = "saves/World" / "resourcepacks/foo.zip"
+        #   {folder, name, kind: "dir"|"file", files, bytes, checked, strategy}
+        # 没勾选的子项不进规则；strategy 为空表示跟随父目录。
+        self.subs: dict[str, dict] = {}
         self.changelog = ""
         self.version = ""
         self.options: dict = {}
@@ -109,9 +113,7 @@ class DevFlow:
                 "name": getattr(self.pack, "name", "") or "",
                 "version": self.version,
                 "files": len(self.merged),
-                "strategies": [{"name": n, "current": self.strategies.get(n, ""),
-                                "excluded": n in self.excluded,
-                                "isFile": n in self.root_files}
+                "strategies": [self._row_payload(n, n in self.root_files)
                                for n in self.tops + self.root_files],
                 "changelog": self.changelog,
                 "options": dict(self.options),
@@ -210,6 +212,7 @@ class DevFlow:
             self.version = str(getattr(pack, "version_id", "") or "")
             self.strategies = {n: "完全匹配" for n in tops + files}
             self.excluded = set()
+            self.subs = {}
             self.phase = "idle"
             self.error = None
             self.progress = {}
@@ -221,19 +224,118 @@ class DevFlow:
     def _scan_summary(self) -> dict | None:
         if not self.scan:
             return None
+        totals = dict(self.scan.get("totals") or {})
+        rows: list[dict] = []
+        for row in self.scan.get("rows", []):
+            if not row.get("files"):
+                continue
+            out = dict(row)
+            folder = out.get("name", "")
+            if not out.get("isFile") and folder in rules_mod.SUB_SCOPE_TITLES:
+                # 没勾选的子项：从 children 里拿掉，并从计数里减掉。
+                # scan 本身是不带子项规则的（否则取消勾选后就看不见这一项了），
+                # 所以这里只是"视图扣除"，导出时靠 _current_rules 再真正排除。
+                dropped = {k for k, v in self.subs.items()
+                           if v.get("folder") == folder
+                           and not v.get("checked", True)}
+                if dropped:
+                    kept = []
+                    sub_files = sub_bytes = sub_candidates = 0
+                    for child in out.get("children") or []:
+                        if child.get("path") in dropped:
+                            sub_files += int(child.get("files") or 0)
+                            sub_bytes += int(child.get("bytes") or 0)
+                            sub_candidates += int(child.get("candidates") or 0)
+                            continue
+                        kept.append(child)
+                    out["children"] = kept
+                    out["files"] = max(0, int(out.get("files") or 0) - sub_files)
+                    out["bytes"] = max(0, int(out.get("bytes") or 0) - sub_bytes)
+                    out["candidates"] = max(0, int(out.get("candidates") or 0)
+                                             - sub_candidates)
+                    totals["files"] = totals.get("files", 0) - sub_files
+                    totals["bytes"] = totals.get("bytes", 0) - sub_bytes
+                    totals["candidates"] = (totals.get("candidates", 0)
+                                            - sub_candidates)
+                out["subs"] = self._sub_rows(folder)
+            rows.append(out)
         return {
             "root": self.scan.get("root", ""),
             "name": Path(self.scan.get("root", "")).name,
             "minecraft": self.scan.get("minecraft", ""),
             "loader": self.scan.get("loader", ""),
             "loaderVersion": self.scan.get("loaderVersion", ""),
-            "totals": self.scan.get("totals", {}),
+            "totals": totals,
             "unsafeLinks": list(self.scan.get("unsafeLinks") or []),
             "badNames": list(self.scan.get("badNames") or []),
-            "rows": [r for r in self.scan.get("rows", []) if r["files"]],
+            "rows": rows,
         }
 
-    def _current_rules(self) -> list[str]:
+    # ------------------------------------------------------------------
+    # 动态子项：saves / resourcepacks / texturepacks / shaderpacks
+    # ------------------------------------------------------------------
+    def _sub_rows(self, folder: str) -> list[dict]:
+        rows = []
+        for path, item in self.subs.items():
+            if item.get("folder") != folder:
+                continue
+            rows.append({
+                "path": path,
+                "name": item.get("name", ""),
+                "kind": item.get("kind", "dir"),
+                "files": int(item.get("files") or 0),
+                "bytes": int(item.get("bytes") or 0),
+                "checked": bool(item.get("checked", True)),
+                "strategy": item.get("strategy") or "",
+                "inherited": self.strategies.get(folder, ""),
+                "strategies": [x.value for x in STRATEGY_LIST],
+            })
+        # 目录在前、按名字排（存档不按时间：扫描里没带 mtime，别伪造顺序）
+        rows.sort(key=lambda r: (r["kind"] != "dir", r["name"].lower()))
+        return rows
+
+    def _row_payload(self, name: str, is_file: bool) -> dict:
+        row = {"name": name, "current": self.strategies.get(name, ""),
+               "excluded": name in self.excluded, "isFile": is_file}
+        if not is_file and name in rules_mod.SUB_SCOPE_TITLES:
+            row["title"] = rules_mod.SUB_SCOPE_TITLES[name]
+            row["subs"] = self._sub_rows(name)
+        return row
+
+    def _sync_subs(self, scan: dict | None) -> None:
+        """扫描结果 → 子项表：新出现的默认导出，已有的保留勾选/策略与计数。"""
+        if not scan:
+            return
+        for row in scan.get("rows", []):
+            folder = row.get("name", "")
+            if row.get("isFile") or folder not in rules_mod.SUB_SCOPE_TITLES:
+                continue
+            for child in row.get("children") or []:
+                path = str(child.get("path") or "")
+                if not path.startswith(folder + "/"):
+                    continue
+                name = path.split("/", 1)[1]
+                if not name or "/" in name:
+                    continue
+                if any(bad in name for bad in rules_mod.SUB_OPTION_BLACKLIST):
+                    continue
+                item = self.subs.get(path)
+                if item is None:
+                    item = self.subs[path] = {
+                        "folder": folder,
+                        "name": name,
+                        "kind": ("file" if rules_mod.is_sub_archive(name)
+                                 else "dir"),
+                        "checked": True,
+                        "strategy": "",
+                    }
+                item["files"] = int(child.get("files") or 0)
+                item["bytes"] = int(child.get("bytes") or 0)
+        for path in [k for k, v in self.subs.items()
+                     if v.get("folder") not in rules_mod.SUB_SCOPE_TITLES]:
+            self.subs.pop(path, None)
+
+    def _current_rules(self, include_subs: bool = True) -> list[str]:
         # 目录用 `!dir\`（展开成 dir\*），顶层文件必须写裸名 `!file`，
         # 否则 `!file\*` 永远匹配不到文件本身。
         root = Path(self.scan["root"]) if self.scan else None
@@ -248,21 +350,27 @@ class DevFlow:
                     pass
             return False
 
-        extra = tuple((f"!{name}" if _is_file(name) else f"!{name}\\")
-                      for name in sorted(self.excluded))
-        return rules_mod.expand_rules(set(self.rule_keys), extra)
+        extra = [(f"!{name}" if _is_file(name) else f"!{name}\\")
+                 for name in sorted(self.excluded)]
+        if include_subs:
+            for path, item in sorted(self.subs.items()):
+                if not item.get("checked", True):
+                    extra.append(rules_mod.sub_rule(
+                        path, item.get("kind") == "file"))
+        return rules_mod.expand_rules(set(self.rule_keys), tuple(extra))
 
     def _rescan(self) -> None:
         if not self.scan:
             return
-        self.scan = instance_scan.scan_instance(self.scan["root"],
-                                                self._current_rules())
+        self.scan = instance_scan.scan_instance(
+            self.scan["root"], self._current_rules(include_subs=False))
         self._sync_scope()
 
     def _sync_scope(self) -> None:
         """规则变化后刷新顶层清单：新增的补默认策略，消失的移除。"""
         if not self.scan:
             return
+        self._sync_subs(self.scan)
         rows = [r for r in self.scan.get("rows", []) if r["files"]]
         tops = [r["name"] for r in rows if not r["isFile"]]
         # 永远不进包的文件（options.txt 等）不该出现在"更新范围"里
@@ -316,6 +424,11 @@ class DevFlow:
         files = [r["name"] for r in scan["rows"]
                  if r["isFile"] and r["files"]
                  and r["name"] not in NEVER_PACK_FILES]
+        # 存档默认不导出（PCL 同款），但要在"更新范围"里留一行让人找得到：
+        # 行显示为灰（已排除），点目录名才把它纳入包；纳入后再展开子项。
+        has_saves = (Path(root) / "saves").is_dir()
+        if has_saves and "saves" not in tops:
+            tops.append("saves")
         specials = export_specials.detect(root)
         with self._lock:
             if seq is not None and seq != self._open_seq:
@@ -330,6 +443,12 @@ class DevFlow:
             self.root_files = files
             self.strategies = {n: "完全匹配" for n in tops + files}
             self.excluded = set()
+            self.subs = {}
+            self._sync_subs(scan)
+            if has_saves:
+                self.rule_keys.add("saves")          # 有规则才扫得到，导出靠下面的 excluded 挡住
+                self.excluded.add("saves")
+                self.strategies.setdefault("saves", "完全匹配")
             self.phase = "idle"
             self.error = None
             self.progress = {}
@@ -395,6 +514,7 @@ class DevFlow:
             self.root_files = []
             self.strategies = {}
             self.excluded = set()
+            self.subs = {}
             self.phase = "idle"
             self.error = None
             self.progress = {}
@@ -438,8 +558,54 @@ class DevFlow:
                     self.excluded.add(name)
                 else:
                     self.excluded.discard(name)
+                    if name in rules_mod.SUB_SCOPE_TITLES:
+                        self.rule_keys.add(name)
         if self.mode == "instance" and set(self.excluded) != before:
             self._rescan()
+        self.controller.push_state()
+        return self.snapshot()
+
+    def set_sub_all(self, folder: str, checked: bool) -> dict:
+        """一个目录下的子项全选 / 全不选（浮层底部的快捷操作）。"""
+        if self.busy():
+            raise DevError("上一步还没完成，稍等一下")
+        folder = str(folder or "")
+        if folder not in rules_mod.SUB_SCOPE_TITLES:
+            raise DevError(f"没有这个子项目录：{folder}")
+        for item in self.subs.values():
+            if item.get("folder") == folder:
+                item["checked"] = bool(checked)
+        self.controller.push_state()
+        return self.snapshot()
+
+    def _recommended_strategies(self) -> dict[str, str]:
+        """写进 ea_settings.json 的推荐策略：顶层 + 逐项（只写显式设置过的）。"""
+        out = {k: v for k, v in self.strategies.items()
+               if k not in self.excluded}
+        for path, item in self.subs.items():
+            if item.get("checked", True) and item.get("strategy"):
+                out[path] = item["strategy"]
+        return out
+
+    def set_sub(self, path: str, checked: bool | None = None,
+                strategy: str | None = None) -> dict:
+        """子项（存档 / 资源包 / 光影包里的某一项）：是否导出 + 单独策略。
+
+        `strategy` 传空串表示"跟随父目录"（不写进 ea_settings）。
+        不改扫描结果，只改规则与视图计数 —— 所以是即时生效，不用等重扫。
+        """
+        if self.busy():
+            raise DevError("上一步还没完成，稍等一下")
+        item = self.subs.get(str(path or ""))
+        if item is None:
+            raise DevError(f"没有这个子项：{path}")
+        if checked is not None:
+            item["checked"] = bool(checked)
+        if strategy is not None:
+            value = str(strategy)
+            if value and value not in {x.value for x in STRATEGY_LIST}:
+                raise DevError(f"不支持的策略：{value}")
+            item["strategy"] = value
         self.controller.push_state()
         return self.snapshot()
 
@@ -488,8 +654,7 @@ class DevFlow:
             root = scan.get("root", "")
             if not root:
                 raise DevError("没有可导出的实例")
-            strategies = {k: v for k, v in self.strategies.items()
-                          if k not in self.excluded}
+            strategies = self._recommended_strategies()
             res = inst_export.export_from_instance(
                 root, out,
                 rules=self._current_rules(),

@@ -1,0 +1,87 @@
+/* 悬浮 3D 叠层：定位、拖动、连线、层次 */
+.host {
+  position: fixed;
+  z-index: 60;
+  cursor: grab;
+  touch-action: none;
+}
+.host:active {
+  cursor: grabbing;
+}
+
+.body {
+  pointer-events: auto;
+  position: relative;
+  will-change: transform, opacity;
+}
+
+/* 叠片：只做观感，不接指针 */
+.plate {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-card);
+  pointer-events: none;
+  background: var(--c-card-2, #24262b);
+  border: 1px solid var(--hairline);
+}
+.plateNear {
+  transform: translate3d(8px, 6px, -18px) scale(0.988) rotateY(-6deg);
+  opacity: 0.7;
+}
+.plateFar {
+  transform: translate3d(17px, 12px, -40px) scale(0.975) rotateY(-6deg);
+  opacity: 0.45;
+  background: var(--c-card, #1e1f22);
+}
+.host[data-variant='tilt'] .plateFar {
+  display: none;
+}
+.host[data-variant='tilt'] .plateNear {
+  transform: translate3d(6px, 4px, -14px) scale(0.99) rotateY(-3deg);
+  opacity: 0.5;
+}
+.host[data-variant='slide'] .plate {
+  display: none;
+}
+.host[data-reduced='true'] .plate {
+  display: none;
+}
+
+/* 连线：主条目 → 浮层，拖动时实时重画 */
+.connectorSvg {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 59;
+  pointer-events: none;
+  overflow: visible;
+}
+.connectorPath {
+  fill: none;
+  stroke: rgba(78, 197, 176, 0.5);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px rgba(78, 197, 176, 0.35));
+}
+.connectorDot {
+  fill: rgba(78, 197, 176, 0.85);
+}
+.connectorDotEnd {
+  fill: rgba(78, 197, 176, 0.95);
+  filter: drop-shadow(0 0 6px rgba(78, 197, 176, 0.6));
+}
+
+
+/* 泛光：进场时像一团光晕托着卡片，退场随 body 一起淡掉 */
+.bloom {
+  position: absolute;
+  inset: -26px;
+  border-radius: 26px;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(58% 62% at 28% 16%, rgba(78, 197, 176, 0.26), transparent 68%),
+    radial-gradient(46% 52% at 82% 92%, rgba(78, 197, 176, 0.13), transparent 70%);
+  filter: blur(18px);
+}
