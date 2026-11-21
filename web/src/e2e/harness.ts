@@ -186,7 +186,9 @@ function findButton(label: string, exact = false): HTMLButtonElement | null {
   for (const btn of allButtons()) {
     if (!isShown(btn)) continue
     const text = squeeze(btn.innerText || '')
-    if (exact ? text === want : text.includes(want)) return btn
+    const aria = squeeze(btn.getAttribute('aria-label') || '')
+    if (exact ? (text === want || aria === want)
+      : (text.includes(want) || aria.includes(want))) return btn
   }
   return null
 }
@@ -685,12 +687,26 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
   }
   await clickText('开发者', { exact: true })
   need(await waitText(/开始制作更新包/), '切到开发者视图')
-  setPicks([fx.zip])
-  await clickText('拖入整合包')
-  need(await waitText(/更新范围/), '开发者导入整合包')
-  let dev = await devSnap()
+  const waitDevIdle = () => waitFor(async () => {
+    const d = await devSnap()
+    return d && d.phase !== 'loading' ? d : null
+  }, 60000)
+  // STEP 1 = 整合包定位：先走实例目录（不用启动器导出），再验导出包也认
+  setPicks([fx.pack])
+  await clickText('开发者端整合包定位', { exact: true })
+  let dev = await waitDevIdle()
+  check(dev?.mode === 'instance' && Boolean(dev?.instance?.root),
+    '开发者定位本地实例', JSON.stringify(dev?.mode))
   check((dev?.strategies ?? []).length >= 2, '开发者列出更新范围',
     JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
+  setPicks([fx.zip])
+  await clickText('开发者端整合包定位', { exact: true })
+  dev = await waitDevIdle()
+  check(dev?.mode === 'zip' && Boolean(dev?.source), '导出包也认（zip）',
+    JSON.stringify(dev?.source))
+  const rejected = await bridgeInvoke('dev.open', { path: fx.update })
+  const rejectedCode = rejected && rejected.ok === false ? rejected.error.code : ''
+  check(rejectedCode === 'IS_UPDATE_PACK', '更新包被明确拒绝', rejectedCode)
   // 排除 config（点目录名）—— 快照到了不代表行已经画出来
   await waitRow('config')
   await clickRowName('config')
@@ -707,12 +723,21 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
   await clickText('压缩到最小体积')
   dev = await devSnap()
   check(dev?.options?.min_size === true, '导出选项可切换（min_size）')
-  // 更新日志（视图里有 500ms 防抖）
+  // 导出内容面板已去掉：顶层目录交给「更新范围」
+  check(!(await bodyText()).includes('导出内容'), '「导出内容」面板已移除')
+  // 更新日志：长按钮 → 独立窗口（这里走 Markdown 视图，Windows 上最稳）
   const changelog = '# 导出夹具\n\n- 开发者端\n'
+  await clickText('编写更新日志', { exact: true })
+  need(await waitText(/所见即所得/), '更新日志编辑器打开')
+  await clickText('Markdown', { exact: true })
   setInput('textarea', changelog)
-  await sleep(1200)
-  dev = await devSnap()
-  check(dev?.changelog === changelog, '更新日志写回后端', JSON.stringify(dev?.changelog))
+  await sleep(800)
+  await clickText('完成', { exact: true })
+  const changelogBack = await waitFor(async () => {
+    const d = await devSnap()
+    return d && (d.changelog ?? '').includes('导出夹具') ? d : null
+  }, 20000)
+  check(!!changelogBack, '更新日志写回后端', JSON.stringify(changelogBack?.changelog))
   // 输出位置（走 pick_path 的 save 分支）+ 开始制作
   const outFile = joinPath(work, 'dev-out/E2EExport.eapack')
   setPicks([outFile])

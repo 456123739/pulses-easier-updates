@@ -69,7 +69,10 @@ def child_env(home: Path) -> dict:
            "HOME": str(home),
            "USERPROFILE": str(home),
            "PYTHONUTF8": "1",
-           "PYTHONIOENCODING": "utf-8"}
+           "PYTHONIOENCODING": "utf-8",
+           # 端到端一律不查 CurseForge：要联网、会受额度影响，还可能把
+           # 夹具里的假 jar 当成"没命中"多跑几秒。查 CF 这条路由单测覆盖。
+           "PULSES_CF_KEY": ""}
     env.pop("PULSES_UI", None)
     env.pop("PULSES_E2E", None)
     return env

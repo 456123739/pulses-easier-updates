@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { invoke, subscribe, whenReady } from '@/bridge'
+import { expandWindow, isDesktop } from '@/window'
 import type { AppState } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import Splash from '@/components/Splash'
@@ -13,6 +14,10 @@ import ChangelogSheet from '@/components/ChangelogSheet'
 import WhitelistSheet from '@/components/WhitelistSheet'
 import DbSheet from '@/components/DbSheet'
 import ToastHost from '@/components/ToastHost'
+import { useUi } from '@/store/ui'
+
+// 编辑器（Tiptap + markdown-it）单拉一个 chunk：不开就不下载、不解析
+const MarkdownEditorSheet = lazy(() => import('@/components/MarkdownEditorSheet'))
 
 export default function App() {
   const booting = useApp((s) => s.booting)
@@ -21,6 +26,13 @@ export default function App() {
   const setConnected = useApp((s) => s.setConnected)
   const applyEvents = useApp((s) => s.applyEvents)
   const pushToast = useApp((s) => s.pushToast)
+  const sheet = useUi((s) => s.sheet)
+  const [editorReady, setEditorReady] = useState(false)
+
+  // 第一次点开才加载编辑器；之后保活，关闭动画不丢
+  useEffect(() => {
+    if (sheet === 'changelog-editor') setEditorReady(true)
+  }, [sheet])
 
   useEffect(() => {
     const off = subscribe((events) => applyEvents(events))
@@ -39,6 +51,11 @@ export default function App() {
         const state = await invoke<AppState>('app.bootstrap')
         if (cancelled) return
         setState(state)
+        if (isDesktop()) {
+          // logo 小窗 → 主窗口：窗口动画与内容切换同时进行
+          await expandWindow()
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        }
       } catch (err) {
         pushToast(err instanceof Error ? err.message : '启动失败', 'error')
       } finally {
@@ -59,6 +76,11 @@ export default function App() {
       <PreferencesSheet />
       <PendingSheet />
       <ChangelogSheet />
+      {editorReady && (
+        <Suspense fallback={null}>
+          <MarkdownEditorSheet />
+        </Suspense>
+      )}
       <WhitelistSheet />
       <DbSheet />
       <DialogHost />

@@ -4,6 +4,7 @@ export type SheetKind =
   | 'preferences'
   | 'pending'
   | 'changelog'
+  | 'changelog-editor'
   | 'db'
   | 'whitelist'
   | null

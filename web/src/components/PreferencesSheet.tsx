@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@/bridge'
+import type { DevSnapshot } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { useUi } from '@/store/ui'
 import Sheet from './Sheet'
@@ -36,11 +37,47 @@ export default function PreferencesSheet() {
   const raw = useApp((s) => s.state?.settings)
   const state = (raw ?? EMPTY) as Settings
   const pushToast = useApp((s) => s.pushToast)
+  const hasCfKey = useApp((s) => s.state?.dev?.hasCfKey ?? false)
+  const cfKeySource = useApp((s) => s.state?.dev?.cfKeySource ?? 'builtin')
+  const patchState = useApp((s) => s.patchState)
   const [draft, setDraft] = useState<Settings>(state)
+  const [cfKey, setCfKey] = useState('')
+  const [cfBusy, setCfBusy] = useState(false)
 
   useEffect(() => {
     if (open) setDraft(state)
   }, [open, state])
+
+  const clearCfKey = async () => {
+    if (!connected) return
+    setCfBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key: '' })
+      if (snap) patchState({ dev: snap })
+      pushToast('已回到内置 Key', 'info')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '重置失败', 'error')
+    } finally {
+      setCfBusy(false)
+    }
+  }
+
+  const saveCfKey = async () => {
+    if (!connected || cfBusy) return
+    const key = cfKey.trim()
+    if (!key) return
+    setCfBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key })
+      if (snap) patchState({ dev: snap })
+      setCfKey('')
+      pushToast('CurseForge API Key 已保存', 'info')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+    } finally {
+      setCfBusy(false)
+    }
+  }
 
   const patch = async (next: Settings) => {
     setDraft((d) => ({ ...d, ...next }))
@@ -116,7 +153,57 @@ export default function PreferencesSheet() {
           />
         </Row>
 
-        <Row label="界面" note="「自动」先试新界面、起不来自动退回旧界面；重启后生效">
+        <div className="t-small" style={{ marginTop: 4, color: 'var(--c-muted)' }}>
+          开发者端
+        </div>
+
+        <Row label="CurseForge API Key" note="默认用 PCL 内置的那把，开箱即用；填自己的会覆盖（仅存本机）">
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                className="input"
+                value={cfKey}
+                onChange={(e) => setCfKey(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveCfKey()
+                }}
+                placeholder={hasCfKey ? '已自定义，留空保存可回到内置' : '留空即用内置'}
+                spellCheck={false}
+                autoComplete="off"
+                style={{ width: 168 }}
+              />
+              <button
+                className="btn"
+                onClick={() => void saveCfKey()}
+                disabled={!connected || !cfKey.trim() || cfBusy}
+              >
+                {hasCfKey ? '更换' : '保存'}
+              </button>
+              {hasCfKey && (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void clearCfKey()}
+                  disabled={!connected || cfBusy}
+                >
+                  用回内置
+                </button>
+              )}
+            </div>
+            <span className="t-small">
+              {cfKeySource === 'user'
+                ? '正在使用：你自己的 Key'
+                : cfKeySource === 'off'
+                  ? '已禁用（环境变量 PULSES_CF_KEY）'
+                  : '正在使用：内置（PCL 默认）'}
+            </span>
+          </div>
+        </Row>
+
+        <div className="t-small" style={{ marginTop: 4, color: 'var(--c-muted)' }}>
+          界面
+        </div>
+
+        <Row label="默认界面" note="「自动」先试新界面、起不来自动退回旧界面；重启后生效">
           <div className="seg">
             {UI_MODES.map((m) => {
               const active = (draft.ui_mode ?? 'auto') === m.id

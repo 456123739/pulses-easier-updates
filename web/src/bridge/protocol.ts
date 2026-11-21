@@ -90,11 +90,32 @@ export interface FlowSnapshot {
   paused?: { stage: string; count: number; files: string[] } | null;
 }
 
+/** 动态子项：存档 / 资源包 / 光影包里的某一项（PCL 的动态子选项）。 */
+export interface DevSubScope {
+  /** 相对实例根的路径，如 saves/World、resourcepacks/foo.zip */
+  path: string;
+  name: string;
+  kind: 'dir' | 'file';
+  files: number;
+  bytes: number;
+  /** 是否导出（父目录整体仍可排除） */
+  checked: boolean;
+  /** 单独策略；空串 = 跟随父目录 */
+  strategy: string;
+  /** 父目录当前策略，用于界面显示继承值 */
+  inherited: string;
+  strategies: string[];
+}
+
 export interface DevStrategy {
   name: string;
   current: string;
   excluded: boolean;
   isFile: boolean;
+  /** 目录的中文名（只有子项表格的目录带） */
+  title?: string;
+  /** 子项表：saves / resourcepacks / texturepacks / shaderpacks */
+  subs?: DevSubScope[];
 }
 
 /** 「导出内容」勾选项：父项 + 子项（只有父项带 children）。 */
@@ -139,13 +160,31 @@ export interface DevInstance {
   rows: DevInstanceRow[];
 }
 
+export interface DevSpecial {
+  key: string;
+  title: string;
+  desc: string;
+  /** 扫到的文件数 / 字节数（只统计，用来判断值不值得勾） */
+  files: number;
+  bytes: number;
+  sample: string[];
+  checked: boolean;
+}
+
 export interface DevSnapshot {
-  phase: 'idle' | 'exporting' | 'done' | 'error';
+  /** loading = 已认出是什么，正在读取（扫描/解析在后台线程） */
+  phase: 'idle' | 'loading' | 'exporting' | 'done' | 'error';
+  /** loading 时的目标；只有 phase=loading 才有值 */
+  pending: { kind: 'instance' | 'zip'; path: string; name: string; note?: string } | null;
   /** zip = 导入启动器导出的整合包；instance = 直接读本地实例目录 */
   mode: 'zip' | 'instance';
   instance: DevInstance | null;
   ruleOptions: DevRuleGroup[];
+  /** 特殊导出内容：只有扫到了才出现，默认都不勾 */
+  specials: DevSpecial[];
   hasCfKey: boolean;
+  /** CurseForge Key 从哪来：内置默认 / 用户自己填的 / 被环境变量关掉 */
+  cfKeySource: 'user' | 'builtin' | 'off';
   source: { path: string; name: string } | null;
   name: string;
   version: string;

@@ -122,13 +122,24 @@ class AppController:
     def open_path(self, raw: str) -> dict:
         if not raw:
             raise ApiError("INVALID_INPUT", "缺少路径")
+        return self._open_by_role(raw)
+
+    def pick_pack(self, raw: str) -> dict:
+        return self._open_by_role(raw)
+
+    def _open_by_role(self, raw: str) -> dict:
+        """两个角色的 STEP 1 是同一个动作：先看角色，再决定交给谁判断。
+
+        玩家端 = 定位整合包；开发者端 = 整合包定位（实例目录或导出包都认）。
+        开发者端那次判断很快、识别在后台，所以这里拿到的是 loading 快照。
+        """
+        if self._role == "developer":
+            self.dev.open(raw)
+            return {"state": self.snapshot()}
         root = pack_locator.locate_modpack(raw)
         if not root:
             raise ApiError("NOT_A_PACK", "这个路径里没有找到整合包（需要 mods/ 与 config/）")
         return self._load_pack(Path(root))
-
-    def pick_pack(self, raw: str) -> dict:
-        return self.open_path(raw)
 
     def _load_pack(self, root: Path) -> dict:
         info = pack_info.read_modpack_info(root)

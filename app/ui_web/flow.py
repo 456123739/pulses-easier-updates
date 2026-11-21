@@ -466,6 +466,12 @@ class Flow:
                                      or default_strategy_for_file(name).value)
         for name in folders + self.root_files:
             self.checked.setdefault(name, True)
+        # 逐项策略（开发者端为某个存档/资源包单独设的）原样保留，
+        # 由 apply_rules.resolve_strategy_for 按路径优先级取用。
+        for key, value in rec.items():
+            key = str(key)
+            if "/" in key and value and not self.strategies.get(key):
+                self.strategies[key] = str(value)
 
     # ------------------------------------------------------------------
     # 任务收集

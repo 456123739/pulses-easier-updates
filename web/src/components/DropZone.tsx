@@ -11,6 +11,8 @@ interface Props {
   highlight?: boolean
   locked?: boolean
   variant?: 'sidebar' | 'work' | 'pending'
+  /** 无障碍名字，同时给端到端一个稳定的锚点（例如「开发者端整合包定位」） */
+  ariaLabel?: string
   onPick?: () => void
 }
 
@@ -24,6 +26,7 @@ export default function DropZone({
   highlight = true,
   locked = false,
   variant = 'work',
+  ariaLabel,
   onPick,
 }: Props) {
   const [hover, setHover] = useState(false)
@@ -44,6 +47,7 @@ export default function DropZone({
       onDragLeave={() => setDragging(false)}
       onDrop={() => setDragging(false)}
       onClick={onPick}
+      aria-label={ariaLabel}
       disabled={locked}
       whileTap={locked ? undefined : { scale: 0.995 }}
     >

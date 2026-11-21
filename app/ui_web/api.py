@@ -124,6 +124,9 @@ class Api:
             "update.config.import": lambda p: self.controller.flow.import_config(
                 p.get("path", "")),
             # ---- 开发者：制作更新包 ----
+            # dev.open 是界面用的唯一入口：实例目录 / 导出包都认，认出类型就返回，
+            # 扫描与解析在后台线程（见 dev.DevFlow.open）。
+            "dev.open": lambda p: self.controller.dev.open(p.get("path", "")),
             "dev.pick": lambda p: self.controller.dev.import_zip(p.get("path", "")),
             "dev.instance.pick": lambda p: self.controller.dev.import_instance(
                 p.get("path", "")),
@@ -139,6 +142,10 @@ class Api:
                 p.get("text", "")),
             "dev.strategy.set": lambda p: self.controller.dev.set_strategy(
                 p.get("name", ""), p.get("value", ""), p.get("excluded")),
+            "dev.sub.set": lambda p: self.controller.dev.set_sub(
+                p.get("path", ""), p.get("checked"), p.get("strategy")),
+            "dev.sub.all": lambda p: self.controller.dev.set_sub_all(
+                p.get("folder", ""), bool(p.get("checked"))),
             "dev.export": lambda p: self.controller.dev.start_export(p.get("path", "")),
             "dev.abort": lambda p: self.controller.dev.abort(),
             # ---- 白名单 / 数据库 ----
@@ -147,6 +154,16 @@ class Api:
                 p.get("items") or []),
             "app.db.get": lambda p: self.controller.db_path(),
             "app.db.set": lambda p: self.controller.set_db_path(p.get("path", "")),
+            # ---- 无边框窗口的控制（浏览器里没有 window，一律 NO_WINDOW）----
+            "window.expand": lambda p: self.window_expand(),
+            "window.minimize": lambda p: self.window_minimize(),
+            "window.toggle_max": lambda p: self.window_toggle_max(),
+            "window.close": lambda p: self.window_close(),
+            "window.move": lambda p: self.window_move(
+                int(p.get("x", 0)), int(p.get("y", 0))),
+            "window.resize": lambda p: self.window_resize(
+                int(p.get("width", 0)), int(p.get("height", 0)),
+                p.get("x"), p.get("y")),
         }
         if self.e2e:
             self._methods.update({
@@ -161,6 +178,65 @@ class Api:
             # 直接暴露成 js_api 方法：页面跑完后 `api.e2e_report(payload)`。
             # 平时不注册 → 产品里没有这个入口。
             setattr(self, "e2e_report", self._e2e_report)
+
+    # ------------------------------------------------------------------
+    # 无边框窗口
+    # ------------------------------------------------------------------
+    def _win(self):
+        if self.window is None:
+            raise ApiError("NO_WINDOW", "当前不是桌面窗口")
+        return self.window
+
+    def window_expand(self) -> dict:
+        """logo 小窗 → 主窗口：Python 侧做尺寸动画，页面只管画内容。"""
+        win = self._win()
+        if getattr(self, "expanded", False):          # 前端与兜底线程只展开一次
+            return {"expanding": False}
+        target = getattr(self, "window_target", (1440, 860))
+
+        def _run():
+            try:
+                from .window_shell import expand
+                expand(win, target)
+            except Exception:                          # noqa: BLE001, S110
+                pass
+
+        self.expanded = True
+        threading.Thread(target=_run, daemon=True).start()
+        return {"expanding": True, "target": list(target)}
+
+    def window_minimize(self) -> dict:
+        self._win().minimize()
+        return {"minimized": True}
+
+    def window_toggle_max(self) -> dict:
+        win = self._win()
+        if bool(getattr(win, "maximized", False)):
+            win.restore()
+            return {"maximized": False}
+        win.maximize()
+        return {"maximized": True}
+
+    def window_close(self) -> dict:
+        win = self._win()
+        if not self.controller.can_close():
+            return {"closed": False, "blocked": True}
+        win.destroy()
+        return {"closed": True}
+
+    def window_move(self, x: int, y: int) -> dict:
+        self._win().move(int(x), int(y))
+        return {"x": int(x), "y": int(y)}
+
+    def window_resize(self, width: int, height: int,
+                      x=None, y=None) -> dict:
+        win = self._win()
+        w = max(200, int(width))
+        h = max(120, int(height))
+        win.resize(w, h)
+        if x is not None and y is not None:
+            win.move(int(x), int(y))
+        return {"width": w, "height": h}
 
     def bind_window(self, window) -> None:
         self.window = window
@@ -390,6 +466,11 @@ class Api:
         except ApiError as exc:
             self.bus.dnd("error", exc.message)
             return _err(exc.code, exc.message)
+        except Exception as exc:                       # noqa: BLE001
+            # 开发者端的分类错误（例如误拖了 .eapack）走这里：要让玩家看见原因
+            message = str(exc) or "打不开这个文件"
+            self.bus.dnd("error", message)
+            return _err(getattr(exc, "code", "DROP_FAILED"), message)
         return {"ok": True, "data": {"paths": clean}}
 
 

@@ -50,6 +50,7 @@ from .mrpack import is_safe_rel_path
 from .apply_rules import (
     is_checked_n,
     normalize_keys,
+    resolve_strategy_for,
     resolve_strategy_n,
 )
 from .transfer import TransferResult
@@ -425,7 +426,8 @@ def build_plan(diff, checked, strategies,
             plan.skip.append(rel)
             continue
 
-        strat = resolve_strategy_n(strategies_n, top)
+        # 逐项策略（如 saves/WorldA）优先，回落顶层
+        strat = resolve_strategy_for(strategies, rel)
 
         # ---- 文件夹级（非白名单） ----
         if change.is_folder_level:

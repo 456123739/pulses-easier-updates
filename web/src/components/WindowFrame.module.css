@@ -1,0 +1,19 @@
+.frame {
+  position: relative;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--c-base);
+}
+
+.body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  /* 用普通块布局：Shell 自己 height:100%；固定层（Toast/Splash）不占位 */
+  display: block;
+}

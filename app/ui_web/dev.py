@@ -16,9 +16,12 @@ from pathlib import Path
 from ..core import database as db
 from ..core import eapack as eapack_mod
 from ..core import export_rules as rules_mod
+from ..core import export_specials
 from ..core import instance_export as inst_export
 from ..core import instance_scan
-from ..config import NEVER_PACK_FILES
+from ..core import cf_key
+from ..core import pack_source
+from ..config import NEVER_PACK_FILES, STRATEGY_LIST
 from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
                            parse_mrpack)
 
@@ -29,6 +32,12 @@ EXPORT_KEYS = ("include_hashes", "tamper_proof", "precompute_overrides",
 class DevError(RuntimeError):
     code = "DEV_ERROR"
 
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.message = message
+        if code:
+            self.code = code
+
 
 class DevFlow:
     def __init__(self, controller, bus):
@@ -36,10 +45,14 @@ class DevFlow:
         self.bus = bus
         self._lock = threading.RLock()
 
-        self.phase = "idle"           # idle | exporting | done | error
+        self.phase = "idle"           # idle | loading | exporting | done | error
         self.mode = "zip"             # zip（导入启动器整合包）| instance（本地实例）
+        self.pending: dict | None = None   # loading 时的目标（kind / path / name / note）
+        self._open_seq = 0                 # 连续拖入时只让最后一次生效
         self.scan: dict | None = None
-        self.rule_keys: set[str] = rules_mod.default_keys()
+        # 特殊选项（本机数据）默认一律不导出：从默认勾选里剔掉
+        self.rule_keys: set[str] = rules_mod.default_keys() - export_specials.keys()
+        self.specials: list[dict] = []
         self.cf_key = ""
         try:
             self.cf_key = str(db.load_app_config().get("cf_api_key") or "")
@@ -52,6 +65,10 @@ class DevFlow:
         self.root_files: list[str] = []
         self.strategies: dict[str, str] = {}
         self.excluded: set[str] = set()
+        # 动态子项：key = "saves/World" / "resourcepacks/foo.zip"
+        #   {folder, name, kind: "dir"|"file", files, bytes, checked, strategy}
+        # 没勾选的子项不进规则；strategy 为空表示跟随父目录。
+        self.subs: dict[str, dict] = {}
         self.changelog = ""
         self.version = ""
         self.options: dict = {}
@@ -71,13 +88,14 @@ class DevFlow:
 
     # ------------------------------------------------------------------
     def busy(self) -> bool:
-        return self.phase == "exporting"
+        return self.phase in ("loading", "exporting")
 
     def snapshot(self) -> dict:
         with self._lock:
             return {
                 "phase": self.phase,
                 "mode": self.mode,
+                "pending": dict(self.pending) if self.pending else None,
                 "instance": self._scan_summary(),
                 "ruleOptions": [{"key": g.key, "title": g.title,
                                  "checked": g.key in self.rule_keys,
@@ -85,16 +103,17 @@ class DevFlow:
                                                "checked": c.key in self.rule_keys}
                                               for c in g.children]}
                                 for g in rules_mod.DEFAULT_OPTIONS],
+                "specials": [dict(item, checked=item["key"] in self.rule_keys)
+                             for item in self.specials],
                 "hasCfKey": bool(self.cf_key),
+                "cfKeySource": cf_key.source(self.cf_key),
                 "source": ({"path": str(self.source_zip),
                             "name": self.source_zip.name}
                            if self.source_zip else None),
                 "name": getattr(self.pack, "name", "") or "",
                 "version": self.version,
                 "files": len(self.merged),
-                "strategies": [{"name": n, "current": self.strategies.get(n, ""),
-                                "excluded": n in self.excluded,
-                                "isFile": n in self.root_files}
+                "strategies": [self._row_payload(n, n in self.root_files)
                                for n in self.tops + self.root_files],
                 "changelog": self.changelog,
                 "options": dict(self.options),
@@ -104,15 +123,72 @@ class DevFlow:
             }
 
     # ------------------------------------------------------------------
+    # 入口：统一判断 + 后台识别（界面只走这一个）
+    # ------------------------------------------------------------------
+    def open(self, raw: str) -> dict:
+        """整合包定位：实例目录 / 启动器导出包都行。
+
+        判断本身很便宜（见 `core.pack_source`），但"扫描 / 解析"是重活，
+        所以这里只做到"认出是什么"，然后立刻返回（phase=loading），
+        真正的读取交给后台线程，界面不会卡在点击上。
+        """
+        if self.phase == "exporting":
+            raise DevError("上一步还没完成，稍等一下")
+        try:
+            ref = pack_source.classify(raw)
+        except pack_source.SourceError as exc:
+            raise DevError(exc.message, code=exc.code)
+
+        with self._lock:
+            self._open_seq += 1
+            seq = self._open_seq
+            self.phase = "loading"
+            self.error = None
+            self.progress = {}
+            self.pending = {"kind": ref.kind, "path": str(ref.path),
+                            "name": ref.label, "note": ref.note}
+        snap = self.snapshot()
+        self.controller.push_state()
+        threading.Thread(target=self._open_worker, args=(seq, ref),
+                         name="dev-open", daemon=True).start()
+        return snap
+
+    def _open_worker(self, seq: int, ref: pack_source.SourceRef) -> None:
+        try:
+            if ref.kind == pack_source.KIND_INSTANCE:
+                self._load_instance(ref.root, seq=seq)
+            else:
+                self._load_zip(ref.path, seq=seq)
+        except Exception as exc:                        # noqa: BLE001
+            with self._lock:
+                if seq != self._open_seq:               # 后来居上，丢弃这次结果
+                    return
+                self.phase = "error"
+                self.error = str(exc) or "识别失败"
+                self.pending = None
+            self.bus.log(f"整合包识别失败：{self.error}", "ERROR")
+        else:
+            with self._lock:
+                if seq != self._open_seq:
+                    return
+                self.pending = None
+        finally:
+            self.controller.push_state()
+
+    # ------------------------------------------------------------------
     def import_zip(self, raw: str) -> dict:
+        """同步导入启动器导出的 zip（老入口，兼容脚本与用例；界面走 open）。"""
         if self.busy():
-            raise DevError("正在导出，暂时不能更换整合包")
-        path = Path(raw).expanduser()
+            raise DevError("上一步还没完成，稍等一下")
+        path = Path(str(raw or "")).expanduser()
         if not path.is_file():
             raise DevError(f"文件不存在：{path}")
         if path.suffix.lower() not in (".zip", ".mrpack"):
             raise DevError("请选择启动器导出的整合包（.zip / .mrpack）")
+        self._load_zip(path)
+        return self.snapshot()
 
+    def _load_zip(self, path: Path, seq: int | None = None) -> None:
         pack, err = parse_mrpack(path)
         if pack is None:
             raise DevError(f"不是有效的整合包：{err}")
@@ -123,8 +199,11 @@ class DevFlow:
                         if "/" not in p and not is_reserved_root_name(p)})
 
         with self._lock:
+            if seq is not None and seq != self._open_seq:
+                return                                   # 后来居上：这次结果作废
             self.mode = "zip"
             self.scan = None
+            self.specials = []
             self.source_zip = path
             self.pack = pack
             self.merged = merged
@@ -133,31 +212,130 @@ class DevFlow:
             self.version = str(getattr(pack, "version_id", "") or "")
             self.strategies = {n: "完全匹配" for n in tops + files}
             self.excluded = set()
+            self.subs = {}
             self.phase = "idle"
             self.error = None
             self.progress = {}
             self.out_path = ""
         self.bus.log(f"已导入整合包：{path.name}（{len(merged)} 个文件）", "SUCCESS")
         self.controller.push_state()
-        return self.snapshot()
 
     # ------------------------------------------------------------------
     def _scan_summary(self) -> dict | None:
         if not self.scan:
             return None
+        totals = dict(self.scan.get("totals") or {})
+        rows: list[dict] = []
+        for row in self.scan.get("rows", []):
+            if not row.get("files"):
+                continue
+            out = dict(row)
+            folder = out.get("name", "")
+            if not out.get("isFile") and folder in rules_mod.SUB_SCOPE_TITLES:
+                # 没勾选的子项：从 children 里拿掉，并从计数里减掉。
+                # scan 本身是不带子项规则的（否则取消勾选后就看不见这一项了），
+                # 所以这里只是"视图扣除"，导出时靠 _current_rules 再真正排除。
+                dropped = {k for k, v in self.subs.items()
+                           if v.get("folder") == folder
+                           and not v.get("checked", True)}
+                if dropped:
+                    kept = []
+                    sub_files = sub_bytes = sub_candidates = 0
+                    for child in out.get("children") or []:
+                        if child.get("path") in dropped:
+                            sub_files += int(child.get("files") or 0)
+                            sub_bytes += int(child.get("bytes") or 0)
+                            sub_candidates += int(child.get("candidates") or 0)
+                            continue
+                        kept.append(child)
+                    out["children"] = kept
+                    out["files"] = max(0, int(out.get("files") or 0) - sub_files)
+                    out["bytes"] = max(0, int(out.get("bytes") or 0) - sub_bytes)
+                    out["candidates"] = max(0, int(out.get("candidates") or 0)
+                                             - sub_candidates)
+                    totals["files"] = totals.get("files", 0) - sub_files
+                    totals["bytes"] = totals.get("bytes", 0) - sub_bytes
+                    totals["candidates"] = (totals.get("candidates", 0)
+                                            - sub_candidates)
+                out["subs"] = self._sub_rows(folder)
+            rows.append(out)
         return {
             "root": self.scan.get("root", ""),
             "name": Path(self.scan.get("root", "")).name,
             "minecraft": self.scan.get("minecraft", ""),
             "loader": self.scan.get("loader", ""),
             "loaderVersion": self.scan.get("loaderVersion", ""),
-            "totals": self.scan.get("totals", {}),
+            "totals": totals,
             "unsafeLinks": list(self.scan.get("unsafeLinks") or []),
             "badNames": list(self.scan.get("badNames") or []),
-            "rows": [r for r in self.scan.get("rows", []) if r["files"]],
+            "rows": rows,
         }
 
-    def _current_rules(self) -> list[str]:
+    # ------------------------------------------------------------------
+    # 动态子项：saves / resourcepacks / texturepacks / shaderpacks
+    # ------------------------------------------------------------------
+    def _sub_rows(self, folder: str) -> list[dict]:
+        rows = []
+        for path, item in self.subs.items():
+            if item.get("folder") != folder:
+                continue
+            rows.append({
+                "path": path,
+                "name": item.get("name", ""),
+                "kind": item.get("kind", "dir"),
+                "files": int(item.get("files") or 0),
+                "bytes": int(item.get("bytes") or 0),
+                "checked": bool(item.get("checked", True)),
+                "strategy": item.get("strategy") or "",
+                "inherited": self.strategies.get(folder, ""),
+                "strategies": [x.value for x in STRATEGY_LIST],
+            })
+        # 目录在前、按名字排（存档不按时间：扫描里没带 mtime，别伪造顺序）
+        rows.sort(key=lambda r: (r["kind"] != "dir", r["name"].lower()))
+        return rows
+
+    def _row_payload(self, name: str, is_file: bool) -> dict:
+        row = {"name": name, "current": self.strategies.get(name, ""),
+               "excluded": name in self.excluded, "isFile": is_file}
+        if not is_file and name in rules_mod.SUB_SCOPE_TITLES:
+            row["title"] = rules_mod.SUB_SCOPE_TITLES[name]
+            row["subs"] = self._sub_rows(name)
+        return row
+
+    def _sync_subs(self, scan: dict | None) -> None:
+        """扫描结果 → 子项表：新出现的默认导出，已有的保留勾选/策略与计数。"""
+        if not scan:
+            return
+        for row in scan.get("rows", []):
+            folder = row.get("name", "")
+            if row.get("isFile") or folder not in rules_mod.SUB_SCOPE_TITLES:
+                continue
+            for child in row.get("children") or []:
+                path = str(child.get("path") or "")
+                if not path.startswith(folder + "/"):
+                    continue
+                name = path.split("/", 1)[1]
+                if not name or "/" in name:
+                    continue
+                if any(bad in name for bad in rules_mod.SUB_OPTION_BLACKLIST):
+                    continue
+                item = self.subs.get(path)
+                if item is None:
+                    item = self.subs[path] = {
+                        "folder": folder,
+                        "name": name,
+                        "kind": ("file" if rules_mod.is_sub_archive(name)
+                                 else "dir"),
+                        "checked": True,
+                        "strategy": "",
+                    }
+                item["files"] = int(child.get("files") or 0)
+                item["bytes"] = int(child.get("bytes") or 0)
+        for path in [k for k, v in self.subs.items()
+                     if v.get("folder") not in rules_mod.SUB_SCOPE_TITLES]:
+            self.subs.pop(path, None)
+
+    def _current_rules(self, include_subs: bool = True) -> list[str]:
         # 目录用 `!dir\`（展开成 dir\*），顶层文件必须写裸名 `!file`，
         # 否则 `!file\*` 永远匹配不到文件本身。
         root = Path(self.scan["root"]) if self.scan else None
@@ -172,21 +350,27 @@ class DevFlow:
                     pass
             return False
 
-        extra = tuple((f"!{name}" if _is_file(name) else f"!{name}\\")
-                      for name in sorted(self.excluded))
-        return rules_mod.expand_rules(set(self.rule_keys), extra)
+        extra = [(f"!{name}" if _is_file(name) else f"!{name}\\")
+                 for name in sorted(self.excluded)]
+        if include_subs:
+            for path, item in sorted(self.subs.items()):
+                if not item.get("checked", True):
+                    extra.append(rules_mod.sub_rule(
+                        path, item.get("kind") == "file"))
+        return rules_mod.expand_rules(set(self.rule_keys), tuple(extra))
 
     def _rescan(self) -> None:
         if not self.scan:
             return
-        self.scan = instance_scan.scan_instance(self.scan["root"],
-                                                self._current_rules())
+        self.scan = instance_scan.scan_instance(
+            self.scan["root"], self._current_rules(include_subs=False))
         self._sync_scope()
 
     def _sync_scope(self) -> None:
         """规则变化后刷新顶层清单：新增的补默认策略，消失的移除。"""
         if not self.scan:
             return
+        self._sync_subs(self.scan)
         rows = [r for r in self.scan.get("rows", []) if r["files"]]
         tops = [r["name"] for r in rows if not r["isFile"]]
         # 永远不进包的文件（options.txt 等）不该出现在"更新范围"里
@@ -214,15 +398,20 @@ class DevFlow:
             self.root_files = kept_files
 
     def import_instance(self, raw: str) -> dict:
-        """从本地整合包目录直接制作更新包（不需要启动器导出的 zip）。"""
+        """从本地整合包目录直接制作更新包（老入口，界面走 open）。"""
         if self.busy():
-            raise DevError("正在导出，暂时不能更换整合包")
+            raise DevError("上一步还没完成，稍等一下")
         raw = str(raw or "").strip()
         if not raw:
             raise DevError("请选择整合包目录")
         path = Path(raw).expanduser()
         if not path.is_dir():
             raise DevError(f"目录不存在：{path}")
+        self._load_instance(raw)
+        return self.snapshot()
+
+    def _load_instance(self, raw: str, seq: int | None = None) -> None:
+        path = Path(str(raw or "")).expanduser()
         root = instance_scan.pack_locator.locate_modpack(path)
         if not root:
             raise DevError("这个目录里没有找到整合包（需要 mods/ 与 config/）")
@@ -235,9 +424,18 @@ class DevFlow:
         files = [r["name"] for r in scan["rows"]
                  if r["isFile"] and r["files"]
                  and r["name"] not in NEVER_PACK_FILES]
+        # 存档默认不导出（PCL 同款），但要在"更新范围"里留一行让人找得到：
+        # 行显示为灰（已排除），点目录名才把它纳入包；纳入后再展开子项。
+        has_saves = (Path(root) / "saves").is_dir()
+        if has_saves and "saves" not in tops:
+            tops.append("saves")
+        specials = export_specials.detect(root)
         with self._lock:
+            if seq is not None and seq != self._open_seq:
+                return                                   # 后来居上：这次结果作废
             self.mode = "instance"
             self.scan = scan
+            self.specials = specials
             self.source_zip = None
             self.pack = None
             self.merged = []
@@ -245,6 +443,12 @@ class DevFlow:
             self.root_files = files
             self.strategies = {n: "完全匹配" for n in tops + files}
             self.excluded = set()
+            self.subs = {}
+            self._sync_subs(scan)
+            if has_saves:
+                self.rule_keys.add("saves")          # 有规则才扫得到，导出靠下面的 excluded 挡住
+                self.excluded.add("saves")
+                self.strategies.setdefault("saves", "完全匹配")
             self.phase = "idle"
             self.error = None
             self.progress = {}
@@ -267,7 +471,7 @@ class DevFlow:
     def set_rule(self, key: str, value: bool) -> dict:
         """勾选/取消一个「导出内容」选项，并立即重扫。"""
         if self.busy():
-            raise DevError("正在导出")
+            raise DevError("上一步还没完成，稍等一下")
         known = {g.key for g in rules_mod.DEFAULT_OPTIONS}
         for g in rules_mod.DEFAULT_OPTIONS:
             known.update(c.key for c in g.children)
@@ -282,6 +486,7 @@ class DevFlow:
         return self.snapshot()
 
     def set_cf_key(self, key: str) -> dict:
+        """保存用户自己的 CurseForge API Key；传空串 = 清掉，回到内置默认。"""
         self.cf_key = str(key or "").strip()
         try:
             cfg = db.load_app_config()
@@ -289,15 +494,19 @@ class DevFlow:
             db.save_app_config(cfg)
         except Exception:                                  # noqa: BLE001
             pass
+        self.controller.push_state()
         return self.snapshot()
 
     def clear(self) -> dict:
         if self.busy():
-            raise DevError("正在导出")
+            raise DevError("上一步还没完成，稍等一下")
         self._cleanup_temp()
         with self._lock:
+            self._open_seq += 1                          # 清空后，晚到的识别结果不再写入
+            self.pending = None
             self.mode = "zip"
             self.scan = None
+            self.specials = []
             self.source_zip = None
             self.pack = None
             self.merged = []
@@ -305,6 +514,7 @@ class DevFlow:
             self.root_files = []
             self.strategies = {}
             self.excluded = set()
+            self.subs = {}
             self.phase = "idle"
             self.error = None
             self.progress = {}
@@ -315,7 +525,7 @@ class DevFlow:
     # ------------------------------------------------------------------
     def set_option(self, key: str, value: bool) -> dict:
         if self.busy():
-            raise DevError("正在导出，暂时不能修改导出选项")
+            raise DevError("上一步还没完成，稍等一下")
         if key not in EXPORT_KEYS:
             raise DevError(f"未知选项：{key}")
         with self._lock:
@@ -329,14 +539,14 @@ class DevFlow:
 
     def set_changelog(self, text: str) -> dict:
         if self.busy():
-            raise DevError("正在导出，暂时不能修改更新日志")
+            raise DevError("上一步还没完成，稍等一下")
         with self._lock:
             self.changelog = str(text or "")
         return self.snapshot()
 
     def set_strategy(self, name: str, value: str = "", excluded: bool | None = None) -> dict:
         if self.busy():
-            raise DevError("正在导出，暂时不能修改更新范围")
+            raise DevError("上一步还没完成，稍等一下")
         if name not in self.strategies and name not in self.excluded:
             raise DevError(f"没有这个条目：{name}")
         before = set(self.excluded)
@@ -348,8 +558,54 @@ class DevFlow:
                     self.excluded.add(name)
                 else:
                     self.excluded.discard(name)
+                    if name in rules_mod.SUB_SCOPE_TITLES:
+                        self.rule_keys.add(name)
         if self.mode == "instance" and set(self.excluded) != before:
             self._rescan()
+        self.controller.push_state()
+        return self.snapshot()
+
+    def set_sub_all(self, folder: str, checked: bool) -> dict:
+        """一个目录下的子项全选 / 全不选（浮层底部的快捷操作）。"""
+        if self.busy():
+            raise DevError("上一步还没完成，稍等一下")
+        folder = str(folder or "")
+        if folder not in rules_mod.SUB_SCOPE_TITLES:
+            raise DevError(f"没有这个子项目录：{folder}")
+        for item in self.subs.values():
+            if item.get("folder") == folder:
+                item["checked"] = bool(checked)
+        self.controller.push_state()
+        return self.snapshot()
+
+    def _recommended_strategies(self) -> dict[str, str]:
+        """写进 ea_settings.json 的推荐策略：顶层 + 逐项（只写显式设置过的）。"""
+        out = {k: v for k, v in self.strategies.items()
+               if k not in self.excluded}
+        for path, item in self.subs.items():
+            if item.get("checked", True) and item.get("strategy"):
+                out[path] = item["strategy"]
+        return out
+
+    def set_sub(self, path: str, checked: bool | None = None,
+                strategy: str | None = None) -> dict:
+        """子项（存档 / 资源包 / 光影包里的某一项）：是否导出 + 单独策略。
+
+        `strategy` 传空串表示"跟随父目录"（不写进 ea_settings）。
+        不改扫描结果，只改规则与视图计数 —— 所以是即时生效，不用等重扫。
+        """
+        if self.busy():
+            raise DevError("上一步还没完成，稍等一下")
+        item = self.subs.get(str(path or ""))
+        if item is None:
+            raise DevError(f"没有这个子项：{path}")
+        if checked is not None:
+            item["checked"] = bool(checked)
+        if strategy is not None:
+            value = str(strategy)
+            if value and value not in {x.value for x in STRATEGY_LIST}:
+                raise DevError(f"不支持的策略：{value}")
+            item["strategy"] = value
         self.controller.push_state()
         return self.snapshot()
 
@@ -363,7 +619,9 @@ class DevFlow:
             if self.mode == "instance" else len(self.merged)
         with self._lock:
             if self.phase == "exporting":
-                raise DevError("正在导出")
+                raise DevError("正在导出中，稍等一下")
+            if self.phase == "loading":
+                raise DevError("还在识别整合包，稍等一下")
             if self.mode == "instance":
                 if not self.scan:
                     raise DevError("请先选择整合包目录")
@@ -396,8 +654,7 @@ class DevFlow:
             root = scan.get("root", "")
             if not root:
                 raise DevError("没有可导出的实例")
-            strategies = {k: v for k, v in self.strategies.items()
-                          if k not in self.excluded}
+            strategies = self._recommended_strategies()
             res = inst_export.export_from_instance(
                 root, out,
                 rules=self._current_rules(),
@@ -408,7 +665,7 @@ class DevFlow:
                 pack_version=self.version or "1.0.0",
                 opts=dict(self.options),
                 excluded_tops=sorted(self.excluded),
-                cf_key=self.cf_key,
+                cf_key=cf_key.resolve(self.cf_key),
                 cancel=self._cancel,
                 progress=self._progress,
                 log=lambda level, msg: self.bus.log(msg, level.upper()))

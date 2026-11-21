@@ -56,10 +56,12 @@ export default function Sidebar() {
 
       <DropZone
         step="STEP 1"
-        title={state?.role === 'developer' ? '导入整合包' : '定位整合包'}
+        title={state?.role === 'developer' ? '整合包定位' : '定位整合包'}
         subtitle={
           state?.role === 'developer'
-            ? '启动器导出的 .zip / .mrpack'
+            ? state?.dev?.instance?.name ??
+              state?.dev?.source?.name ??
+              '整合包目录 / 导出包'
             : state?.pack
               ? state.pack.name
               : '拖入整合包内任意文件'

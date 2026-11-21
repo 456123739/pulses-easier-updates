@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke, pickPath } from '@/bridge'
-import type { DevRuleGroup, DevRuleNode, DevSnapshot, DevStrategy } from '@/bridge/protocol'
+import type { AppState, DevSnapshot, DevStrategy } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
+import { useUi } from '@/store/ui'
 import DropZone from './DropZone'
+import Floating3DLayer from './Floating3DLayer'
 import Icon from './Icon'
+import SpecialPeek from './SpecialPeek'
+import SubScopeLayer from './SubScopeLayer'
 import styles from './DeveloperView.module.css'
+
 
 const OPTIONS = [
   { id: 'include_hashes', label: '写入文件哈希', desc: '更新时可以逐文件校验，强烈建议保留' },
@@ -28,8 +33,6 @@ const LOADERS: Record<string, string> = {
   vanilla: '原版',
 }
 
-type SourceMode = 'zip' | 'instance'
-
 const fmtInt = (n: number | undefined) => (n ?? 0).toLocaleString('zh-CN')
 
 function fmtBytes(bytes: number | undefined): string {
@@ -46,120 +49,169 @@ function fmtBytes(bytes: number | undefined): string {
   return `${size.toFixed(digits)} ${units[index] ?? 'TB'}`
 }
 
-interface RuleRowProps {
-  node: DevRuleNode
-  child?: boolean
-  count?: number
-  pending?: boolean
-  disabled?: boolean
-  onToggle: (key: string, value: boolean) => void
-}
-
-function RuleRow({ node, child = false, count, pending = false, disabled = false, onToggle }: RuleRowProps) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={node.checked}
-      className={styles.rule}
-      data-child={child}
-      data-pending={pending}
-      disabled={disabled}
-      onClick={() => onToggle(node.key, !node.checked)}
-    >
-      <span className={styles.check} data-on={node.checked} aria-hidden />
-      <span className={styles.ruleTitle}>{node.title}</span>
-      {!child && count !== undefined && <span className={styles.ruleCount}>{fmtInt(count)} 个</span>}
-    </button>
-  )
-}
-
 export default function DeveloperView() {
   const dev = useApp((s) => s.state?.dev)
   const connected = useApp((s) => s.connected)
   const pushToast = useApp((s) => s.pushToast)
   const patchState = useApp((s) => s.patchState)
-  const [changelog, setChangelog] = useState('')
+  const setState = useApp((s) => s.setState)
+  const openSheet = useUi((s) => s.openSheet)
   const [outName, setOutName] = useState('')
   const [outPath, setOutPath] = useState('')
-  // 来源是页面自己的意图：选「本地整合包目录」时后端还是 zip，直到真的选了一个目录
-  const [source, setSource] = useState<SourceMode>(dev?.mode ?? 'zip')
-  const [cfKey, setCfKey] = useState('')
-  const [ruleBusy, setRuleBusy] = useState('')
-  const seq = useRef(0)
+  const [specialBusy, setSpecialBusy] = useState('')
+  const [subBusy, setSubBusy] = useState(false)
+  // 特殊导出选项的悬浮详情（同一套 3D 叠层）
+  const [peek, setPeek] = useState<{ key: string; anchor: HTMLElement } | null>(null)
+  const peekOpen = useRef<number | null>(null)
+  const peekClose = useRef<number | null>(null)
+  // 子项浮层：悬停 160ms 展开，移开 200ms 收起；点了箭头就固定住
+  const [layer, setLayer] = useState<{ name: string; anchor: HTMLElement } | null>(null)
+  const rowRefs = useRef(new Map<string, HTMLElement>())
+  const openTimer = useRef<number | null>(null)
+  const closeTimer = useRef<number | null>(null)
+  const draggingRef = useRef(false)
+
+  const clearLayerTimers = () => {
+    if (openTimer.current !== null) {
+      window.clearTimeout(openTimer.current)
+      openTimer.current = null
+    }
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+  }
+
+  const scheduleOpen = (row: DevStrategy, anchor: HTMLElement) => {
+    if (!row.subs?.length) return
+    clearLayerTimers()
+    openTimer.current = window.setTimeout(() => {
+      setLayer({ name: row.name, anchor })
+    }, 160)
+  }
+
+  const scheduleClose = () => {
+    clearLayerTimers()
+    if (draggingRef.current) return
+    closeTimer.current = window.setTimeout(() => setLayer(null), 200)
+  }
+
+  const keepLayer = () => {
+    clearLayerTimers()
+  }
+
+  const toggleLayer = (row: DevStrategy) => {
+    clearLayerTimers()
+    if (layer?.name === row.name) {
+      setLayer(null)
+      return
+    }
+    const anchor = rowRefs.current.get(row.name)
+    if (anchor) setLayer({ name: row.name, anchor })
+  }
+
+  const clearPeek = () => {
+    if (peekOpen.current !== null) window.clearTimeout(peekOpen.current)
+    if (peekClose.current !== null) window.clearTimeout(peekClose.current)
+    peekOpen.current = null
+    peekClose.current = null
+  }
+
+  const hoverPeek = (key: string, anchor: HTMLElement) => {
+    clearPeek()
+    peekOpen.current = window.setTimeout(() => setPeek({ key, anchor }), 170)
+  }
+
+  const leavePeek = () => {
+    clearPeek()
+    peekClose.current = window.setTimeout(() => setPeek(null), 180)
+  }
+
+  const setSub = async (path: string, checked?: boolean, strategy?: string) => {
+    if (!connected || subBusy) return
+    setSubBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.sub.set', { path, checked, strategy })
+      if (snap) patchState({ dev: snap })
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+    } finally {
+      setSubBusy(false)
+    }
+  }
+
+  const setSubAll = async (folder: string, checked: boolean) => {
+    if (!connected || subBusy) return
+    setSubBusy(true)
+    try {
+      const snap = await invoke<DevSnapshot>('dev.sub.all', { folder, checked })
+      if (snap) patchState({ dev: snap })
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+    } finally {
+      setSubBusy(false)
+    }
+  }
 
   const instance = dev?.instance ?? null
-  const ruleOptions: DevRuleGroup[] = dev?.ruleOptions ?? []
-  const rows = instance?.rows ?? []
+  const specials = dev?.specials ?? []
   const exporting = dev?.phase === 'exporting'
-  const rootPath = source === 'instance' ? (instance?.root ?? '') : (dev?.source?.path ?? '')
-
-  // 后端是事实来源：它切了模式（导入 zip / 选实例 / 清空）就跟着切
-  useEffect(() => {
-    if (dev?.mode) setSource(dev.mode)
-  }, [dev?.mode])
-
-  // 后端是事实来源；本地只在打字时短暂领先（防抖动回写）
-  const sourceKey = dev?.source?.path ?? instance?.root ?? ''
-  useEffect(() => {
-    if (dev?.changelog !== undefined && dev.changelog !== changelog) {
-      setChangelog(dev.changelog)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey])
+  const loading = dev?.phase === 'loading'
+  const pending = dev?.pending ?? null
+  const mode = instance ? 'instance' : 'zip'
+  const rootPath = instance?.root ?? dev?.source?.path ?? ''
 
   useEffect(() => {
     if (outName) return
-    const base = source === 'instance' ? instance?.name : dev?.source?.name
+    const base = instance?.name ?? dev?.source?.name
     if (!base) return
     setOutName(`${base.replace(/\.(zip|mrpack)$/i, '')}_update.eapack`)
-  }, [source, instance?.name, dev?.source?.name, outName])
+  }, [instance?.name, dev?.source?.name, outName])
 
-  const importZip = async () => {
+  // STEP 1 只有一个动作：把路径交给后端判断（实例目录 / 导出包都行）。
+  // 后端只做"认出是什么"就返回，扫描在后台；所以点完不会被卡住。
+  const openPath = async (path: string) => {
+    if (!connected || !path) return
+    try {
+      const res = await invoke<{ state: AppState }>('app.pick_pack', { path })
+      const next = (res as unknown as { state?: AppState }).state
+      if (next) setState(next)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '打不开这个整合包', 'error')
+    }
+  }
+
+  const openSource = async () => {
     if (!connected) return
     try {
       const path = await pickPath('file', '')
-      if (path) await invoke('dev.pick', { path })
+      if (path) await openPath(path)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : '导入失败', 'error')
+      pushToast(err instanceof Error ? err.message : '选择失败', 'error')
     }
   }
 
-  const pickInstance = async () => {
+  const openDir = async () => {
     if (!connected) return
     try {
       const path = await pickPath('folder', '')
-      if (!path) return
-      const snap = await invoke<DevSnapshot>('dev.instance.pick', { path })
-      if (snap) patchState({ dev: snap })
+      if (path) await openPath(path)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : '无法读取这个目录', 'error')
+      pushToast(err instanceof Error ? err.message : '选择失败', 'error')
     }
   }
 
-  const setRule = async (key: string, value: boolean) => {
-    if (!connected || ruleBusy) return
-    setRuleBusy(key)
+  // 特殊导出内容：勾一个就重扫一次（后端 dev.rule.set），扫描期间禁用这一行
+  const setSpecial = async (key: string, value: boolean) => {
+    if (!connected || specialBusy) return
+    setSpecialBusy(key)
     try {
       const snap = await invoke<DevSnapshot>('dev.rule.set', { key, value })
       if (snap) patchState({ dev: snap })
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '保存失败', 'error')
     } finally {
-      setRuleBusy('')
-    }
-  }
-
-  const saveCfKey = async () => {
-    if (!connected) return
-    const key = cfKey.trim()
-    if (!key) return
-    try {
-      const snap = await invoke<DevSnapshot>('dev.cfkey.set', { key })
-      if (snap) patchState({ dev: snap })
-      setCfKey('')
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : '保存失败', 'error')
+      setSpecialBusy('')
     }
   }
 
@@ -170,20 +222,6 @@ export default function DeveloperView() {
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '保存失败', 'error')
     }
-  }
-
-  const onChangelog = (text: string) => {
-    setChangelog(text)
-    if (!connected) return
-    const mine = ++seq.current
-    window.setTimeout(async () => {
-      if (mine !== seq.current) return
-      try {
-        await invoke('dev.changelog.set', { text })
-      } catch {
-        /* 忽略 */
-      }
-    }, 500)
   }
 
   const setStrategy = async (name: string, value: string) => {
@@ -237,17 +275,8 @@ export default function DeveloperView() {
     }
   }
 
-  // 顶层目录在当前扫描结果里被选中的文件数（按名字对 instance.rows）
-  const topFiles = (key: string): number => {
-    const want = key.toLowerCase()
-    const exact = rows.find((r) => r.name.toLowerCase() === want)
-    if (exact) return exact.files
-    const prefixed = rows.find((r) => r.name.toLowerCase().startsWith(want))
-    return prefixed ? prefixed.files : 0
-  }
-
   const progressTotal =
-    dev?.progress?.total || (source === 'instance' ? instance?.totals.files : undefined) || 0
+    dev?.progress?.total || instance?.totals.files || 0
   const progressDone = dev?.progress?.done ?? 0
   const percent = progressTotal > 0 ? Math.min(1, progressDone / progressTotal) : null
   const loaderLabel = instance
@@ -255,148 +284,106 @@ export default function DeveloperView() {
         instance.loaderVersion ? ` ${instance.loaderVersion}` : ''
       }`
     : ''
-  const checkedGroups = ruleOptions.filter((g) => g.checked).length
   const hasSource = Boolean(dev?.source || instance)
 
+  // 更新日志按钮上的摘要：第一行有效内容 + 字数
+  const changelogText = (dev?.changelog ?? '').trim()
+  const changelogSummary = changelogText
+    ? `${changelogText.split('\n').find((line) => line.trim() && !line.trim().startsWith('#'))?.replace(/^[-*]\s*/, '') ?? '已写内容'} · ${changelogText.replace(/\s/g, '').length} 字`
+    : '还没写 · 点开编写（所见即所得）'
+
+  const peekItem = peek
+    ? (dev?.specials ?? []).find((item) => item.key === peek.key) ?? null
+    : null
+
+  const activeRow = layer
+    ? (dev?.strategies ?? []).find((row) => row.name === layer.name) ?? null
+    : null
+
   return (
-    <div className={styles.page} data-mode={source}>
+    <div className={styles.page} data-mode={mode}>
       <section className={styles.left}>
-        <div className={styles.sourceBar}>
-          <div className="seg">
-            {(['zip', 'instance'] as SourceMode[]).map((m) => {
-              const active = source === m
-              const label = m === 'zip' ? '启动器整合包' : '本地整合包目录'
-              return (
-                <button
-                  key={m}
-                  type="button"
-                  className={active ? `seg-item ${styles.segOn}` : 'seg-item'}
-                  data-active={active}
-                  aria-pressed={active}
-                  onClick={() => setSource(m)}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
+        <DropZone
+          step="STEP 1"
+          title={
+            loading
+              ? '识别中…'
+              : instance
+                ? instance.name
+                : dev?.source
+                  ? `导出包：${dev.source.name}`
+                  : '整合包定位'
+          }
+          subtitle={
+            loading
+              ? pending?.path ?? ''
+              : instance
+                ? `本地实例 · ${instance.root}`
+                : dev?.source
+                  ? `导出包 · ${dev.source.path}`
+                  : '整合包目录 / 整合包里的任意文件 / 启动器导出的 .zip'
+          }
+          hint={loading ? '' : hasSource ? '点击更换' : '拖入 · 或点击选择'}
+          height={96}
+          locked={exporting || loading}
+          ariaLabel="开发者端整合包定位"
+          onPick={() => void openSource()}
+        />
+
+        <div className={styles.pickRow}>
           <span className="t-small">
-            {source === 'instance' ? '直接读本地实例目录，不经过启动器导出' : '导入启动器导出的整合包'}
+            {loading
+              ? '正在读取整合包…（不挡界面，读完自动出现）'
+              : hasSource
+                ? '拖入 / 点击卡片可更换整合包'
+                : '本地实例直接选目录，不用先让启动器导出'}
           </span>
+          <button
+            className="btn btn-ghost"
+            onClick={() => void openDir()}
+            disabled={!connected || exporting || loading}
+          >
+            选择目录…
+          </button>
         </div>
 
-        {source === 'zip' ? (
-          <DropZone
-            step="STEP 1"
-            title={dev?.source ? `导出包：${dev.source.name}` : '拖入整合包，开始制作更新包'}
-            subtitle={
-              dev?.source
-                ? `${dev.files} 个文件 · ${dev.version || '未标注版本'}`
-                : '支持整合包根目录 / 版本目录'
-            }
-            hint={dev?.source ? '' : '或点击选择'}
-            height={92}
-            onPick={importZip}
-          />
-        ) : (
+        {instance && (
           <div className={`${styles.surface} ${styles.panel} ${styles.instance}`}>
-            <div className={styles.instHead}>
-              <span className={styles.instIcon}>
-                <Icon name="folder" size={15} />
-              </span>
-              <div className={styles.instText}>
-                <span className={styles.instName}>{instance ? instance.name : '选择本地整合包目录'}</span>
-                <span className={styles.instPath} title={instance?.root ?? ''}>
-                  {instance ? instance.root : '实例根目录，需要包含 mods/ 与 config/'}
-                </span>
+            <div className={styles.meta}>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>MC 版本</span>
+                <span className={styles.metaValue}>{instance.minecraft || '未识别'}</span>
               </div>
-              <button
-                className="btn"
-                onClick={() => void pickInstance()}
-                disabled={!connected || exporting}
-              >
-                {instance ? '更换目录' : '选择目录'}
-              </button>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>加载器</span>
+                <span className={styles.metaValue}>{loaderLabel || '未识别'}</span>
+              </div>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>文件数</span>
+                <span className={styles.metaValue}>{fmtInt(instance.totals.files)}</span>
+              </div>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>总体积</span>
+                <span className={styles.metaValue}>{fmtBytes(instance.totals.bytes)}</span>
+              </div>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>候选资源</span>
+                <span className={styles.metaValue}>{fmtInt(instance.totals.candidates)}</span>
+              </div>
             </div>
-
-            {instance && (
-              <>
-                <div className={styles.meta}>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>MC 版本</span>
-                    <span className={styles.metaValue}>{instance.minecraft || '未识别'}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>加载器</span>
-                    <span className={styles.metaValue}>{loaderLabel || '未识别'}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>文件数</span>
-                    <span className={styles.metaValue}>{fmtInt(instance.totals.files)}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>总体积</span>
-                    <span className={styles.metaValue}>{fmtBytes(instance.totals.bytes)}</span>
-                  </div>
-                  <div className={styles.metaItem}>
-                    <span className={styles.metaLabel}>候选资源</span>
-                    <span className={styles.metaValue}>{fmtInt(instance.totals.candidates)}</span>
-                  </div>
-                </div>
-                <p className={styles.note}>
-                  候选：能查到 CurseForge 或 Modrinth 直链的模组，包里只写 index、不打包本体
-              {(dev?.instance?.unsafeLinks?.length ?? 0) > 0 && (
+            <p className={styles.note}>
+              候选：能查到 CurseForge 或 Modrinth 直链的模组，包里只写 index、不打包本体
+              {(instance.unsafeLinks?.length ?? 0) > 0 && (
                 <span className={styles.warnLine}>
-                  已跳过 {dev?.instance?.unsafeLinks?.length} 个指向实例外的链接
+                  已跳过 {instance.unsafeLinks?.length} 个指向实例外的链接
                 </span>
               )}
-              {(dev?.instance?.badNames?.length ?? 0) > 0 && (
+              {(instance.badNames?.length ?? 0) > 0 && (
                 <span className={styles.warnLine}>
-                  有 {dev?.instance?.badNames?.length} 个文件名不是 UTF-8，导出会失败
+                  有 {instance.badNames?.length} 个文件名不是 UTF-8，导出会失败
                 </span>
               )}
-                </p>
-              </>
-            )}
-          </div>
-        )}
-
-        {source === 'instance' && (
-          <div className={`${styles.surface} ${styles.panel}`}>
-            <div className={styles.panelHead}>
-              <span className="t-title">导出内容</span>
-              <span className="t-small">
-                已选 {checkedGroups} / {ruleOptions.length} 组
-              </span>
-            </div>
-            <div className={`${styles.rules} scroll`}>
-              {ruleOptions.map((group) => (
-                <div key={group.key} className={styles.ruleGroup}>
-                  <RuleRow
-                    node={group}
-                    count={topFiles(group.key)}
-                    pending={ruleBusy === group.key}
-                    disabled={!connected || exporting || Boolean(ruleBusy)}
-                    onToggle={setRule}
-                  />
-                  {group.children.map((child) => (
-                    <RuleRow
-                      key={child.key}
-                      node={child}
-                      child
-                      pending={ruleBusy === child.key}
-                      disabled={!connected || exporting || Boolean(ruleBusy)}
-                      onToggle={setRule}
-                    />
-                  ))}
-                </div>
-              ))}
-              {!ruleOptions.length && (
-                <span className="t-small" style={{ padding: '14px 2px' }}>
-                  选择目录后，这里会列出可以导出的内容。
-                </span>
-              )}
-            </div>
+            </p>
           </div>
         )}
 
@@ -421,11 +408,41 @@ export default function DeveloperView() {
           </div>
           <div className={`${styles.rows} scroll`}>
             {(dev?.strategies ?? []).map((row) => (
-              <div key={row.name} className={styles.row} data-off={row.excluded}>
+              <div
+                key={row.name}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(row.name, el)
+                  else rowRefs.current.delete(row.name)
+                }}
+                className={styles.row}
+                data-off={row.excluded}
+                data-layer={layer?.name === row.name ? 'true' : undefined}
+                onPointerEnter={(e) => scheduleOpen(row, e.currentTarget)}
+                onPointerLeave={scheduleClose}
+              >
                 <button className={styles.rowName} onClick={() => void toggleExcluded(row)}>
                   <Icon name={row.isFile ? 'file' : 'folder'} size={13} />
                   <span>{row.name}</span>
                 </button>
+                {row.subs && row.subs.length > 0 && (
+                  <button
+                    type="button"
+                    className={styles.subBtn}
+                    data-layer-toggle="true"
+                    data-on={layer?.name === row.name}
+                    aria-expanded={layer?.name === row.name}
+                    aria-label={`${row.title || row.name}：${row.subs.length} 项可单独设置`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleLayer(row)
+                    }}
+                  >
+                    <span className={styles.subCount}>
+                      {row.subs.filter((x) => x.checked).length}/{row.subs.length}
+                    </span>
+                    <Icon name="chevron" size={11} />
+                  </button>
+                )}
                 <div className={styles.chips}>
                   {DIR_STRATEGIES.map((s) => (
                     <button
@@ -443,12 +460,46 @@ export default function DeveloperView() {
             ))}
             {!hasSource && (
               <div className="t-small" style={{ padding: '18px 4px' }}>
-                {source === 'instance'
-                  ? '选择整合包目录后，这里会列出所有顶层目录与根目录文件。'
-                  : '导入整合包后，这里会列出所有顶层目录与根目录文件。'}
+                定好整合包后，这里会列出所有顶层目录与根目录文件。
               </div>
             )}
           </div>
+          <Floating3DLayer
+            open={Boolean(activeRow && layer)}
+            anchor={layer?.anchor ?? null}
+            onRequestClose={() => setLayer(null)}
+            onPointerEnter={keepLayer}
+            onPointerLeave={scheduleClose}
+            onDragChange={(value) => {
+              draggingRef.current = value
+              if (value) clearLayerTimers()
+            }}
+            kind="sub"
+            label={activeRow ? `${activeRow.title || activeRow.name}的子项` : undefined}
+          >
+            {activeRow && (
+              <SubScopeLayer
+                row={activeRow}
+                busy={subBusy}
+                onToggle={(path, checked) => void setSub(path, checked)}
+                onStrategy={(path, strategy) => void setSub(path, undefined, strategy)}
+                onAll={(checked) => void setSubAll(activeRow.name, checked)}
+              />
+            )}
+          </Floating3DLayer>
+          <Floating3DLayer
+            open={Boolean(peekItem)}
+            anchor={peek?.anchor ?? null}
+            onRequestClose={() => setPeek(null)}
+            onPointerEnter={clearPeek}
+            onPointerLeave={leavePeek}
+            kind="peek"
+            width={304}
+            overlap={22}
+            label={peekItem ? `${peekItem.title} 的详情` : undefined}
+          >
+            {peekItem && <SpecialPeek item={peekItem} />}
+          </Floating3DLayer>
         </div>
 
         <div className={styles.actions}>
@@ -466,7 +517,7 @@ export default function DeveloperView() {
             className="btn btn-primary"
             style={{ height: 38, padding: '0 20px' }}
             onClick={() => void build()}
-            disabled={!rootPath || exporting}
+            disabled={!rootPath || exporting || loading}
           >
             {exporting ? '制作中…' : '开始制作更新包'}
           </button>
@@ -506,50 +557,41 @@ export default function DeveloperView() {
       </section>
 
       <section className={styles.right}>
-        {source === 'instance' && (
+        {specials.length > 0 && (
           <div className={`${styles.surface} ${styles.panel}`}>
             <div className={styles.panelHead}>
-              <span className="t-title">CurseForge API Key</span>
-              {dev?.hasCfKey && <span className={styles.saved}>已保存</span>}
+              <span className="t-title">特殊导出选项</span>
+              <span className="t-small">扫到才出现 · 默认不带</span>
             </div>
-            <div className={styles.keyRow}>
-              <input
-                className="input"
-                value={cfKey}
-                onChange={(e) => setCfKey(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void saveCfKey()
-                }}
-                placeholder={dev?.hasCfKey ? '已保存，重新填写可替换' : '粘贴 API Key'}
-                spellCheck={false}
-                autoComplete="off"
-                style={{ flex: 1, minWidth: 0 }}
-              />
-              <button
-                className="btn"
-                onClick={() => void saveCfKey()}
-                disabled={!connected || !cfKey.trim()}
-              >
-                保存
-              </button>
+            <div className={`${styles.opts} scroll`}>
+              {specials.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={styles.opt}
+                  data-on={item.checked}
+                  onPointerEnter={(e) => hoverPeek(item.key, e.currentTarget)}
+                  onPointerLeave={leavePeek}
+                  onClick={() => void setSpecial(item.key, !item.checked)}
+                  disabled={!connected || exporting || Boolean(specialBusy)}
+                >
+                  <span className={styles.switch} data-on={item.checked}>
+                    <span className={styles.knob} />
+                  </span>
+                  <span className={styles.optText}>
+                    <span className={styles.optLabel}>
+                      {item.title}
+                      <span className={styles.optCount}>
+                        {fmtInt(item.files)} 个 · {fmtBytes(item.bytes)}
+                      </span>
+                    </span>
+                    <span className={styles.optDesc}>{item.desc}</span>
+                  </span>
+                </button>
+              ))}
             </div>
-            <p className={styles.note}>仅保存在本机，用于查模组直链；不填则只走 Modrinth</p>
           </div>
         )}
-
-        <div className={`${styles.surface} ${styles.panel} ${styles.changelogPanel}`}>
-          <div className={styles.panelHead}>
-            <span className="t-title">更新日志</span>
-            <span className={styles.count}>{changelog.length} 字</span>
-          </div>
-          <textarea
-            className={`input selectable ${styles.editor}`}
-            value={changelog}
-            onChange={(e) => onChangelog(e.target.value)}
-            placeholder="写点给玩家看的内容：新增了什么、修了什么、要注意什么。支持 Markdown。"
-            spellCheck={false}
-          />
-        </div>
 
         <div className={`${styles.surface} ${styles.panel}`}>
           <div className={styles.panelHead}>
@@ -578,6 +620,20 @@ export default function DeveloperView() {
             })}
           </div>
         </div>
+
+        <button
+          type="button"
+          className={`${styles.surface} ${styles.changelogButton}`}
+          onClick={() => openSheet('changelog-editor')}
+          disabled={!connected || exporting || loading}
+          aria-label="编写更新日志"
+        >
+          <span className={styles.changelogText}>
+            <span className={styles.changelogTitle}>更新日志</span>
+            <span className={styles.changelogSub}>{changelogSummary}</span>
+          </span>
+          <span className={styles.changelogGo}>编写 ›</span>
+        </button>
       </section>
     </div>
   )

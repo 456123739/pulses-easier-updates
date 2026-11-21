@@ -89,6 +89,32 @@ def resolve_strategy(strategies: dict | None, top: str) -> Strategy:
     return resolve_strategy_n(normalize_keys(strategies), top)
 
 
+def resolve_strategy_for(strategies: dict | None, rel_path) -> Strategy:
+    """
+    取某个**具体路径**的策略：子项 > 顶层。
+
+    `recommended_strategies` 允许写 `saves/World`、`resourcepacks/foo.zip`
+    这种两段式键（开发者端逐项设定的策略），所以先按完整路径找，再按
+    「顶层/第二段」找，最后回落到顶层；都没有就按"完全匹配"。
+    """
+    norm = normalize_keys(strategies)
+    if not norm:
+        return Strategy.FULL_MATCH
+    parts = Path(rel_path).parts if not isinstance(rel_path, Path) else rel_path.parts
+    if not parts:
+        return Strategy.FULL_MATCH
+    candidates: list[str] = []
+    if len(parts) >= 2:
+        candidates.append(parts[0] + "/" + parts[1])
+    candidates.append(parts[0])
+    if len(parts) > 2:
+        candidates.insert(0, "/".join(parts))
+    for key in candidates:
+        if key in norm:
+            return resolve_strategy_n(norm, key)
+    return Strategy.FULL_MATCH
+
+
 def is_checked(checked: dict | None, top: str,
                default: bool = False) -> bool:
     """顶层项是否被勾选。空映射（尚未建表）时按 default 处理。"""
@@ -107,7 +133,7 @@ def will_skip(change, checked: dict | None, strategies: dict | None,
     if not is_checked(checked, top, default=checked_default):
         return True
 
-    strat = resolve_strategy(strategies, top)
+    strat = resolve_strategy_for(strategies, change.rel_path)
 
     if change.is_folder_level:
         if change.kind == ChangeKind.DELETED:
