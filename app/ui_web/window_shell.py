@@ -185,8 +185,10 @@ def apply_window_rounding(window, radius: int = 14) -> str:
     hwnd = _win_hwnd(window)
     if not hwnd:
         return ""
-    if _dwm_round(hwnd):
-        return "dwm"
+    # 区域裁剪优先：DWM 圆角在 Windows Server / 关闭视觉效果时不生效，
+    # 不能作为"有没有圆角"的验收依据；区域裁剪在所有 Windows 上都可见。
     if _region_round(window, radius):
         return "region"
+    if _dwm_round(hwnd):
+        return "dwm"
     return ""
