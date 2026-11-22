@@ -24,7 +24,8 @@ from .api import Api
 from .controller import AppController
 from .events import EventBus, EventPump
 from .window_shell import (SPLASH_H, SPLASH_W, apply_window_rounding,
-                           center_rect, expand as expand_window, screen_size)
+                           center_rect, expand as expand_window, find_hwnd,
+                           screen_size)
 
 WINDOW_TITLE = "Pulses Easier"
 WINDOW_W, WINDOW_H = 1440, 860
@@ -60,7 +61,7 @@ def _later_expand(window, api, target):
         pass
 
 
-BG = "#121214"          # 与新界面 --c-base 完全一致，避免启动/圆角处色差
+BG = "#363841"          # 与 logo 卡片的底色一致：启动小窗不会露出黑边
 
 
 def web_dist_dir() -> Path:
@@ -229,8 +230,8 @@ def run(argv: list[str] | None = None) -> int:
         easy_drag=False,
         transparent=transparent,
         shadow=False,
-        # 建窗即可见：0.10.0 用 hidden=True + loaded 里 show()，在真机上出现过
-        # "进程在跑、CPU 在转、窗口不出现"，干脆不要这个依赖
+        # 先建在屏幕外（不是 hidden）：hidden 会让 WebView2 首帧永远不画，
+        # 只剩窗体底色。屏幕外初始化保证页面真的渲染，再 move 回来。
         hidden=False,
     )
     api.bind_window(window)
@@ -238,9 +239,15 @@ def run(argv: list[str] | None = None) -> int:
     api.window_min_size = min_size
     api.start_frameless = frameless
     def _round_later():
-        import time as _t
-        _t.sleep(0.6)                                # 等窗口句柄就绪
-        how = apply_window_rounding(window)
+        # 句柄就绪前 FindWindowW 会返回 0：这里重试，不碰 window.native
+        hwnd = find_hwnd(timeout=10.0)
+        _note(f"window-hwnd={hwnd or 'none'}")
+        try:
+            from .window_shell import set_window_alpha
+            set_window_alpha(0)                      # 先整窗透明，等页面画完再淡入
+        except Exception as exc:                     # noqa: BLE001
+            _note(f"alpha0 失败：{exc}")
+        how = apply_window_rounding(window) if hwnd else ""
         _note(f"window-rounding={how or 'none'}")
         api.window_rounding = how
 
@@ -289,6 +296,8 @@ def run(argv: list[str] | None = None) -> int:
             try:
                 window.show()
                 window.restore()
+                from .window_shell import set_window_alpha
+                set_window_alpha(255)
                 _note("force-show 已调用")
             except Exception as exc:                 # noqa: BLE001
                 _note(f"force-show 失败：{exc}")
@@ -327,6 +336,15 @@ def run(argv: list[str] | None = None) -> int:
             did_setup[0] = True
         _note(f"page-ready({reason})")
         loaded_flag[0] = True
+        try:
+            from .window_shell import fade_in
+            window.show()
+            window.restore()
+            fade_in(window)                          # 页面已能画画：淡入，避免黑底
+            import time as _t
+            _t.sleep(0.45)                           # 让 logo 亮一下再展开
+        except Exception as exc:                     # noqa: BLE001
+            _note(f"page-ready fade-in 失败：{exc}")
         ready = os.environ.get("PULSES_WEB_READY", "")
         if ready:                                    # 受监督启动：告诉父进程可以交棒
             try:

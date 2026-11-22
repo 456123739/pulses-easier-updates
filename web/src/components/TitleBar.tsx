@@ -4,7 +4,7 @@
  * 关闭/最小化/最大化走 window.* 桥；空白区域可拖动（用 screenX/screenY
  * 算窗口位移，不依赖 DOM 的 client 坐标，窗口动的时候不会"追着跑"）。
  */
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useApp } from '@/store/app'
 import { win } from '@/window'
 import styles from './TitleBar.module.css'
@@ -12,6 +12,12 @@ import styles from './TitleBar.module.css'
 export default function TitleBar() {
   const pushToast = useApp((s) => s.pushToast)
   const [maxed, setMaxed] = useState(false)
+
+  useEffect(() => {
+    void win<{ maximized?: boolean }>('window.state').then((s) => {
+      if (s?.maximized !== undefined) setMaxed(Boolean(s.maximized))
+    })
+  }, [])
   const drag = useRef<{ sx: number; sy: number; wx: number; wy: number } | null>(null)
   const raf = useRef(0)
 
@@ -54,14 +60,23 @@ export default function TitleBar() {
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}
-      onDoubleClick={toggleMax}
+      onDoubleClick={(e) => {
+        // 双击按钮不能冒泡成"最大化"（否则双击关闭会先最大化再关）
+        if ((e.target as HTMLElement).closest('[data-no-drag]')) return
+        void toggleMax()
+      }}
     >
       <span className={styles.brand}>
         <span className={styles.dot} />
         Pulses Easier
       </span>
       <span className={styles.spacer} />
-      <div className={styles.actions} data-no-drag="true">
+      <div
+        className={styles.actions}
+        data-no-drag="true"
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
         <button className={styles.btn} aria-label="最小化" title="最小化" onClick={minimize}>
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
             <path d="M2 5.5h6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />

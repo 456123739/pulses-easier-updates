@@ -56,3 +56,5 @@ web/tsconfig.tsbuildinfo
 
 # 测试导出的示例包（运行时生成）
 export-fixture/
+web/node_modules
+native-verify/

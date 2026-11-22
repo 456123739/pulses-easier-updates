@@ -3,10 +3,9 @@ import logo from '@/assets/logo.png'
 import styles from './Splash.module.css'
 
 /**
- * 启动页：只显示圆角 logo。
- *
- * 桌面版此时窗口还是 logo 大小；状态准备好后由 App 调 window.expand，
- * 窗口自身长到主窗口尺寸 —— 看起来就是 logo 展开成了窗口。
+ * 启动页：窗口本身就是 logo 卡片（240×240，圆角由 Win32 区域裁出来）。
+ * 状态准备好后 App 调 window.expand，窗口长成主窗口，logo 随窗口一起放大，
+ * 最后淡出交给 Shell —— 观感是"logo 本体展开成窗口"。
  */
 export default function Splash() {
   return (
@@ -20,9 +19,9 @@ export default function Splash() {
         src={logo}
         alt="Pulses Easier"
         draggable={false}
-        initial={{ opacity: 0, scale: 0.92, filter: 'blur(10px)' }}
-        animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
-        transition={{ type: 'spring', stiffness: 220, damping: 24, mass: 0.9 }}
+        initial={{ opacity: 0, filter: 'blur(8px)' }}
+        animate={{ opacity: 1, filter: 'blur(0px)' }}
+        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
       />
     </motion.div>
   )
