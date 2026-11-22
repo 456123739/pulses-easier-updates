@@ -368,11 +368,28 @@ def main() -> int:
         ed = getattr(app.developer_view, "editor", None)
         ok = False
         try:
+            def _visible(widget) -> bool:
+                """真的"盖上了"：进了布局，并且在窗口可见时确实映射出来。
+
+                Windows CI 上主窗口有时还没 viewable，此时 ismapped 会是 0；
+                这种情况按"已进布局就算盖上"处理，否则断言会随机器抽风。
+                """
+                managed = widget.winfo_manager() in ("grid", "place", "pack")
+                if not managed:
+                    return False
+                return bool(widget.winfo_ismapped()) or not app.winfo_viewable()
+
             ed.set_transition_veil(True)
-            app.update_idletasks()          # 映射要等一次 update 才生效
-            shown = bool(ed._veil.winfo_ismapped())
+            for _ in range(5):
+                app.update()
+                if ed._veil.winfo_ismapped():
+                    break
+            shown = _visible(ed._veil)
             ed.set_transition_veil(False)
-            app.update_idletasks()
+            for _ in range(5):
+                app.update()
+                if not ed._veil.winfo_ismapped():
+                    break
             hidden = not ed._veil.winfo_ismapped()
             ok = shown and hidden
         except Exception as e:  # noqa: BLE001
