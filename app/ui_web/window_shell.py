@@ -92,6 +92,11 @@ def _win32():
                                                   ctypes.c_ubyte,
                                                   wintypes.DWORD)
     user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
+    user32.SetWindowPos.argtypes = (ctypes.c_void_p, ctypes.c_void_p,
+                                    ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_uint)
+    user32.SetWindowPos.restype = wintypes.BOOL
 
     gdi32.CreateRoundRectRgn.argtypes = (ctypes.c_int,) * 6
     gdi32.CreateRoundRectRgn.restype = ctypes.c_void_p
@@ -172,6 +177,15 @@ def fade_in(window=None, duration: float = 0.18, sleep=time.sleep) -> None:
         sleep(duration / steps)
 
 
+def _set_window_rect(hwnd: int, x: int, y: int, w: int, h: int) -> bool:
+    """一次 SetWindowPos 完成移动+缩放，避免每帧两次 pywebview 调用。"""
+    _u, _g, _c, _w = _win32()
+    SWP_NOZORDER = 0x0004
+    SWP_NOACTIVATE = 0x0010
+    return bool(_u.SetWindowPos(hwnd, None, int(x), int(y), int(w), int(h),
+                                SWP_NOZORDER | SWP_NOACTIVATE))
+
+
 def apply_window_rounding(window=None, radius: int = RADIUS_PX) -> str:
     if sys.platform != "win32":
         return ""
@@ -205,7 +219,7 @@ def clear_window_rounding() -> None:
 
 
 def expand(window, target: tuple[int, int],
-           duration: float = 0.46, steps: int = 26,
+           duration: float = 0.42, steps: int = 20,
            screen: tuple[int, int] | None = None,
            sleep=time.sleep, radius: int = RADIUS_PX) -> tuple[int, int]:
     sw, sh = screen or screen_size()
@@ -219,10 +233,15 @@ def expand(window, target: tuple[int, int],
         h = int(round(sh0 + (th - sh0) * t))
         x, y = center_rect(w, h, (sw, sh))
         try:
-            window.resize(w, h)
-            window.move(x, y)
             if hwnd:
-                _set_region(hwnd, radius)
+                # 移动+缩放一次完成；圆角每 4 帧重算一次即可，
+                # 每帧建 HRGN + SetWindowRgn 是主要卡顿源之一。
+                _set_window_rect(hwnd, x, y, w, h)
+                if i == 1 or i % 4 == 0 or i == steps:
+                    _set_region(hwnd, radius)
+            else:
+                window.resize(w, h)
+                window.move(x, y)
         except Exception:                             # noqa: BLE001, S110
             break
         sleep(max(0.0, duration / steps))
