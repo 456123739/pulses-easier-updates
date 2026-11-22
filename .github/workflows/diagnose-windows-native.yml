@@ -1,0 +1,80 @@
+name: 诊断 Windows 原生窗口
+
+# 纯诊断：只在手动触发时跑，不参与发布门禁。
+# 产出 native-verify/report.json + 启动各阶段截图，用来判断圆角/形变/控件是否真的对。
+on:
+  push:
+    branches: ["fix/winui-real", "ci/**"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 分支或提交（默认当前分支）
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: 构建新界面
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: PyInstaller 打包
+        run: python -m PyInstaller --clean --noconfirm pulses-easier.spec
+
+      - name: 原生窗口探针
+        continue-on-error: true
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          python scripts/dev/win_native_probe.py --exe "dist/Pulses Easier/Pulses Easier.exe" --out native-verify
+
+      - name: 上传诊断产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-verify
+          path: |
+            native-verify/**
+            native-verify/app.log
+          if-no-files-found: error
+
+      - name: 结论
+        if: always()
+        shell: pwsh
+        run: |
+          $p = "native-verify/report.json"
+          if (-not (Test-Path $p)) { throw "没有 report.json（探针没跑起来）" }
+          $r = Get-Content $p -Raw | ConvertFrom-Json
+          $fail = @($r.checks | Where-Object { -not $_.ok })
+          foreach ($c in $fail) { Write-Host "FAIL: $($c.name) -> $($c.detail)" }
+          if ($fail.Count -gt 0) { throw "$($fail.Count) 项原生窗口检查失败" }
+          Write-Host "原生窗口检查全部通过"

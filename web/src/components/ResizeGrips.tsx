@@ -13,11 +13,20 @@ type Edge = (typeof EDGES)[number]
 const MIN_W = 900
 const MIN_H = 560
 
-type Start = { edge: Edge; sx: number; sy: number; wx: number; wy: number; w: number; h: number }
+type Start = {
+  edge: Edge
+  sx: number
+  sy: number
+  wx: number
+  wy: number
+  w: number
+  h: number
+}
 
 export default function ResizeGrips() {
   const drag = useRef<Start | null>(null)
   const raf = useRef(0)
+  const last = useRef<{ w: number; h: number; wx: number; wy: number } | null>(null)
 
   const onDown = (edge: Edge) => (e: React.PointerEvent) => {
     e.preventDefault()
@@ -28,6 +37,7 @@ export default function ResizeGrips() {
       wx: window.screenX, wy: window.screenY,
       w: window.innerWidth, h: window.innerHeight,
     }
+    last.current = null
   }
 
   const onMove = (e: React.PointerEvent) => {
@@ -35,6 +45,7 @@ export default function ResizeGrips() {
     if (!d) return
     const dx = e.screenX - d.sx
     const dy = e.screenY - d.sy
+    // 始终以"按下时"的几何为基准计算；不要把结果写回 d（会累加漂移）
     let { wx, wy, w, h } = d
     if (d.edge.includes('e')) w = Math.max(MIN_W, d.w + dx)
     if (d.edge.includes('s')) h = Math.max(MIN_H, d.h + dy)
@@ -47,15 +58,14 @@ export default function ResizeGrips() {
       wy = d.wy + (d.h - h)
     }
     if (w === d.w && h === d.h) return
-    d.w = w
-    d.h = h
-    d.wx = wx
-    d.wy = wy
+    last.current = { w, h, wx, wy }
     cancelAnimationFrame(raf.current)
     raf.current = requestAnimationFrame(() => {
-      void win('window.resize', { width: w, height: h })
+      const v = last.current
+      if (!v) return
+      void win('window.resize', { width: v.w, height: v.h })
       if (d.edge.includes('w') || d.edge.includes('n')) {
-        void win('window.move', { x: wx, y: wy })
+        void win('window.move', { x: v.wx, y: v.wy })
       }
     })
   }

@@ -1,37 +1,46 @@
 """
-window_shell.py — 无边框窗口的开始尺寸、居中与展开动画
-------------------------------------------------
-界面第一帧只显示一个圆角 logo 小窗；后台把状态准备好之后，窗口自身
-从 logo 大小平滑长到主窗口尺寸（圆角弧度不变，看起来像 logo 展开）。
+window_shell.py — 无边框窗口：启动尺寸、圆角、展开动画
+================================================================
+第一帧是**和 logo 一样大的圆角小窗**；状态准备好后窗口自身 ease-out 长到
+主窗口尺寸。圆角用 Win32 区域裁剪（SetWindowRgn）：
 
-这里只放"算尺寸 / 动窗口"的纯逻辑：不 import webview，方便单测。
-`window` 只需要有 resize(w, h) / move(x, y) 两个方法（pywebview 的 Window
-就是这两个），测试里用假对象即可。
+* 半径固定 12px，窗口放大/缩小时每帧重设，所以弧度看起来不变；
+* 圆角外是真正的桌面（像素不属于窗口），不依赖 WebView2 透明；
+* 64 位下 ctypes 显式声明 argtypes/restype，避免 HWND/HRGN 被截断；
+* 句柄只用 FindWindowW 按标题找，绝不从后台线程碰 window.native
+  （.NET 窗体只能在 UI 线程访问，否则会刷 COM 递归错误）。
+
+这里不 import webview，方便单测。
 """
 
 from __future__ import annotations
 
+import ctypes
 import sys
 import time
 
-SPLASH_W, SPLASH_H = 300, 300
-RADIUS = 14
+SPLASH_W, SPLASH_H = 240, 240
+RADIUS_PX = 12
 TARGET_DEFAULT = (1440, 860)
 MIN_SIZE = (900, 560)
+WINDOW_TITLE = "Pulses Easier"
+
+_W32 = None
 
 
 def screen_size() -> tuple[int, int]:
-    """屏幕分辨率；拿不到就按 1280×800 处理（只影响窗口位置，不影响布局）。"""
     if sys.platform == "win32":
         try:
-            import ctypes
-            user32 = ctypes.windll.user32
-            sw, sh = int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+            user32 = ctypes.WinDLL("user32")
+            user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
+            user32.GetSystemMetrics.restype = ctypes.c_int
+            sw = int(user32.GetSystemMetrics(0))
+            sh = int(user32.GetSystemMetrics(1))
             if sw > 200 and sh > 200:
                 return sw, sh
         except Exception:                          # noqa: BLE001, S110
             pass
-    try:                                            # 其他平台：Tk 能问到就用
+    try:
         import tkinter
         root = tkinter.Tk()
         root.withdraw()
@@ -53,20 +62,157 @@ def _ease_out_cubic(t: float) -> float:
     return 1 - (1 - t) ** 3
 
 
+def _win32():
+    global _W32
+    if _W32 is not None:
+        return _W32
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+
+    user32.FindWindowW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR)
+    user32.FindWindowW.restype = ctypes.c_void_p
+    user32.GetWindowRect.argtypes = (ctypes.c_void_p,
+                                     ctypes.POINTER(wintypes.RECT))
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.SetWindowRgn.argtypes = (ctypes.c_void_p, ctypes.c_void_p,
+                                    wintypes.BOOL)
+    user32.SetWindowRgn.restype = ctypes.c_int
+    user32.IsZoomed.argtypes = (ctypes.c_void_p,)
+    user32.IsZoomed.restype = wintypes.BOOL
+    user32.IsIconic.argtypes = (ctypes.c_void_p,)
+    user32.IsIconic.restype = wintypes.BOOL
+    user32.GetWindowLongPtrW.argtypes = (ctypes.c_void_p, ctypes.c_int)
+    user32.GetWindowLongPtrW.restype = ctypes.c_longlong
+    user32.SetWindowLongPtrW.argtypes = (ctypes.c_void_p, ctypes.c_int,
+                                         ctypes.c_longlong)
+    user32.SetWindowLongPtrW.restype = ctypes.c_longlong
+    user32.SetLayeredWindowAttributes.argtypes = (ctypes.c_void_p,
+                                                  wintypes.DWORD,
+                                                  ctypes.c_ubyte,
+                                                  wintypes.DWORD)
+    user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
+
+    gdi32.CreateRoundRectRgn.argtypes = (ctypes.c_int,) * 6
+    gdi32.CreateRoundRectRgn.restype = ctypes.c_void_p
+    gdi32.DeleteObject.argtypes = (ctypes.c_void_p,)
+    gdi32.DeleteObject.restype = wintypes.BOOL
+
+    _W32 = (user32, gdi32, ctypes, wintypes)
+    return _W32
+
+
+def find_hwnd(title: str = WINDOW_TITLE, timeout: float = 0.4) -> int:
+    if sys.platform != "win32":
+        return 0
+    user32, _g, _c, _w = _win32()
+    end = time.time() + max(0.0, timeout)
+    while True:
+        hwnd = user32.FindWindowW(None, title)
+        if hwnd:
+            return int(hwnd)
+        if time.time() >= end:
+            return 0
+        time.sleep(0.05)
+
+
+def _window_rect(hwnd: int):
+    _u, _g, ctypes_mod, wintypes = _win32()
+    rect = wintypes.RECT()
+    if not _u.GetWindowRect(hwnd, ctypes_mod.byref(rect)):
+        return None
+    w = int(rect.right - rect.left)
+    h = int(rect.bottom - rect.top)
+    if w <= 0 or h <= 0:
+        return None
+    return int(rect.left), int(rect.top), w, h
+
+
+def _set_region(hwnd: int, radius: int = RADIUS_PX) -> bool:
+    _u, gdi32, _c, _w = _win32()
+    size = _window_rect(hwnd)
+    if not size:
+        return False
+    _l, _t, w, h = size
+    rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1,
+                                   radius * 2, radius * 2)
+    if not rgn:
+        return False
+    if not _u.SetWindowRgn(hwnd, rgn, True):
+        gdi32.DeleteObject(rgn)
+        return False
+    return True
+
+
+GWL_EXSTYLE = -20
+WS_EX_LAYERED = 0x00080000
+LWA_ALPHA = 0x00000002
+
+
+def set_window_alpha(alpha: int) -> bool:
+    """整窗透明度 0..255（WS_EX_LAYERED）。加载期间 alpha=0，
+    页面画出 logo 后再淡入，用户不会先看到 WebView2 的黑底。"""
+    if sys.platform != "win32":
+        return False
+    hwnd = find_hwnd(timeout=0.3)
+    if not hwnd:
+        return False
+    user32, _g, _c, _w = _win32()
+    ex = int(user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE))
+    if not ex & WS_EX_LAYERED:
+        user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED)
+    return bool(user32.SetLayeredWindowAttributes(
+        hwnd, 0, max(0, min(255, int(alpha))), LWA_ALPHA))
+
+
+def fade_in(window=None, duration: float = 0.18, sleep=time.sleep) -> None:
+    steps = 8
+    for i in range(1, steps + 1):
+        set_window_alpha(int(255 * i / steps))
+        sleep(duration / steps)
+
+
+def apply_window_rounding(window=None, radius: int = RADIUS_PX) -> str:
+    if sys.platform != "win32":
+        return ""
+    hwnd = find_hwnd(timeout=0.4)
+    if not hwnd:
+        return ""
+    user32, _g, _c, _w = _win32()
+    if user32.IsZoomed(hwnd):
+        return ""
+    return "region" if _set_region(hwnd, radius) else ""
+
+
+def is_maximized() -> bool:
+    if sys.platform != "win32":
+        return False
+    hwnd = find_hwnd(timeout=0.3)
+    if not hwnd:
+        return False
+    user32, _g, _c, _w = _win32()
+    return bool(user32.IsZoomed(hwnd))
+
+
+def clear_window_rounding() -> None:
+    if sys.platform != "win32":
+        return
+    hwnd = find_hwnd(timeout=0.3)
+    if not hwnd:
+        return
+    user32, _g, _c, _w = _win32()
+    user32.SetWindowRgn(hwnd, None, True)
+
+
 def expand(window, target: tuple[int, int],
            duration: float = 0.46, steps: int = 26,
            screen: tuple[int, int] | None = None,
-           sleep=time.sleep) -> tuple[int, int]:
-    """
-    把小窗平滑放大到 target 并居中；返回最终尺寸。
-
-    每帧都调 window.resize + window.move —— pywebview 会把它们排到 GUI 线程，
-    26 帧约 18ms 一帧，肉眼看是连续的展开而不是"突然变大"。
-    """
+           sleep=time.sleep, radius: int = RADIUS_PX) -> tuple[int, int]:
     sw, sh = screen or screen_size()
     tw = min(int(target[0]), max(MIN_SIZE[0], sw - 80))
     th = min(int(target[1]), max(MIN_SIZE[1], sh - 100))
     sw0, sh0 = SPLASH_W, SPLASH_H
+    hwnd = find_hwnd(timeout=3.0) if sys.platform == "win32" else 0
     for i in range(1, steps + 1):
         t = _ease_out_cubic(i / steps)
         w = int(round(sw0 + (tw - sw0) * t))
@@ -75,24 +221,21 @@ def expand(window, target: tuple[int, int],
         try:
             window.resize(w, h)
             window.move(x, y)
+            if hwnd:
+                _set_region(hwnd, radius)
         except Exception:                             # noqa: BLE001, S110
             break
         sleep(max(0.0, duration / steps))
     try:
-        window.min_size = MIN_SIZE                    # 展开后再限制最小尺寸
+        window.min_size = MIN_SIZE
     except Exception:                                 # noqa: BLE001, S110
         pass
-    apply_window_rounding(window)                     # 区域裁剪方案要按新尺寸重设
+    apply_window_rounding(window, radius)
     return tw, th
 
 
 def compute_resize(edge: str, start: dict, dx: int, dy: int,
-                   min_size: tuple[int, int] = MIN_SIZE
-                   ) -> dict:
-    """
-    拖边/拖角时的目标几何：`start` = {x,y,width,height}（屏幕坐标）。
-    `edge` 取 n/s/e/w/ne/nw/se/sw。返回 {x,y,width,height}，已夹住最小尺寸。
-    """
+                   min_size: tuple[int, int] = MIN_SIZE) -> dict:
     x, y = start["x"], start["y"]
     w, h = start["width"], start["height"]
     min_w, min_h = min_size
@@ -109,84 +252,3 @@ def compute_resize(edge: str, start: dict, dx: int, dy: int,
         y = y + (h - new_h)
         h = new_h
     return {"x": x, "y": y, "width": w, "height": h}
-
-
-# ----------------------------------------------------------------------
-# Windows 圆角：优先 DWM（Win11，抗锯齿、随窗口自动更新），
-# 退而求其次用 SetWindowRgn（Win10，区域裁剪，缩放后要重设）。
-# ----------------------------------------------------------------------
-DWMWA_WINDOW_CORNER_PREFERENCE = 33
-DWMWCP_ROUND = 2
-DWMWCP_ROUNDSMALL = 3
-
-
-def _win_hwnd(window, title: str = "Pulses Easier") -> int:
-    if sys.platform != "win32":
-        return 0
-    try:
-        native = getattr(window, "native", None)
-        handle = getattr(native, "Handle", None)
-        if handle is not None:
-            try:
-                return int(handle.ToInt64())
-            except Exception:                        # noqa: BLE001
-                return int(handle)
-    except Exception:                                # noqa: BLE001
-        pass
-    try:
-        import ctypes
-        return int(ctypes.windll.user32.FindWindowW(None, title) or 0)
-    except Exception:                                # noqa: BLE001
-        return 0
-
-
-def _dwm_round(hwnd: int, small: bool = False) -> bool:
-    try:
-        import ctypes
-        pref = ctypes.c_int(DWMWCP_ROUNDSMALL if small else DWMWCP_ROUND)
-        res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
-            ctypes.byref(pref), ctypes.sizeof(pref))
-        return res == 0
-    except Exception:                                # noqa: BLE001
-        return False
-
-
-def _region_round(window, radius: int = 14) -> bool:
-    """Win10 兜底：用圆角区域裁窗口；窗口缩放后必须重调（调用方负责）。"""
-    try:
-        import ctypes
-        hwnd = _win_hwnd(window)
-        if not hwnd:
-            return False
-        rect = ctypes.wintypes.RECT()
-        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        w = rect.right - rect.left
-        h = rect.bottom - rect.top
-        if w <= 0 or h <= 0:
-            return False
-        rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
-            0, 0, w + 1, h + 1, radius * 2, radius * 2)
-        if not rgn:
-            return False
-        ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
-        return True
-    except Exception:                                # noqa: BLE001
-        return False
-
-
-def apply_window_rounding(window, radius: int = 14) -> str:
-    """
-    给无边框窗口加圆角。返回用了哪种方式（"dwm" / "region" / ""），
-    方便日志和 CI 断言；失败不影响启动。
-    """
-    if sys.platform != "win32":
-        return ""
-    hwnd = _win_hwnd(window)
-    if not hwnd:
-        return ""
-    if _dwm_round(hwnd):
-        return "dwm"
-    if _region_round(window, radius):
-        return "region"
-    return ""
