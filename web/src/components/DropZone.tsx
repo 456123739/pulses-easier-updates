@@ -49,17 +49,16 @@ export default function DropZone({
       onClick={onPick}
       aria-label={ariaLabel}
       disabled={locked}
-      whileTap={locked ? undefined : { scale: 0.995 }}
     >
       <span className={styles.glow} aria-hidden />
       <span className={styles.body}>
         {step && <span className={styles.step}>{step}</span>}
         <span className={styles.title}>{title}</span>
-        {(subtitle || hint) && (
-          <span className={styles.sub}>
-            {subtitle}
-            {subtitle && hint ? ' · ' : ''}
-            {hint}
+        {(subtitle || hint || dragging) && (
+          <span className={styles.sub} data-drag={dragging}>
+            {dragging ? '松开即可导入' : subtitle}
+            {!dragging && subtitle && hint ? ' · ' : ''}
+            {!dragging ? hint : ''}
           </span>
         )}
       </span>

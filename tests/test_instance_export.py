@@ -99,8 +99,8 @@ class ExportCase(unittest.TestCase):
         self.assertIn("mods/local.jar", files)
         self.assertIn("config/app.toml", files)
         self.assertNotIn("screenshots/shot.png", files)
-        self.assertEqual(len(files["mods/local.jar"]["value"]), 32)
-        self.assertEqual(files["mods/local.jar"]["algo"], "blake2b")
+        self.assertEqual(len(files["mods/local.jar"]["value"]), 40)
+        self.assertEqual(files["mods/local.jar"]["algo"], "sha1")
 
     def test_hit_without_url_falls_back_to_local(self):
         from app.core.lookup import LookupHit

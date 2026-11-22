@@ -63,8 +63,31 @@ class InstanceModeCase(unittest.TestCase):
         self.assertEqual(inst["totals"]["files"], 2)
         self.assertEqual({r["name"] for r in inst["rows"]}, {"mods", "config"})
         self.assertEqual(snap["strategies"][0]["name"], "config")
+        rows = {r["name"]: r for r in snap["strategies"]}
+        self.assertIn("智能剔除", rows["config"]["strategies"])
+        self.assertEqual(rows["config"]["current"], "智能剔除")
+
         self.assertTrue(snap["ruleOptions"])
         self.assertIn("hasCfKey", snap)
+
+    def test_missing_root_file_can_be_selected(self):
+        (self.root / "servers.dat").write_bytes(b"D" * 16)
+        self.flow._rescan()
+        rows = {r["name"]: r for r in self.flow.snapshot()["strategies"]}
+        self.assertIn("servers.dat", rows)
+        self.assertTrue(rows["servers.dat"]["excluded"])
+        snap = self.flow.set_scope(["mods", "servers.dat"])
+        rows = {r["name"]: r for r in snap["strategies"]}
+        self.assertFalse(rows["servers.dat"]["excluded"])
+
+    def test_set_scope_only_keeps_selected_and_estimates(self):
+        snap = self.flow.set_scope(["config"])
+        rows = {r["name"]: r for r in snap["strategies"]}
+        self.assertTrue(rows["config"]["excluded"] is False)
+        self.assertTrue(rows["mods"]["excluded"] is True)
+        info = self.flow.estimate()
+        self.assertGreater(info["files"], 0)
+        self.assertLessEqual(info["pack_low"], info["pack_high"])
 
     def test_scan_respects_default_rules(self):
         rows = {r["name"] for r in self.flow.snapshot()["instance"]["rows"]}
@@ -78,7 +101,7 @@ class InstanceModeCase(unittest.TestCase):
 
     def test_set_rule_rescans(self):
         self.flow.set_rule("screenshots", True)
-        rows = {r["name"] for r in self.flow.snapshot()["instance"]["rows"]}
+        rows = {r["name"] for r in self.flow.snapshot()["strategies"]}
         self.assertIn("screenshots", rows)
 
     def test_set_rule_rejects_unknown(self):
@@ -107,7 +130,7 @@ class InstanceModeCase(unittest.TestCase):
         self.assertEqual(index["name"], "Pack")
 
     def test_export_uses_strategies_and_skips_excluded(self):
-        self.flow.set_strategy("config", "保留键位")
+        self.flow.set_strategy("config", "智能剔除")
         self.flow.set_strategy("mods", excluded=True)
         out = self.tmp / "out2.eapack"
         with mock.patch.object(dev_mod.inst_export.lookup, "resolve",
@@ -115,7 +138,7 @@ class InstanceModeCase(unittest.TestCase):
             self.flow._worker_instance(out)
         settings = json.loads(packread.read(out, "ea_settings.json"))
         names = set(packread.names(out))
-        self.assertEqual(settings["recommended_strategies"], {"config": "保留键位"})
+        self.assertEqual(settings["recommended_strategies"], {"config": "智能剔除"})
         self.assertFalse(any(n.startswith("overrides/mods/") for n in names))
 
     def test_excluded_root_file_is_not_packed(self):
@@ -130,10 +153,12 @@ class InstanceModeCase(unittest.TestCase):
         self.assertNotIn("overrides/servers.dat", names)
 
     def test_rules_change_adds_new_rows_to_scope(self):
-        self.assertNotIn("screenshots", self.flow.tops)
+        # 现在完整展示所有顶层条目；默认不勾选的以 excluded 标记
+        rows = {r["name"]: r for r in self.flow.snapshot()["strategies"]}
+        self.assertIn("screenshots", rows)
         self.flow.set_rule("screenshots", True)
-        self.assertIn("screenshots", self.flow.tops)
-        self.assertIn("screenshots", self.flow.strategies)
+        rows = {r["name"]: r for r in self.flow.snapshot()["strategies"]}
+        self.assertFalse(rows["screenshots"]["excluded"])
 
     def test_double_export_rejected(self):
         import threading as _th

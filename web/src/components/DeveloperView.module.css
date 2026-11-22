@@ -424,3 +424,56 @@
 .subCount {
   font-variant-numeric: tabular-nums;
 }
+
+.recentRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 0;
+}
+
+.checkBox {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 4px;
+  color: var(--c-on-accent);
+  background: transparent;
+}
+.checkBox[data-on='true'] {
+  background: var(--c-accent);
+  border-color: var(--c-accent);
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 8px 2px 4px;
+}
+.confirmTitle {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+.confirmGrid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px 24px;
+  padding: 16px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--c-card);
+  font-size: var(--fs-body);
+}
+.confirmGrid span { color: var(--c-text-2); }
+.confirmHint {
+  margin: 0;
+  color: var(--c-text-2);
+  font-size: var(--fs-small);
+  line-height: 1.6;
+}

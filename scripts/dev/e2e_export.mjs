@@ -81,7 +81,7 @@ const shot = async (name) => {
 // 1) 进开发者端
 await page.getByRole('button', { name: '开发者', exact: true }).click()
 await page.waitForTimeout(500)
-check(await page.getByText('开始制作更新包').first().isVisible(), '开发者端可见')
+check(await page.getByText('第一步 · 选择导出内容').first().isVisible(), '开发者端可见（第一步）')
 
 // 2) STEP 1 现在是统一入口：直接选目录（实例目录 / 导出包都走这里）
 await page.getByRole('button', { name: /选择目录/ }).first().click()
@@ -113,7 +113,17 @@ if (CFKEY) {
   await page.waitForTimeout(300)
 }
 
-// 4) 导出
+// 4) 两步导出：先确认范围（默认全选），再开始制作
+await page.getByRole('button', { name: /下一步：设置策略/ }).click()
+for (let i = 0; i < 150; i++) {
+  await page.waitForTimeout(200)
+  const st = await page.evaluate(async () => {
+    const r = await window.pywebview.api.invoke('dev.state', {})
+    return r?.data ?? null
+  })
+  if (st?.phase === 'idle') break
+}
+check(await page.getByText('第二步 · 更新策略与确认').first().isVisible(), '第二步策略可见')
 await page.getByRole('button', { name: '开始制作更新包' }).click()
 let done = false
 for (let i = 0; i < 240; i++) {          // 最多 4 分钟

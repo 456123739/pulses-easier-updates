@@ -128,10 +128,14 @@ def _walk(root: Path, rules: list[str], unsafe: list[str] | None = None,
                     continue
                 if not entry.is_file(follow_symlinks=True):
                     continue
-                if not escaped_ok and not inside(os.path.realpath(entry.path)):
-                    if unsafe is not None and len(unsafe) < 50:
-                        unsafe.append(f"{rel}（指向实例外）")
-                    continue
+                # 普通文件天然在实例内；只有符号链接才需要 realpath。
+                # Windows 上逐个文件 realpath 是扫描卡顿的大头。
+                if entry.is_symlink():
+                    real = os.path.realpath(entry.path)
+                    if not escaped_ok and not inside(real):
+                        if unsafe is not None and len(unsafe) < 50:
+                            unsafe.append(f"{rel}（指向实例外）")
+                        continue
                 size = entry.stat(follow_symlinks=True).st_size
             except OSError:
                 continue
@@ -251,7 +255,8 @@ def detect_loader(root: Path) -> dict:
 
 
 def scan_instance(raw_root: str | Path, rules: list[str] | None = None,
-                  *, max_items: int = 200_000) -> dict:
+                  *, max_items: int = 200_000,
+                  progress=None, cancel=None) -> dict:
     """扫描实例目录，返回 rows（UI 用）与 items（打包用）。"""
     root = Path(raw_root)
     if not root.is_dir():
@@ -266,7 +271,15 @@ def scan_instance(raw_root: str | Path, rules: list[str] | None = None,
     total_files = total_bytes = 0
     candidates = 0
 
-    for rel, size, cand, kept in _walk(root, rules, unsafe, bad_names):
+    for n, (rel, size, cand, kept) in enumerate(
+            _walk(root, rules, unsafe, bad_names), 1):
+        if cancel is not None and cancel.is_set():
+            break
+        if progress is not None and (n == 1 or n % 500 == 0):
+            try:
+                progress(n, f"扫描实例 {n:,} 个文件")
+            except Exception:                      # noqa: BLE001, S110
+                pass
         if not kept:
             if len(skipped) < 200:
                 skipped.append(rel)

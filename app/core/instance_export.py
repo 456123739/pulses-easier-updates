@@ -30,7 +30,7 @@ from . import instance_scan, lookup
 from .eapack import (CHANGELOG_FILE, EAPACK_FORMAT_VERSION, HASHES_FILE,
                      SETTINGS_FILE)
 from .packwriter import PackWriter
-from .hashing import build_hash_manifest
+from .hashing import build_hash_manifest_cached
 from .index_build import dependencies as build_deps
 from .index_build import build_index, dumps
 from .mrpack import INDEX_FILENAME, OVERRIDES_DIR
@@ -118,6 +118,7 @@ def export_from_instance(
     fetch=None,
     lookup_fn: Callable | None = None,
     version: str = "",
+    scan: dict | None = None,
 ) -> Path | None:
     """跑完整导出流程；成功返回产物路径。"""
     log = log or _log_default
@@ -156,8 +157,22 @@ def export_from_instance(
             except OSError:
                 pass
 
-    _prog(0, 1, "扫描实例")
-    scan = instance_scan.scan_instance(root, rules)
+    reused = bool(scan and scan.get("items") is not None
+                  and str(scan.get("root") or "") == str(root))
+    if reused:
+        # 复用开发者端已经扫过的清单：不再遍历磁盘；但子项/规则可能在
+        # 扫描后改过，按当前 rules 再过滤一次（只会减，不会漏）。
+        from .export_rules import should_keep
+        scan = dict(scan)
+        scan["items"] = [i for i in scan["items"]
+                         if should_keep(i["path"], rules)]
+        log("info", f"复用已扫描清单：{len(scan['items'])} 个文件")
+    else:
+        _prog(0, 1, "扫描实例")
+        scan = instance_scan.scan_instance(
+            root, rules,
+            progress=lambda n, label: _prog(n, 0, label),
+            cancel=cancel)
     if scan.get("badNames"):
         log("error", "有文件名不是 UTF-8，无法写进 zip：" +
                      "、".join(scan["badNames"][:5]))
@@ -272,8 +287,8 @@ def export_from_instance(
                         for item in index_files}
         hashes_data = None
         if opts.get("include_hashes", True) or opts.get("precompute_overrides"):
-            hashes_data = build_hash_manifest(
-                stage, whitelist, index_hashes,
+            hashes_data = build_hash_manifest_cached(
+                stage, whitelist, hashes, index_hashes,
                 saves_folder_hash=not wopts["use_v2"])
         _prog(len(items) + 4, total_steps, "写入哈希清单")
 

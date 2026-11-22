@@ -172,7 +172,7 @@ let logSeq = 0
 export const usePlayer = create<PlayerStore>((set, get) => ({
   phase: 'idle',
   btn: 'confirm',
-  hint: '比对完成，需下载 3 个文件，点击「确认更新」开始',
+  hint: '先定位整合包，再拖入更新包；导入后会自动比对',
   hintLevel: 'info',
   indexPercent: 100,
   filePercent: 0.42,
@@ -185,8 +185,8 @@ export const usePlayer = create<PlayerStore>((set, get) => ({
   pendingCount: 0,
   pendingMode: null,
   paused: null,
-  updatePack: { name: 'Pulses-Easier-0.9.2-2026.10.22.zip', size: 128_400_000 },
-  placeholder: '请先在侧边栏定位整合包，再拖入更新包',
+  updatePack: null,
+  placeholder: '先在右侧定位整合包，再拖入更新包',
 
   setPhase: (phase) => set({ phase }),
   setBtn: (btn) => set({ btn }),
@@ -258,15 +258,25 @@ export const usePlayer = create<PlayerStore>((set, get) => ({
                 : flow.resume
                   ? 'resume'
                   : 'disabled'
+      const nextHint = !flow.update
+        ? '先定位整合包，再拖入更新包'
+        : hasDiff
+          ? `比对完成：+${flow.counts.added} ~${flow.counts.modified} -${flow.counts.deleted}，确认后开始更新`
+          : phase === 'idle'
+            ? '更新包已导入，点「开始比对」'
+            : '处理中…'
       return {
         strategies,
         groups,
         counts: flow.counts,
         phase,
         btn,
+        hint: nextHint,
+        hintLevel: 'info',
         updatePack: flow.update
           ? { name: flow.update.name, size: flow.update.size ?? 0 }
           : null,
+        log: flow.update ? get().log : [],
         pendingCount: flow.pending.length,
         pendingMode: flow.pending.length ? 'wait' : null,
         paused: flow.paused ?? null,

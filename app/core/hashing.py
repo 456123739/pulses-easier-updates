@@ -192,3 +192,110 @@ def _add_file_entry(abs_path: Path, rel_path: str,
     if result is not None:
         algo, value = result
         files[rel_path] = {"algo": algo, "value": value}
+
+def _folder_digest_cached(prefix: str, precomputed: dict) -> str | None:
+    """用已有文件 sha1 算目录哈希，算法与 differ.folder_hash(content=True) 一致。"""
+    import hashlib as _hashlib
+    prefix = prefix.strip("/")
+    rows = []
+    for rel, fp in precomputed.items():
+        if not rel.startswith(prefix + "/"):
+            continue
+        tail = rel[len(prefix) + 1:]
+        try:
+            rows.append((tail, int(fp.size), str(fp.sha1)))
+        except Exception:                                  # noqa: BLE001
+            continue
+    if not rows:
+        return None
+    rows.sort(key=lambda item: item[0])
+    h = _hashlib.sha256()
+    for rel, size, sha1 in rows:
+        h.update(rel.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(str(size).encode("ascii"))
+        h.update(b"\x00")
+        h.update(sha1.encode("ascii"))
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def build_hash_manifest_cached(
+    root: Path,
+    whitelist: list[str],
+    precomputed: dict,
+    index_hashes: dict[str, dict] | None = None,
+    exclude_tops: list[str] | None = None,
+    *,
+    saves_folder_hash: bool = True,
+) -> dict:
+    """build_hash_manifest 的免重读版本：文件哈希已在扫描阶段算好。"""
+    index_hashes = index_hashes or {}
+    exclude_set = set(exclude_tops or [])
+    wl = [str(x).strip().replace("\\", "/").strip("/")
+          for x in whitelist if str(x).strip()]
+    files: dict[str, dict] = {}
+    covered: set[str] = set()
+    partial: set[str] = set()
+
+    for rel in wl:
+        top = rel.split("/", 1)[0]
+        if top in exclude_set:
+            continue
+        if "/" in rel:
+            partial.add(top)
+        # index 哈希优先，其次用已有内容 sha1
+        idx = index_hashes.get(rel)
+        if isinstance(idx, dict):
+            for algo in ("sha256", "sha512", "sha1"):
+                v = idx.get(algo)
+                if isinstance(v, str) and v:
+                    files[rel] = {"algo": algo, "value": v}
+                    break
+            else:
+                idx = None
+        if rel in files:
+            covered.add(top)
+            continue
+        if rel in precomputed:
+            fp = precomputed[rel]
+            files[rel] = {"algo": "sha1", "value": str(fp.sha1)}
+            covered.add(top)
+        elif (root / rel).is_file():
+            r = file_hash(root / rel)
+            if r:
+                files[rel] = {"algo": r[0], "value": r[1]}
+                covered.add(top)
+        elif (root / rel).is_dir():
+            prefix = rel.rstrip("/")
+            for p_rel, fp in precomputed.items():
+                if p_rel.startswith(prefix + "/"):
+                    files[p_rel] = {"algo": "sha1", "value": str(fp.sha1)}
+            covered.add(top)
+
+    folders: dict[str, str] = {}
+    saves_worlds: dict[str, str] = {}
+    try:
+        for entry in Path(root).iterdir():
+            if not entry.is_dir() or entry.name in covered or entry.name in exclude_set:
+                continue
+            if entry.name == "saves":
+                prefix = "saves"
+                for world in sorted(entry.iterdir()):
+                    if world.is_dir():
+                        digest = _folder_digest_cached(prefix + "/" + world.name,
+                                                       precomputed)
+                        if digest:
+                            saves_worlds[world.name] = digest
+                if saves_folder_hash:
+                    digest = _folder_digest_cached(prefix, precomputed)
+                    if digest:
+                        folders["saves"] = digest
+                continue
+            digest = _folder_digest_cached(entry.name, precomputed)
+            if digest:
+                folders[entry.name] = digest
+    except OSError:
+        pass
+    return {"files": files, "folders": folders, "saves_worlds": saves_worlds,
+            "whitelist": wl, "partial_tops": sorted(partial)}

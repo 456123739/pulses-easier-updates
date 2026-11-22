@@ -2,14 +2,22 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useState } from 'react'
 import wordmark from '@/assets/wordmark.png'
 import { invoke, pickPath } from '@/bridge'
+import type { AppState } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { useUi } from '@/store/ui'
-import DropZone from './DropZone'
 import RoleSwitch from './RoleSwitch'
 import styles from './Sidebar.module.css'
 
 export default function Sidebar() {
-  const state = useApp((s) => s.state)
+  const role = useApp((s) => s.state?.role ?? 'player')
+  const devName = useApp((s) => s.state?.dev?.instance?.name
+    ?? s.state?.dev?.source?.name)
+  const packName = useApp((s) => s.state?.pack?.name)
+  const allRecent = useApp((s) => s.state?.recent ?? [])
+  const recent = role === 'developer'
+    ? allRecent
+    : allRecent.filter((r) => !/\.(zip|mrpack)$/i.test(r.path))
+  const version = useApp((s) => s.state?.version ?? '—')
   const connected = useApp((s) => s.connected)
   const setState = useApp((s) => s.setState)
   const pushToast = useApp((s) => s.pushToast)
@@ -20,7 +28,7 @@ export default function Sidebar() {
     if (!connected) return
     try {
       const res = await invoke<{ state: { version: string } }>('app.pick_pack', { path })
-      const next = (res as unknown as { state: typeof state }).state
+      const next = (res as unknown as { state?: AppState }).state
       if (next) setState(next)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '定位失败', 'error')
@@ -38,10 +46,10 @@ export default function Sidebar() {
   }
 
   const clearRecent = async () => {
-    if (!connected || !state) return
+    if (!connected || !recent.length) return
+    if (!window.confirm('清空最近打开记录？不会删除任何整合包。')) return
     try {
       await invoke('app.recent.clear')
-      setState({ ...state, recent: [] })
     } catch {
       /* 忽略 */
     }
@@ -54,37 +62,25 @@ export default function Sidebar() {
         <div className={styles.maker}>Produced by Pulses0 Studio</div>
       </div>
 
-      <DropZone
-        step="STEP 1"
-        title={state?.role === 'developer' ? '整合包定位' : '定位整合包'}
-        subtitle={
-          state?.role === 'developer'
-            ? state?.dev?.instance?.name ??
-              state?.dev?.source?.name ??
-              '整合包目录 / 导出包'
-            : state?.pack
-              ? state.pack.name
-              : '拖入整合包内任意文件'
-        }
-        hint="或点击选择"
-        height={104}
-        variant="sidebar"
-        onPick={onChoose}
-      />
+      <div className={styles.currentPack}>
+        <span className="t-small">当前整合包</span>
+        <button className={styles.packLink} onClick={() => void onChoose()} title={role === 'developer' ? devName : packName}>
+          {role === 'developer' ? devName ?? '未选择' : packName ?? '未选择'}
+        </button>
+        <span className={styles.packHint}>点击更换 · 也可在右侧直接拖入</span>
+      </div>
 
       <div className={`card ${styles.recentCard}`}>
         <div className={styles.cardHead}>
           <span className={styles.cardTitle}>最近打开</span>
-          <button className={styles.linkBtn} onClick={clearRecent}>清空</button>
+          <button className={styles.linkBtn} onClick={clearRecent}>清空记录</button>
         </div>
         <div className={styles.recentList}>
-          {state?.recent?.length ? (
-            state.recent.map((r) => (
+          {recent.length ? (
+            recent.map((r) => (
               <motion.button
                 key={r.path}
                 className={styles.recentRow}
-                whileHover={{ x: 2 }}
-                whileTap={{ scale: 0.99 }}
                 title={r.path}
                 onClick={() => void openPack(r.path)}
               >
@@ -130,7 +126,7 @@ export default function Sidebar() {
       <div className={styles.spacer} />
 
       <RoleSwitch />
-      <div className={styles.version}>v{state?.version ?? '—'}</div>
+      <div className={styles.version}>v{version}</div>
     </aside>
   )
 }

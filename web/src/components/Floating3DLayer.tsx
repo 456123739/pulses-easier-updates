@@ -326,10 +326,10 @@ export default function Floating3DLayer({
       }
     }
     return {
-      initial: { opacity: 0, x: -14, y: 6, rotateY: -13, rotateX: 2, scale: 0.965, filter: 'blur(12px)' },
-      animate: { opacity: 1, x: 0, y: 0, rotateY: -3, rotateX: 0, scale: 1, filter: 'blur(0px)' },
-      exit: { opacity: 0, x: -6, rotateY: -7, scale: 0.985, filter: 'blur(8px)', transition: { duration: 0.16 } },
-      transition: { type: 'spring' as const, stiffness: 300, damping: 28, mass: 0.75 },
+      initial: { opacity: 0, x: -8, y: 4 },
+      animate: { opacity: 1, x: 0, y: 0 },
+      exit: { opacity: 0, x: -4, transition: { duration: 0.12 } },
+      transition: { duration: 0.16, ease: [0.2, 0.8, 0.2, 1] as const },
     }
   }, [reduce])
 
@@ -395,7 +395,6 @@ export default function Floating3DLayer({
               style={{ transformOrigin: '0px 34px', transformStyle: 'preserve-3d' }}
               {...motionProps}
             >
-              <span className={styles.bloom} aria-hidden />
               {children}
             </motion.div>
           </div>

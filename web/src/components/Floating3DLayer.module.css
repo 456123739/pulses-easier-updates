@@ -51,26 +51,13 @@
   stroke: rgba(78, 197, 176, 0.5);
   stroke-width: 1.2;
   stroke-linecap: round;
-  filter: drop-shadow(0 0 4px rgba(78, 197, 176, 0.35));
 }
 .connectorDot {
   fill: rgba(78, 197, 176, 0.85);
 }
 .connectorDotEnd {
   fill: rgba(78, 197, 176, 0.95);
-  filter: drop-shadow(0 0 6px rgba(78, 197, 176, 0.6));
 }
 
 
-/* 泛光：进场时像一团光晕托着卡片，退场随 body 一起淡掉 */
-.bloom {
-  position: absolute;
-  inset: -26px;
-  border-radius: 26px;
-  pointer-events: none;
-  z-index: -1;
-  background:
-    radial-gradient(58% 62% at 28% 16%, rgba(78, 197, 176, 0.26), transparent 68%),
-    radial-gradient(46% 52% at 82% 92%, rgba(78, 197, 176, 0.13), transparent 70%);
-  filter: blur(18px);
-}
+

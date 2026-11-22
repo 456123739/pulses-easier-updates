@@ -116,6 +116,8 @@ class Api:
                 lambda p: self._controller.flow.rescan_pause(),
             "update.retry": lambda p: self._controller.flow.retry(p.get("path", "")),
             "update.giveup": lambda p: self._controller.flow.give_up(),
+            "update.strategies.set": lambda p: self._controller.flow.set_strategies(
+                p.get("values") or {}, p.get("checked") or {}),
             "update.strategy.set": lambda p: self._controller.flow.set_strategy(
                 p.get("name", ""), p.get("value", ""), p.get("checked")),
             "update.strategy.setAll": lambda p: self._controller.flow.set_all(
@@ -130,6 +132,9 @@ class Api:
             # 扫描与解析在后台线程（见 dev.DevFlow.open）。
             "dev.open": lambda p: self._controller.dev.open(p.get("path", "")),
             "dev.pick": lambda p: self._controller.dev.import_zip(p.get("path", "")),
+            "dev.scope.set": lambda p: self._controller.dev.set_scope(
+                p.get("included") or []),
+            "dev.estimate": lambda p: self._controller.dev.estimate(),
             "dev.instance.pick": lambda p: self._controller.dev.import_instance(
                 p.get("path", "")),
             "dev.rule.set": lambda p: self._controller.dev.set_rule(

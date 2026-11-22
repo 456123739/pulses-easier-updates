@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { invoke, pickPath } from '@/bridge'
 import { useApp } from '@/store/app'
@@ -7,21 +7,31 @@ import type { StrategyRow } from '@/store/player'
 import Icon from './Icon'
 import styles from './StrategyCard.module.css'
 
+const STRATEGY_HELP: Record<string, string> = {
+  '完全匹配': '以更新包为准：同名覆盖，包里没有的删除',
+  '替换重名': '只覆盖本地已有同名文件，不删除其他文件',
+  '跳过重名': '本地已有就保留，不覆盖',
+  '智能剔除': '覆盖配置，但优化/渲染类模组的配置保留本地版本',
+  '保留键位': '覆盖文件，但保留本地 key_* 键位行',
+}
+
 interface Props {
   rows?: StrategyRow[]
   onToggle?: (name: string) => void
   onStrategy?: (name: string, value: string) => void
   compact?: boolean
+  /** 把「提交草稿」交给父级，让底部唯一主按钮一次性提交+应用 */
+  registerCommit?: (fn: () => Promise<void>) => void
 }
 
-export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Props) {
+export default function StrategyCard({ rows, onToggle, onStrategy, compact, registerCommit }: Props) {
   const all = usePlayer((s) => s.strategies)
   const toggleRow = usePlayer((s) => s.toggleRow)
-  const setStrategy = usePlayer((s) => s.setStrategy)
   const data = rows ?? all
   const [showDisabled, setShowDisabled] = useState(false)
   const [showUnchanged, setShowUnchanged] = useState(false)
   const [unifyOpen, setUnifyOpen] = useState(false)
+  const [draft, setDraft] = useState<Record<string, string>>({})
   const connected = useApp((s) => s.connected)
   const pushToast = useApp((s) => s.pushToast)
 
@@ -45,30 +55,60 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
     }
   }
 
-  const unify = async (value: string) => {
+  const unify = (value: string) => {
     setUnifyOpen(false)
-    if (!connected) return
-    try {
-      await invoke('update.strategy.setAll', {
-        value,
-        names: enabled.map((r) => r.name),
-      })
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : '设置失败', 'error')
-    }
+    setDraft((prev) => {
+      const next = { ...prev }
+      for (const r of enabled) next[r.name] = value
+      return next
+    })
   }
 
+  const signature = data.map((r) => `${r.name}:${r.current}`).join('|')
+  useEffect(() => {
+    setDraft({})
+  }, [signature])
+
   const enabled = useMemo(() => data.filter((r) => r.checked && (r.changed ?? 0) > 0), [data])
+  const unifyOptions = useMemo(() => {
+    if (!enabled.length) return ['完全匹配', '替换重名', '跳过重名']
+    const first = enabled[0]?.strategies ?? []
+    return first.filter((x) => enabled.every((r) => r.strategies.includes(x)))
+  }, [enabled])
   const unchanged = useMemo(() => data.filter((r) => r.checked && (r.changed ?? 0) === 0), [data])
   const disabled = useMemo(() => data.filter((r) => !r.checked), [data])
 
   const toggle = (name: string) => (onToggle ? onToggle(name) : toggleRow(name))
-  const pick = (name: string, v: string) => (onStrategy ? onStrategy(name, v) : setStrategy(name, v))
+  const pick = (name: string, v: string) => {
+    if (onStrategy) { onStrategy(name, v); return }
+    setDraft((prev) => ({ ...prev, [name]: v }))
+  }
+
+  const dirtyNames = Object.keys(draft).filter((name) => {
+    const row = data.find((r) => r.name === name)
+    return row ? row.current !== draft[name] : false
+  })
+  const commit = async () => {
+    if (!connected || dirtyNames.length === 0) return
+    try {
+      await invoke('update.strategies.set', { values: draft })
+      setDraft({})
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存策略失败', 'error')
+    }
+  }
+
+  const commitRef = useRef(commit)
+  commitRef.current = commit
+  useEffect(() => {
+    registerCommit?.(() => commitRef.current())
+  }, [registerCommit])
 
   return (
     <div className={`card ${styles.card}`}>
       <div className={styles.head}>
         <span className="t-title">更新策略</span>
+        <span className="t-small">悬停策略可看说明；改完点底部主按钮一次提交</span>
         <div className={styles.headBtns}>
           <button className={styles.mini} onClick={() => void importConfig()}>
             导入配置
@@ -81,7 +121,7 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
 
       <div className={`scroll ${styles.rows}`}>
         {enabled.map((r) => (
-          <Row key={r.name} row={r} onToggle={toggle} onStrategy={pick} />
+          <Row key={r.name} row={r} onToggle={toggle} onStrategy={pick} current={draft[r.name]} />
         ))}
 
         {unchanged.length > 0 && (
@@ -91,7 +131,7 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
             onToggle={() => setShowUnchanged((v) => !v)}
           >
             {unchanged.map((r) => (
-              <Row key={r.name} row={r} onToggle={toggle} onStrategy={pick} dim />
+              <Row key={r.name} row={r} onToggle={toggle} onStrategy={pick} current={draft[r.name]} dim />
             ))}
           </Section>
         )}
@@ -133,7 +173,7 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
                   transition={{ duration: 0.16, ease: [0.25, 0.8, 0.35, 1] }}
                   className={`card ${styles.unifyMenu}`}
                 >
-                  {['完全匹配', '替换重名', '跳过重名'].map((s) => (
+                  {unifyOptions.map((s) => (
                     <button key={s} className={styles.unifyItem} onClick={() => void unify(s)}>
                       {s}
                     </button>
@@ -146,6 +186,9 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact }: Pr
             {enabled.length} 项参与更新
             {unchanged.length > 0 ? ` · ${unchanged.length} 项无需更新` : ''}
             {disabled.length > 0 ? ` · ${disabled.length} 项已禁用` : ''}
+            {dirtyNames.length > 0
+              ? ` · ${dirtyNames.length} 项待应用（点底部主按钮一次提交）`
+              : ' · 策略已应用'}
           </span>
         </div>
       )}
@@ -197,11 +240,13 @@ function Row({
   row,
   onToggle,
   onStrategy,
+  current,
   dim,
 }: {
   row: StrategyRow
   onToggle: (name: string) => void
   onStrategy?: (name: string, value: string) => void
+  current?: string
   dim?: boolean
 }) {
   return (
@@ -226,7 +271,8 @@ function Row({
             <button
               key={s}
               className="chip"
-              data-on={row.current === s}
+              title={STRATEGY_HELP[s] ?? s}
+              data-on={(current ?? row.current) === s}
               disabled={row.locked}
               onClick={() => onStrategy(row.name, s)}
             >

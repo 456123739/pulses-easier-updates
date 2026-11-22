@@ -1,5 +1,5 @@
 interface Props {
-  name: 'folder' | 'file' | 'chevron' | 'gear' | 'database' | 'list' | 'plus' | 'minus' | 'tilde' | 'shield' | 'sparkle'
+  name: 'folder' | 'file' | 'chevron' | 'gear' | 'database' | 'list' | 'plus' | 'minus' | 'tilde' | 'shield' | 'sparkle' | 'check'
   size?: number
   className?: string
 }
@@ -19,6 +19,7 @@ const PATHS: Record<Props['name'], string> = {
   shield: 'M10 2.8 16 5v5.2c0 3.2-2.5 5.9-6 7-3.5-1.1-6-3.8-6-7V5l6-2.2Z',
   sparkle:
     'M10 3.2l1.6 4.2 4.2 1.6-4.2 1.6L10 14.8 8.4 10.6 4.2 9l4.2-1.6L10 3.2Z',
+  check: 'M4.5 10.4l3.5 3.5 7.5-8',
 }
 
 export default function Icon({ name, size = 14, className }: Props) {

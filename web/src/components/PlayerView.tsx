@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@/bridge'
 import { AnimatePresence, motion } from 'framer-motion'
 import { pickPath } from '@/bridge'
@@ -24,6 +24,7 @@ export default function PlayerView() {
   const openSheet = useUi((s) => s.openSheet)
   const progress = useApp((s) => s.progress)
   const setProgress = usePlayer((s) => s.setProgress)
+  const bytes = useApp((s) => s.bytes)
 
   // 后端快照是唯一事实来源：连上桥就覆盖本地演示态
   useEffect(() => {
@@ -53,10 +54,10 @@ export default function PlayerView() {
   const slotsOpen = usePlayer((s) => s.slotsOpen)
   const pendingCount = usePlayer((s) => s.pendingCount)
   const pendingMode = usePlayer((s) => s.pendingMode)
-  const placeholder = usePlayer((s) => s.placeholder)
   const toggleSlots = usePlayer((s) => s.toggleSlots)
   const setHint = usePlayer((s) => s.setHint)
   const [showTree, setShowTree] = useState(true)
+  const strategyCommit = useRef<() => Promise<void>>(async () => {})
 
   const onPickUpdate = async () => {
     if (!connected) return
@@ -64,27 +65,20 @@ export default function PlayerView() {
       const path = await pickPath('file', '')
       if (!path) return
       await invoke('update.pick', { path })
-      setHint(`已导入更新包：${path.split(/[\\/]/).pop()}`, 'info')
+      setHint(`已导入更新包：${path.split(/[\\/]/).pop()}，正在比对…`, 'info')
+      if (pack) await invoke('pack.scan')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '导入失败', 'error')
     }
   }
 
   const onClearUpdate = async () => {
-    if (!connected) return
+    if (!connected || !updatePack) return
+    if (!window.confirm('清空更新包和当前比对结果？')) return
     try {
       await invoke('update.clear')
     } catch {
       /* 忽略 */
-    }
-  }
-
-  const setStrategy = async (name: string, value: string) => {
-    if (!connected) return
-    try {
-      await invoke('update.strategy.set', { name, value })
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : '策略保存失败', 'error')
     }
   }
 
@@ -98,7 +92,25 @@ export default function PlayerView() {
     }
   }
 
+  const transfer = Object.values(bytes).reduce(
+    (acc, item) => ({
+      done: acc.done + (item.done || 0),
+      total: acc.total + (item.total || 0),
+      speed: acc.speed + (item.speed || 0),
+    }),
+    { done: 0, total: 0, speed: 0 },
+  )
+  const fmtBytes = (n: number) => {
+    if (!n) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB']
+    let v = n; let i = 0
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1 }
+    return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`
+  }
   const hasDiff = showTree && groups.some((g) => g.items.length > 0)
+  const placeholderText = pack
+    ? (updatePack ? '更新包已导入，点「比对变更」查看要改哪些文件' : '拖入更新包后，这里会列出要新增/修改/删除的文件')
+    : '先在右侧「定位整合包」选一个实例，再拖入更新包'
   // 后端进度文案优先：玩家看到的"正在下载/正在应用/更新完成"都来自这里
   const liveHint =
     phase !== 'idle' || (progress?.percent ?? 0) >= 1
@@ -131,11 +143,14 @@ export default function PlayerView() {
         </div>
 
         <StrategyCard
-          onStrategy={connected ? setStrategy : undefined}
           onToggle={connected ? toggleChecked : undefined}
+          registerCommit={(fn) => { strategyCommit.current = fn }}
         />
 
-        <MainButton onScanToggle={() => setShowTree((v) => !v)} />
+        <MainButton
+          onScanToggle={() => setShowTree((v) => !v)}
+          beforeConfirm={() => strategyCommit.current()}
+        />
       </section>
 
       <section className={styles.right}>
@@ -186,7 +201,7 @@ export default function PlayerView() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
               >
-                <span>{placeholder}</span>
+                <span>{placeholderText}</span>
               </motion.div>
             )}
           </AnimatePresence>
@@ -202,6 +217,13 @@ export default function PlayerView() {
               transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             >
               <ProgressBar onClick={toggleSlots} />
+              {transfer.total > 0 && (
+                <div className={styles.transferMeta}>
+                  {fmtBytes(transfer.done)} / {fmtBytes(transfer.total)}
+                  {transfer.speed > 0 ? ` · ${fmtBytes(transfer.speed)}/s` : ''}
+                  {indexPercent !== null ? ` · ${indexPercent}%` : ''}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

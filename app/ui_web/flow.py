@@ -25,7 +25,7 @@ import zipfile
 from pathlib import Path
 
 from ..config import (Strategy, default_strategy_for_dir,
-                      default_strategy_for_file)
+                      default_strategy_for_file, strategy_list_for)
 from ..core import config_exclude
 from ..core import recover as recover_mod
 from ..core import database as db
@@ -176,14 +176,14 @@ class Flow:
         for name in self.tops:
             rows.append({
                 "name": name, "display": name, "isFile": False,
-                "strategies": [s.value for s in _dir_strategies()],
+                "strategies": [s.value for s in strategy_list_for(name)],
                 "current": self.strategies.get(name, ""),
                 "checked": bool(self.checked.get(name, True)),
             })
         for name in self.root_files:
             rows.append({
                 "name": name, "display": name, "isFile": True,
-                "strategies": [s.value for s in _file_strategies()],
+                "strategies": [s.value for s in strategy_list_for(name, True)],
                 "current": self.strategies.get(name, ""),
                 "checked": bool(self.checked.get(name, True)),
             })
@@ -240,6 +240,24 @@ class Flow:
         self.bus.log(f"已导入{label}：{path.name}", "INFO")
         if info["signature"] not in ("ok", "unsigned"):
             self.bus.log(f"完整性校验未通过：{info['signature']}", "WARNING")
+        return self.snapshot()
+
+    def set_strategies(self, values: dict[str, str],
+                       checked: dict[str, bool] | None = None) -> dict:
+        """玩家端批量确认策略：所有选择一次写入，只重算一次快照。"""
+        with self._lock:
+            for name, value in (values or {}).items():
+                value = str(value or "")
+                if not value:
+                    continue
+                allowed = {s.value for s in strategy_list_for(
+                    name, name in self.root_files)}
+                if value not in allowed:
+                    raise FlowError(f"不支持的策略：{value}")
+                self.strategies[str(name)] = value
+            for name, flag in (checked or {}).items():
+                self.checked[str(name)] = bool(flag)
+        self.controller.push_state()
         return self.snapshot()
 
     def clear(self) -> dict:
@@ -741,8 +759,8 @@ class Flow:
             raise FlowError("缺少条目名")
         with self._lock:
             if value:
-                allowed = {s.value for s in _file_strategies()} if name in self.root_files \
-                    else {s.value for s in _dir_strategies()}
+                allowed = {s.value for s in strategy_list_for(
+                    name, name in self.root_files)}
                 if value not in allowed:
                     raise FlowError(f"不支持的策略：{value}")
                 self.strategies[name] = value
