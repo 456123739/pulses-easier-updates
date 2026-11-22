@@ -244,9 +244,11 @@ def export_eapack(
 
         from .packwriter import PackWriter
 
-        use_v2 = bool(opts.get("compact_container", True))
-        writer = PackWriter(tmp_path, use_v2=use_v2,
-                            mca_transform=bool(opts.get("world_transform", True)),
+        from .packwriter import resolve_export_options
+        wopts = resolve_export_options(opts)
+        writer = PackWriter(tmp_path, use_v2=wopts["use_v2"],
+                            level=wopts["level"],
+                            mca_transform=wopts["mca"],
                             log=_log)
         try:
             # 4.1) index（最小体积模式下按 excluded 过滤 index 条目）

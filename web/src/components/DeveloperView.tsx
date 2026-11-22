@@ -16,7 +16,8 @@ const OPTIONS = [
   { id: 'tamper_proof', label: '完整性签名', desc: '逐条记录内容哈希，玩家端会拒绝被改坏的更新包（不证明来源）' },
   { id: 'precompute_overrides', label: '预计算覆盖文件', desc: '打包时就比对好，玩家端比对更快' },
   { id: 'min_size', label: '压缩到最小体积', desc: '忽略排除目录，包更小但更新更慢' },
-  { id: 'compact_container', label: '紧凑容器', desc: '用块压缩替代 zip：同样内容小约 5%，解压更快；需要新版客户端' },
+  { id: 'super_compress', label: '超级压缩（beta）', desc: 'zstd 最高档 + 存档去外壳 + 新容器：包最小；导出更慢，需要新版客户端' },
+  { id: 'compact_container', label: '新版紧凑格式', desc: '块压缩容器，比旧 zip 小约 5~6%；关掉则导出旧版 zip（旧客户端也能读）' },
   { id: 'world_transform', label: '存档优化', desc: '去掉 region 文件的逐区块压缩外壳（仅当包含 saves 时生效），世界部分可再小一半' },
 ]
 
@@ -26,6 +27,7 @@ const DEFAULT_OPTIONS: Record<string, boolean> = {
   tamper_proof: true,
   precompute_overrides: true,
   min_size: false,
+  super_compress: false,
   compact_container: true,
   world_transform: true,
 }

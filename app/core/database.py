@@ -66,6 +66,8 @@ DEFAULT_EXPORT_OPTIONS = {
     "compact_container": True,
     # 存档 region 去 zlib 外壳（只在包内含 saves 时生效，玩家端自动还原）
     "world_transform": True,
+    # 超级压缩（beta）：zstd 22 + 存档变换 + 新容器（需要新版客户端）
+    "super_compress": False,
 }
 
 # ----------------------------------------------------------------------

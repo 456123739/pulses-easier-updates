@@ -295,15 +295,13 @@ def export_from_instance(
         drop(tmp_path)
         _prog(len(items) + 5, total_steps, "写入更新包")
         log("info", f"写入 {out_path.name}...")
-        from .database import get_export_options
-        # 以调用方传入的 opts 为准，DB 只补缺省：否则单测 / 脚本 / 别的入口
-        # 没法选 zip 还是紧凑容器，导出选项会被悄悄忽略。
-        _opts = dict(get_export_options())
-        _opts.update({k: v for k, v in (opts or {}).items() if v is not None})
+        from .packwriter import resolve_export_options
+        wopts = resolve_export_options(opts)
         writer = PackWriter(
             tmp_path,
-            use_v2=bool(_opts.get("compact_container", True)),
-            mca_transform=bool(_opts.get("world_transform", True)),
+            use_v2=wopts["use_v2"],
+            level=wopts["level"],
+            mca_transform=wopts["mca"],
             log=log)
         try:
             writer.add_bytes(INDEX_FILENAME, dumps(index), inline=True)

@@ -26,7 +26,8 @@ from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
                            parse_mrpack)
 
 EXPORT_KEYS = ("include_hashes", "tamper_proof", "precompute_overrides",
-               "min_size", "compact_container", "world_transform")
+               "min_size", "compact_container", "world_transform",
+               "super_compress")
 
 
 class DevError(RuntimeError):

@@ -28,6 +28,40 @@ from . import mca
 from .packsign import MANIFEST_FILE, compute_signature_v2
 
 
+SUPER_LEVEL = 22
+
+
+def resolve_export_options(opts: dict | None = None) -> dict:
+    """
+    把"导出选项"归一成写包参数（两条导出路径共用）。
+
+    - super_compress（beta）是总开关：强制新版容器 + 存档变换 + zstd 22，
+      环境里没有 zstandard 时仍会退回 zip（PackWriter 自己会判断）。
+    - 否则按 compact_container / world_transform 各自的值走；
+      compact_container=False 就是**导出旧版 zip**（老客户端能读）。
+    """
+    try:
+        from .database import get_export_options
+        base = dict(get_export_options())
+    except Exception:                                  # noqa: BLE001
+        base = {}
+    base.update({k: v for k, v in (opts or {}).items() if v is not None})
+    sup = bool(base.get("super_compress"))
+    raw_level = base.get("zstd_level")
+    try:
+        level = int(raw_level) if raw_level else ct.DEFAULT_LEVEL
+    except (TypeError, ValueError):
+        level = ct.DEFAULT_LEVEL
+    if sup:
+        level = SUPER_LEVEL
+    return {
+        "super": sup,
+        "use_v2": sup or bool(base.get("compact_container", True)),
+        "level": max(1, min(22, level)),
+        "mca": sup or bool(base.get("world_transform", True)),
+    }
+
+
 class PackWriter:
     """写一个更新包（v2 容器或 zip），并在收尾时写好签名清单。"""
 
