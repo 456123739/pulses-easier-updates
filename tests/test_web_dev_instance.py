@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 import zipfile
+
+import packread
 from pathlib import Path
 from unittest import mock
 
@@ -98,9 +100,8 @@ class InstanceModeCase(unittest.TestCase):
             self.flow._worker_instance(out)
         self.assertEqual(self.flow.phase, "done")
         self.assertTrue(out.is_file())
-        with zipfile.ZipFile(out) as zf:
-            names = set(zf.namelist())
-            index = json.loads(zf.read("modrinth.index.json"))
+        names = set(packread.names(out))
+        index = json.loads(packread.read(out, "modrinth.index.json"))
         self.assertIn("overrides/mods/a.jar", names)
         self.assertEqual(index["files"], [])
         self.assertEqual(index["name"], "Pack")
@@ -112,9 +113,8 @@ class InstanceModeCase(unittest.TestCase):
         with mock.patch.object(dev_mod.inst_export.lookup, "resolve",
                                return_value={}):
             self.flow._worker_instance(out)
-        with zipfile.ZipFile(out) as zf:
-            settings = json.loads(zf.read("ea_settings.json"))
-            names = set(zf.namelist())
+        settings = json.loads(packread.read(out, "ea_settings.json"))
+        names = set(packread.names(out))
         self.assertEqual(settings["recommended_strategies"], {"config": "保留键位"})
         self.assertFalse(any(n.startswith("overrides/mods/") for n in names))
 
@@ -126,8 +126,7 @@ class InstanceModeCase(unittest.TestCase):
         with mock.patch.object(dev_mod.inst_export.lookup, "resolve",
                                return_value={}):
             self.flow._worker_instance(out)
-        with zipfile.ZipFile(out) as zf:
-            names = set(zf.namelist())
+        names = set(packread.names(out))
         self.assertNotIn("overrides/servers.dat", names)
 
     def test_rules_change_adds_new_rows_to_scope(self):

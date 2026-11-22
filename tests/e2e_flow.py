@@ -38,6 +38,9 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_HERE))
 
+import packread  # noqa: E402
+sys.path.insert(0, str(_HERE))
+
 import stubs
 
 stubs.install()
@@ -212,8 +215,7 @@ def _run(tmp: Path, real: dict) -> int:
     assert out is not None, "导出更新包失败"
     print(f"导出更新包：{eapack.name} ({eapack.stat().st_size} B)")
 
-    with zipfile.ZipFile(eapack) as zf:
-        inside = sorted(zf.namelist())
+    inside = sorted(packread.names(eapack))
     print("包内条目：")
     for n in inside:
         print(f"    {n}")

@@ -20,7 +20,6 @@ import shutil
 import threading
 import time
 import uuid
-import zipfile
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -29,7 +28,8 @@ from ..config import NEVER_PACK_FILES
 from . import fingerprint as fpmod
 from . import instance_scan, lookup
 from .eapack import (CHANGELOG_FILE, EAPACK_FORMAT_VERSION, HASHES_FILE,
-                     SETTINGS_FILE, append_manifest_with_signature)
+                     SETTINGS_FILE)
+from .packwriter import PackWriter
 from .hashing import build_hash_manifest
 from .index_build import dependencies as build_deps
 from .index_build import build_index, dumps
@@ -295,8 +295,15 @@ def export_from_instance(
         drop(tmp_path)
         _prog(len(items) + 5, total_steps, "写入更新包")
         log("info", f"写入 {out_path.name}...")
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(INDEX_FILENAME, dumps(index))
+        from .database import get_export_options
+        _opts = get_export_options()
+        writer = PackWriter(
+            tmp_path,
+            use_v2=bool(_opts.get("compact_container", True)),
+            mca_transform=bool(_opts.get("world_transform", True)),
+            log=log)
+        try:
+            writer.add_bytes(INDEX_FILENAME, dumps(index), inline=True)
             wrote = False
             for p in sorted(stage.rglob("*")):
                 if not p.is_file():
@@ -305,7 +312,7 @@ def export_from_instance(
                     raise _Cancelled()
                 rel = p.relative_to(stage).as_posix()
                 try:
-                    zf.write(p, f"{OVERRIDES_DIR}/{rel}")
+                    writer.add_file(f"{OVERRIDES_DIR}/{rel}", p)
                 except UnicodeEncodeError as exc:
                     raise _BadName(f"文件名不是 UTF-8，无法写入 zip：{rel}") from exc
                 except OSError as exc:
@@ -316,18 +323,26 @@ def export_from_instance(
                     raise
                 wrote = True
             if not wrote:
-                zf.writestr(zipfile.ZipInfo(OVERRIDES_DIR + "/"), b"")
+                writer.add_dir_marker(OVERRIDES_DIR + "/")
             if changelog_md and changelog_md.strip():
-                zf.writestr(CHANGELOG_FILE, changelog_md)
-            zf.writestr(SETTINGS_FILE,
-                        json.dumps(settings, ensure_ascii=False, indent=2))
+                writer.add_bytes(CHANGELOG_FILE, changelog_md.encode("utf-8"),
+                                 inline=True)
+            writer.add_bytes(SETTINGS_FILE,
+                             json.dumps(settings, ensure_ascii=False,
+                                        indent=2).encode("utf-8"),
+                             inline=True)
             if hashes_data is not None:
-                zf.writestr(HASHES_FILE,
-                            json.dumps(hashes_data, ensure_ascii=False,
-                                       indent=2))
-        # 签名与 manifest 最后追加（v2：内容哈希，抗同 CRC 改写）
-        append_manifest_with_signature(tmp_path, settings, manifest,
-                                       bool(opts.get("tamper_proof")))
+                writer.add_bytes(HASHES_FILE,
+                                 json.dumps(hashes_data, ensure_ascii=False,
+                                            indent=2).encode("utf-8"),
+                                 inline=True)
+        except Exception:
+            writer.abort()
+            raise
+
+        # 签名与 manifest 最后写（v2：内容哈希，抗同 CRC 改写）
+        writer.finish(settings, manifest,
+                      tamper_proof=bool(opts.get("tamper_proof")))
         if stopped():
             raise _Cancelled()
         try:

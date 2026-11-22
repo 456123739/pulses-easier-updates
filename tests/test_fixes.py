@@ -247,9 +247,8 @@ class TestPackContract(unittest.TestCase):
                 pack=MRPack(name="t"), merged_files=[], strategies={},
                 changelog_md="")
             self.assertIsNotNone(res)
-            with zipfile.ZipFile(out) as zf:
-                names = zf.namelist()
-            self.assertIn(OVERRIDES_DIR + "/", names)
+            import packread
+            self.assertIn(OVERRIDES_DIR + "/", packread.names(out))
 
     def test_reserved_root_names_detected(self):
         from app.core.mrpack import is_reserved_root_name

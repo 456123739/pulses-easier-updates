@@ -9,10 +9,9 @@ packio.py — 更新包的"不解压先看布局"与流式解压
 
 from __future__ import annotations
 
-import shutil
-import zipfile
 from pathlib import Path
 
+from .container import open_container
 from .mrpack import is_safe_rel_path
 
 _META_NAMES = {
@@ -30,8 +29,8 @@ def _zip_layout(zip_path: Path
     这样不必先全部解压就能知道"内容根"在哪，可以立刻开始比对。
     """
     try:
-        with zipfile.ZipFile(zip_path) as zf:
-            names = [n.replace("\\", "/") for n in zf.namelist()
+        with open_container(zip_path) as reader:
+            names = [n.replace("\\", "/") for n in reader.names
                      if n and not n.endswith("/")]
     except Exception:  # noqa: BLE001
         return "", False, [], []
@@ -67,22 +66,20 @@ def _extract_all_members(zip_path: Path, extract_dir: Path,
     count = 0
     manifest = manifest if isinstance(manifest, dict) else {}
     prefix = prefix or ""
-    with zipfile.ZipFile(zip_path) as zf:
+    with open_container(zip_path) as reader:
+        names_all = [str(n).replace("\\", "/") for n in reader.names
+                     if n and not n.endswith("/")]
         if manifest and not prefix:
             # 自愈：调用方忘了传前缀时，从成员名里认出来。
             # 否则清单永远匹配不上，复核会静默空转（历史 bug）。
             try:
-                names = {str(i.filename).replace("\\", "/")
-                         for i in zf.infolist() if not i.is_dir()}
+                names = set(names_all)
                 if names and any(n.startswith("overrides/") for n in names) \
                         and not any(str(k) in names for k in manifest):
                     prefix = "overrides/"
             except Exception:  # noqa: BLE001, S110
                 pass
-        for info in zf.infolist():
-            name = str(info.filename).replace("\\", "/")
-            if info.is_dir() or not name:
-                continue
+        for name in names_all:
             rel = name.lstrip("/")
             # 规范化重复斜杠/`.`（与 extractall 的行为保持一致，避免静默丢文件）
             if "//" in rel or "/./" in rel or rel.startswith("./"):
@@ -90,7 +87,7 @@ def _extract_all_members(zip_path: Path, extract_dir: Path,
             if not is_safe_rel_path(rel):
                 continue                  # 穿越 / 盘符 / 保留名：不落盘
             target = extract_dir / rel
-            # 清单的键是"相对内容根"（overrides/ 已去掉），zip 成员名带前缀
+            # 清单的键是"相对内容根"（overrides/ 已去掉），成员名带前缀
             key = (rel[len(prefix):] if prefix and rel.startswith(prefix)
                    else rel)
             entry = manifest.get(key)
@@ -103,11 +100,8 @@ def _extract_all_members(zip_path: Path, extract_dir: Path,
                 except Exception:  # noqa: BLE001
                     hasher = None
             target.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(info) as src, open(target, "wb") as out:
-                while True:
-                    chunk = src.read(1 << 16)
-                    if not chunk:
-                        break
+            with open(target, "wb") as out:
+                for chunk in reader.iter_chunks(name):
                     out.write(chunk)
                     if hasher is not None:
                         hasher.update(chunk)
@@ -123,26 +117,25 @@ def _extract_root_members(zip_path: Path, dest: Path, prefix: str
     count = 0
     failed: list[str] = []
     dest.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
+    with open_container(zip_path) as reader:
+        for name in reader.names:
+            if str(name).endswith("/"):
                 continue
-            name = info.filename.replace("\\", "/")
+            full = str(name).replace("\\", "/")
             if prefix:
-                if not name.startswith(prefix):
+                if not full.startswith(prefix):
                     continue
-                rest = name[len(prefix):]
+                rest = full[len(prefix):]
             else:
-                rest = name
+                rest = full
             if not rest or "/" in rest:
                 continue
             target = dest / rest
             try:
-                with zf.open(info) as src, open(target, "wb") as out:
-                    shutil.copyfileobj(src, out)
+                with open(target, "wb") as out:
+                    for chunk in reader.iter_chunks(name):
+                        out.write(chunk)
                 count += 1
             except Exception:  # noqa: BLE001
                 failed.append(rest)
     return count, failed
-
-

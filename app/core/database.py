@@ -61,6 +61,11 @@ DEFAULT_EXPORT_OPTIONS = {
     "precompute_overrides": True,
     "min_size": False,
     "compress": True,
+    # 容器：True = 新版块压缩（zstd，比 zip 小 ~6%，解压更快）
+    # False = 传统 zip（老客户端也能打开）
+    "compact_container": True,
+    # 存档 region 去 zlib 外壳（只在包内含 saves 时生效，玩家端自动还原）
+    "world_transform": True,
 }
 
 # ----------------------------------------------------------------------

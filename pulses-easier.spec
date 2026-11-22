@@ -45,6 +45,7 @@ for pkg in ("customtkinter", "tkinterdnd2"):
 # ---- 隐藏导入（静态分析看不到的）----
 hiddenimports = [
     "PIL._tkinter_finder",        # Pillow 的 tkinter 适配
+    "zstandard",                  # 更新包块压缩（缺失时运行时自动退回 zip）
     "multimark", "markdown", "tkhtmlview",
     "darkdetect",
 ]

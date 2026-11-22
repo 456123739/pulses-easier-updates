@@ -23,6 +23,8 @@ import sys
 import tempfile
 import unittest
 import zipfile
+
+import packread
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -195,8 +197,7 @@ class TestRoundTrip(_Base):
             pack=pack, merged_files=merge_files(pack), strategies={},
             changelog_md="")
         self.assertIsNotNone(res)
-        with zipfile.ZipFile(out) as zf:
-            names = zf.namelist()
+        names = packread.names(out)
         self.assertIn("overrides/config/a.toml", names)
 
     def test_no_overrides_still_creates_overrides_entry(self):
@@ -209,8 +210,7 @@ class TestRoundTrip(_Base):
         self.assertIsNotNone(ep.export_eapack(
             source_dir=src, source_zip=zip_path, out_path=out, pack=pack,
             merged_files=merge_files(pack), strategies={}, changelog_md=""))
-        with zipfile.ZipFile(out) as zf:
-            self.assertIn(OVERRIDES_DIR + "/", zf.namelist())
+        self.assertIn(OVERRIDES_DIR + "/", packread.names(out))
 
 
 # ======================================================================
@@ -250,8 +250,7 @@ class TestNeverPack(_Base):
         finally:
             self.db.set_export_options({"min_size": False})
         self.assertIsNotNone(res)
-        with zipfile.ZipFile(out) as zf:
-            names = zf.namelist()
+        names = packread.names(out)
         self.assertFalse([n for n in names if n.endswith("options.txt")],
                          f"options.txt 不该进包：{names}")
         self.assertTrue([n for n in names if n.endswith("config/c.toml")],
@@ -280,9 +279,8 @@ class TestExportOptions(_Base):
         finally:
             self.db.set_export_options({"min_size": False})
         self.assertIsNotNone(res)
-        with zipfile.ZipFile(out) as zf:
-            names = zf.namelist()
-            index = json.loads(zf.read("modrinth.index.json").decode())
+        names = packread.names(out)
+        index = json.loads(packread.read(out, "modrinth.index.json").decode())
         self.assertNotIn("overrides/resourcepacks/o.bin", names)
         self.assertFalse(
             [f for f in index["files"]
@@ -310,14 +308,9 @@ class TestExportOptions(_Base):
 
         # 篡改：改掉 changelog 的内容后重打包（保持其余条目不变）
         tampered = self.tmp / "tampered.eapack"
-        with zipfile.ZipFile(out) as src_zf:
-            items = [(i, src_zf.read(i.filename))
-                     for i in src_zf.infolist()]
-        with zipfile.ZipFile(tampered, "w", zipfile.ZIP_DEFLATED) as dst_zf:
-            for info, data in items:
-                if info.filename == ep.CHANGELOG_FILE:
-                    data = b"# HACKED"
-                dst_zf.writestr(info, data)
+        # 不关心原包是 zip 还是 v2：读出来 → 改一条 → 重新写成 zip
+        packread.rewrite_as_zip(out, tampered,
+                                patch={ep.CHANGELOG_FILE: b"# HACKED"})
         ok2, reason2 = ep.verify_signature(tampered)
         self.assertFalse(ok2, "篡改后签名仍然通过")
         self.assertIn("完整性", reason2)

@@ -5,3 +5,4 @@ markdown>=3.5
 multimark>=0.2.0
 tkhtmlview>=0.3.0
 pywebview>=5.0.0
+zstandard>=0.22.0          # 更新包块压缩（可选：缺失时自动退回 zip）

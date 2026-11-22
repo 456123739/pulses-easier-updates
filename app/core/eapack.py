@@ -10,7 +10,6 @@ eapack.py — 导出标准更新包（.eapack）
   └── ea_manifest.json       元数据
 """
 
-import hashlib
 import json
 import os
 import zipfile
@@ -19,6 +18,9 @@ from datetime import datetime
 from pathlib import Path
 
 from ..config import NEVER_PACK_FILES
+from . import container as ct
+from .packsign import (compute_signature, compute_signature_v2,
+                       content_entries as _content_entries)
 from .database import get_export_options, get_whitelist
 from .hashing import build_hash_manifest
 from .mrpack import (
@@ -39,60 +41,8 @@ CHANGELOG_FILE = "changelog.md"
 # ----------------------------------------------------------------------
 # 完整性签名
 # ----------------------------------------------------------------------
-def _signature_payload(settings: dict, manifest: dict,
-                       entries: list[tuple[str, int, int]]) -> str:
-    """
-    签名载荷：settings + manifest（不含 signature 字段）+ 包内条目指纹
-    （文件名 / 解压后大小 / CRC32，由 zipfile 直接给出，不需要额外读文件）。
-
-    这不是密钥 MAC，无法防"有权重打包的人"伪造；它的用途是**发现包在
-    传输/编辑后被改坏或被第三方改过**，比"写个没人校验的签名"有意义。
-    """
-    return json.dumps({
-        "settings": settings,
-        "manifest": {k: v for k, v in manifest.items() if k != "signature"},
-        "entries": [[n, int(s), int(c)] for n, s, c in entries],
-    }, ensure_ascii=False, sort_keys=True)
 
 
-def compute_signature(settings: dict, manifest: dict,
-                      entries: list[tuple[str, int, int]]) -> str:
-    payload = _signature_payload(settings, manifest, entries)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _content_entries(zip_path: Path) -> list[tuple[str, int, str]]:
-    """逐条读包内文件算内容 sha1（签名 v2 用）。"""
-    out: list[tuple[str, int, str]] = []
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        for info in zf.infolist():
-            if info.filename == MANIFEST_FILE:
-                continue
-            digest = hashlib.sha1()
-            with zf.open(info) as fh:
-                while True:
-                    chunk = fh.read(1 << 20)
-                    if not chunk:
-                        break
-                    digest.update(chunk)
-            out.append((info.filename, info.file_size, digest.hexdigest()))
-    return out
-
-
-def _payload_v2(settings: dict, manifest: dict,
-                entries: list[tuple[str, int, str]]) -> str:
-    return json.dumps({
-        "settings": settings,
-        "manifest": {k: v for k, v in manifest.items() if k != "signature"},
-        "entries": [[n, int(s), h] for n, s, h in entries],
-        "scheme": "sha1-content",
-    }, ensure_ascii=False, sort_keys=True)
-
-
-def compute_signature_v2(settings: dict, manifest: dict,
-                         entries: list[tuple[str, int, str]]) -> str:
-    return hashlib.sha256(_payload_v2(settings, manifest, entries)
-                          .encode("utf-8")).hexdigest()
 
 
 def append_manifest_with_signature(zip_path: Path, settings: dict,
@@ -111,7 +61,7 @@ def append_manifest_with_signature(zip_path: Path, settings: dict,
 
 def verify_signature(eapack_path: Path) -> tuple[bool, str]:
     """
-    校验更新包完整性。
+    校验更新包完整性（v2 容器与 zip 都支持）。
     返回 (ok, reason)：
       - 没有签名（未开启该选项）→ (True, "unsigned")
       - 校验通过 → (True, "")
@@ -121,21 +71,24 @@ def verify_signature(eapack_path: Path) -> tuple[bool, str]:
     v1（0.10.x 及更早）：只签 CRC/size，仍按老算法校验，保证旧包可读。
     """
     eapack_path = Path(eapack_path)
+    crc_entries: list[tuple[str, int, int]] | None = None
     try:
-        with zipfile.ZipFile(eapack_path, "r") as zf:
-            manifest = json.loads(zf.read(MANIFEST_FILE).decode("utf-8"))
+        with ct.open_container(eapack_path) as reader:
+            manifest = json.loads(reader.read(MANIFEST_FILE).decode("utf-8"))
             if not isinstance(manifest, dict):
                 return False, "ea_manifest.json 结构异常"
             expected = manifest.get("signature", "")
             if not expected:
                 return True, "unsigned"
             try:
-                settings = json.loads(zf.read(SETTINGS_FILE).decode("utf-8"))
+                settings = json.loads(reader.read(SETTINGS_FILE).decode("utf-8"))
             except Exception:  # noqa: BLE001
                 settings = {}
             version = int(manifest.get("signature_version") or 1)
-            entries = [(i.filename, i.file_size, i.CRC)
-                       for i in zf.infolist() if i.filename != MANIFEST_FILE]
+            if version < 2 and isinstance(reader, ct.ZipReader):
+                crc_entries = [(i.filename, i.file_size, i.CRC)
+                               for i in reader._zf.infolist()
+                               if i.filename != MANIFEST_FILE]
     except Exception as e:  # noqa: BLE001
         return False, f"无法读取更新包：{e}"
 
@@ -144,7 +97,9 @@ def verify_signature(eapack_path: Path) -> tuple[bool, str]:
             got = compute_signature_v2(settings or {}, manifest,
                                        _content_entries(eapack_path))
         else:
-            got = compute_signature(settings or {}, manifest, entries)
+            if crc_entries is None:
+                return False, "旧版签名口径只能校验 zip 包"
+            got = compute_signature(settings or {}, manifest, crc_entries)
     except Exception as e:  # noqa: BLE001
         return False, f"无法校验更新包：{e}"
     if got != expected:
@@ -287,61 +242,69 @@ def export_eapack(
         except OSError:
             pass
 
+        from .packwriter import PackWriter
+
+        use_v2 = bool(opts.get("compact_container", True))
+        writer = PackWriter(tmp_path, use_v2=use_v2,
+                            mca_transform=bool(opts.get("world_transform", True)),
+                            log=_log)
         try:
-            with zipfile.ZipFile(tmp_path, "w",
-                                 zipfile.ZIP_DEFLATED) as zf:
-                # 4.1) index（最小体积模式下按 excluded 过滤 index 条目）
-                if source_zip and source_zip.is_file():
-                    if not _copy_index_from_zip(source_zip, zf, _log,
-                                                excluded):
-                        _log("error", "复制 modrinth.index.json 失败，"
-                                      "导出中止（缺 index 的包无法被识别）")
-                        raise RuntimeError("index copy failed")
-                else:
-                    _log("error", "缺少源 ZIP，无法复制 index，导出中止")
-                    raise RuntimeError("missing source zip")
+            # 4.1) index（最小体积模式下按 excluded 过滤 index 条目）
+            if source_zip and source_zip.is_file():
+                index_bytes = _read_index_from_zip(source_zip, excluded, _log)
+                if index_bytes is None:
+                    _log("error", "复制 modrinth.index.json 失败，"
+                                  "导出中止（缺 index 的包无法被识别）")
+                    raise RuntimeError("index copy failed")
+                writer.add_bytes(INDEX_FILENAME, index_bytes, inline=True)
+            else:
+                _log("error", "缺少源 ZIP，无法复制 index，导出中止")
+                raise RuntimeError("missing source zip")
 
-                # 4.2) overrides/
-                wrote_override = False
-                for p in override_files:
-                    rel = p.relative_to(ovr)
-                    arcname = OVERRIDES_DIR + "/" + rel.as_posix()
-                    zf.write(p, arcname)
-                    wrote_override = True
-                    step += 1
-                    if step % 20 == 0 or step == total_steps - 1:
-                        _prog(step, total_steps, f"打包 {rel.as_posix()}")
+            # 4.2) overrides/
+            wrote_override = False
+            for p in override_files:
+                rel = p.relative_to(ovr)
+                arcname = OVERRIDES_DIR + "/" + rel.as_posix()
+                writer.add_file(arcname, p)
+                wrote_override = True
+                step += 1
+                if step % 20 == 0 or step == total_steps - 1:
+                    _prog(step, total_steps, f"打包 {rel.as_posix()}")
 
-                if not wrote_override:
-                    # 必须**无条件**写出 overrides/ 目录条目。
-                    # 玩家端用「解压目录里有没有 overrides/」决定内容根，
-                    # 缺了它就会退化成"整合包根目录"，把本包自己的
-                    # modrinth.index.json / ea_*.json / changelog.md 当成
-                    # 更新内容写进玩家整合包根目录。
-                    zf.writestr(zipfile.ZipInfo(OVERRIDES_DIR + "/"), b"")
-                    _prog(step, total_steps, "写入 overrides/ 目录条目")
+            if not wrote_override:
+                # 必须**无条件**写出 overrides/ 目录条目。
+                # 玩家端用「解压目录里有没有 overrides/」决定内容根，
+                # 缺了它就会退化成"整合包根目录"，把本包自己的
+                # modrinth.index.json / ea_*.json / changelog.md 当成
+                # 更新内容写进玩家整合包根目录。
+                writer.add_dir_marker(OVERRIDES_DIR + "/")
+                _prog(step, total_steps, "写入 overrides/ 目录条目")
 
-                # 4.3) changelog.md
-                if changelog_md and changelog_md.strip():
-                    zf.writestr(CHANGELOG_FILE, changelog_md)
+            # 4.3) changelog.md
+            if changelog_md and changelog_md.strip():
+                writer.add_bytes(CHANGELOG_FILE, changelog_md.encode("utf-8"),
+                                 inline=True)
 
-                # 4.4) ea_settings.json
-                zf.writestr(SETTINGS_FILE,
-                            json.dumps(settings, ensure_ascii=False,
-                                       indent=2))
+            # 4.4) ea_settings.json
+            writer.add_bytes(SETTINGS_FILE,
+                             json.dumps(settings, ensure_ascii=False,
+                                        indent=2).encode("utf-8"),
+                             inline=True)
 
-                # 4.5) ea_hashes.json
-                if hashes_data is not None:
-                    zf.writestr(HASHES_FILE,
-                                json.dumps(hashes_data, ensure_ascii=False,
-                                           indent=2))
+            # 4.5) ea_hashes.json
+            if hashes_data is not None:
+                writer.add_bytes(HASHES_FILE,
+                                 json.dumps(hashes_data, ensure_ascii=False,
+                                            indent=2).encode("utf-8"),
+                                 inline=True)
 
-            # 4.6) 签名 + ea_manifest.json
-            # 签名在 zip 关闭后做：v2 要逐条读内容算 sha1（抗同 CRC 改写）
-            append_manifest_with_signature(tmp_path, settings, manifest,
-                                           bool(opts.get("tamper_proof")))
+            # 4.6) 签名 + ea_manifest.json（签名用写时记录的 sha1，不重读包）
+            writer.finish(settings, manifest,
+                          tamper_proof=bool(opts.get("tamper_proof")))
             step += 1
         except Exception:
+            writer.abort()
             try:
                 if tmp_path.exists():
                     tmp_path.unlink()
@@ -396,10 +359,10 @@ def _filter_index(data: bytes, excluded: set[str],
     return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
 
 
-def _copy_index_from_zip(source_zip: Path, out_zf: zipfile.ZipFile,
-                         log: Callable[[str, str], None],
-                         excluded: set[str] | None = None) -> bool:
-    """复制 index；失败返回 False（调用方必须视为致命错误）。"""
+def _read_index_from_zip(source_zip: Path,
+                         excluded: set[str] | None,
+                         log: Callable[[str, str], None]) -> bytes | None:
+    """从源 ZIP 里取出 index（可按最小体积模式过滤）；失败返回 None。"""
     try:
         with zipfile.ZipFile(source_zip, "r") as src:
             index_name = None
@@ -409,45 +372,42 @@ def _copy_index_from_zip(source_zip: Path, out_zf: zipfile.ZipFile,
                     break
             if not index_name:
                 log("error", "源 ZIP 中未找到 modrinth.index.json")
-                return False
+                return None
             data = src.read(index_name)
-            if excluded:
-                filtered = _filter_index(data, excluded, log)
-                if filtered is not None:
-                    data = filtered
-            out_zf.writestr(INDEX_FILENAME, data)
-            log("info", f"已复制 {INDEX_FILENAME}")
-            return True
     except Exception as e:  # noqa: BLE001
         log("error", f"复制 index 失败：{e}")
-        return False
+        return None
+    if excluded:
+        filtered = _filter_index(data, excluded, log)
+        if filtered is not None:
+            data = filtered
+    log("info", f"已复制 {INDEX_FILENAME}")
+    return data
 
 
 # ----------------------------------------------------------------------
 # 读取
 # ----------------------------------------------------------------------
-def read_settings(eapack_path: Path) -> dict | None:
+def _read_json_member(eapack_path: Path, name: str):
     try:
-        with zipfile.ZipFile(eapack_path, "r") as zf:
-            return json.loads(zf.read(SETTINGS_FILE).decode("utf-8"))
+        with ct.open_container(eapack_path) as reader:
+            if name not in reader.entries:
+                return None
+            return json.loads(reader.read(name).decode("utf-8"))
     except Exception:  # noqa: BLE001
         return None
+
+
+def read_settings(eapack_path: Path) -> dict | None:
+    return _read_json_member(eapack_path, SETTINGS_FILE)
 
 
 def read_manifest(eapack_path: Path) -> dict | None:
-    try:
-        with zipfile.ZipFile(eapack_path, "r") as zf:
-            return json.loads(zf.read(MANIFEST_FILE).decode("utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
+    return _read_json_member(eapack_path, MANIFEST_FILE)
 
 
 def read_hashes(eapack_path: Path) -> dict | None:
-    try:
-        with zipfile.ZipFile(eapack_path, "r") as zf:
-            return json.loads(zf.read(HASHES_FILE).decode("utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
+    return _read_json_member(eapack_path, HASHES_FILE)
 
 
 def read_changelog(eapack_path: Path) -> str | None:
@@ -456,18 +416,13 @@ def read_changelog(eapack_path: Path) -> str | None:
     兼容旧格式：若不存在独立文件，尝试从 settings 内嵌字段读取。
     """
     try:
-        with zipfile.ZipFile(eapack_path, "r") as zf:
-            try:
-                return zf.read(CHANGELOG_FILE).decode("utf-8")
-            except KeyError:
-                pass
-            try:
-                data = json.loads(zf.read(SETTINGS_FILE).decode("utf-8"))
-                legacy = data.get("changelog_markdown")
-                if legacy:
-                    return legacy
-            except Exception:  # noqa: BLE001, S110
-                pass
+        with ct.open_container(eapack_path) as reader:
+            if CHANGELOG_FILE in reader.entries:
+                return reader.read(CHANGELOG_FILE).decode("utf-8")
+            data = _read_json_member(eapack_path, SETTINGS_FILE) or {}
+            legacy = data.get("changelog_markdown")
+            if legacy:
+                return legacy
     except Exception:  # noqa: BLE001, S110
         pass
     return None

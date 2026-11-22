@@ -5,6 +5,8 @@ import tempfile
 import threading
 import unittest
 import zipfile
+
+import packread
 from unittest import mock
 from pathlib import Path
 
@@ -58,8 +60,8 @@ class ExportCase(unittest.TestCase):
     def test_export_ok_and_structure(self):
         path = self.run_export()
         self.assertEqual(path, self.out)
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
+        names = set(packread.names(path))
+        if True:
             self.assertIn("modrinth.index.json", names)
             self.assertIn("ea_settings.json", names)
             self.assertIn("ea_manifest.json", names)
@@ -68,7 +70,7 @@ class ExportCase(unittest.TestCase):
             self.assertIn("overrides/mods/local.jar", names)
             self.assertFalse(any(n.startswith("overrides/screenshots") for n in names))
 
-            index = json.loads(zf.read("modrinth.index.json"))
+            index = json.loads(packread.read(path, "modrinth.index.json"))
             self.assertEqual(len(index["files"]), 1)
             entry = index["files"][0]
             self.assertEqual(entry["path"], "mods/remote.jar")
@@ -106,15 +108,14 @@ class ExportCase(unittest.TestCase):
             self.root, self.out, rules=R.expand_rules(),
             lookup_fn=lambda wanted: {"mods/local.jar": LookupHit(
                 source="modrinth", urls=[""], file_name="local.jar", size=2048)})
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
-            index = json.loads(zf.read("modrinth.index.json"))
+        names = set(packread.names(path))
+        index = json.loads(packread.read(path, "modrinth.index.json"))
         self.assertEqual(index["files"], [])
         self.assertIn("overrides/mods/local.jar", names)
 
     def test_error_during_zip_leaves_no_part_file(self):
-        import zipfile as zf_mod
-        with mock.patch.object(zf_mod.ZipFile, "write",
+        from app.core.packwriter import PackWriter
+        with mock.patch.object(PackWriter, "add_file",
                                side_effect=PermissionError("denied")):
             with self.assertRaises(PermissionError):
                 EX.export_from_instance(self.root, self.out,
@@ -136,13 +137,9 @@ class ExportCase(unittest.TestCase):
         import shutil
         bad = self.tmp / "bad.eapack"
         shutil.copy(path, bad)
-        with zipfile.ZipFile(bad) as src, zipfile.ZipFile(
-                self.tmp / "new.eapack", "w") as dst:
-            for item in src.infolist():
-                data = src.read(item.filename)
-                if item.filename == "overrides/mods/local.jar":
-                    data = b"X" * len(data)
-                dst.writestr(item, data)
+        packread.rewrite_as_zip(
+            path, self.tmp / "new.eapack",
+            patch={"overrides/mods/local.jar": b"X" * 2048})
         ok, reason = eapack.verify_signature(self.tmp / "new.eapack")
         self.assertFalse(ok)
 
@@ -167,7 +164,8 @@ class ExportCase(unittest.TestCase):
         self.assertFalse(self.out.exists())
 
     def test_signature_failure_aborts(self):
-        with mock.patch.object(eapack, "_content_entries",
+        from app.core.packwriter import PackWriter
+        with mock.patch.object(PackWriter, "finish",
                                side_effect=OSError("read fail")):
             with self.assertRaises(OSError):
                 EX.export_from_instance(self.root, self.out,
@@ -181,8 +179,7 @@ class ExportCase(unittest.TestCase):
         path = EX.export_from_instance(
             self.root, self.out, rules=R.expand_rules(),
             lookup_fn=lambda wanted: {})
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
+        names = set(packread.names(path))
         self.assertIn("overrides/config/empty.toml", names)
 
     def test_cancel_returns_none_without_output(self):
@@ -202,8 +199,7 @@ class ExportCase(unittest.TestCase):
         path = EX.export_from_instance(
             self.root, self.out, rules=R.expand_rules({"saves"}),
             lookup_fn=lambda wanted: {})
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
+        names = set(packread.names(path))
         self.assertIn("overrides/saves/world/level.dat", names)
         self.assertNotIn("overrides/screenshots/shot.png", names)
         self.assertFalse(any(n.startswith("overrides/mods/") for n in names))
@@ -213,11 +209,10 @@ class ExportCase(unittest.TestCase):
         path = EX.export_from_instance(
             self.root, self.out, rules=R.expand_rules(),
             lookup_fn=lambda wanted: {}, whitelist=["config"])
-        with zipfile.ZipFile(path) as zf:
-            names = set(zf.namelist())
-            self.assertTrue(any("中文配置.toml" in n for n in names))
-            self.assertNotIn("overrides/options.txt", names)
-            self.assertTrue(all(n.isprintable() for n in names))
+        names = set(packread.names(path))
+        self.assertTrue(any("中文配置.toml" in n for n in names))
+        self.assertNotIn("overrides/options.txt", names)
+        self.assertTrue(all(n.isprintable() for n in names))
 
     def test_excluded_tops_recorded_in_settings(self):
         path = EX.export_from_instance(
@@ -230,8 +225,7 @@ class ExportCase(unittest.TestCase):
         path = EX.export_from_instance(
             self.root, self.out, rules=R.expand_rules(),
             lookup_fn=lambda wanted: {})
-        with zipfile.ZipFile(path) as zf:
-            index = json.loads(zf.read("modrinth.index.json"))
+        index = json.loads(packread.read(path, "modrinth.index.json"))
         self.assertEqual(index["files"], [])
         self.assertTrue(path.is_file())
 

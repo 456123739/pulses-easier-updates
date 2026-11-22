@@ -11,6 +11,8 @@ import sys
 import tempfile
 import unittest
 import zipfile
+
+import packread
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -89,8 +91,7 @@ class TestManifestDiff(unittest.TestCase):
     def _prepare(self):
         recorded = eapack_mod.read_hashes(self.eapack) or {}
         extract = self.tmp / "ex"
-        with zipfile.ZipFile(self.eapack) as zf:
-            zf.extractall(extract)
+        packread.extract_all(self.eapack, extract)
         root, _fb = locate_content_root(extract)
         whitelist = eapack_mod.read_whitelist(self.eapack) or ["mods"]
         return recorded, root, whitelist

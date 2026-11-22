@@ -110,8 +110,9 @@ def parse_mrpack(zip_path: Path) -> tuple[MRPack | None, str]:
         return None, f"文件不存在：{zip_path}"
 
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            names = zf.namelist()
+        from .container import open_container
+        with open_container(zip_path) as reader:
+            names = list(reader.names)
 
             # 找 modrinth.index.json
             index_name = None
@@ -123,7 +124,7 @@ def parse_mrpack(zip_path: Path) -> tuple[MRPack | None, str]:
                 return None, "不是 MR 格式：缺少 modrinth.index.json"
 
             try:
-                raw = zf.read(index_name).decode("utf-8")
+                raw = reader.read(index_name).decode("utf-8")
                 data = json.loads(raw)
             except Exception as e:  # noqa: BLE001
                 return None, f"modrinth.index.json 解析失败：{e}"

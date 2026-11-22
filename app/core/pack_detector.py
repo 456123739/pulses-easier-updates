@@ -40,10 +40,14 @@ def detect_pack_kind(zip_path: Path) -> tuple[PackKind, str]:
     if not zip_path.is_file():
         return PackKind.UNKNOWN, f"文件不存在：{zip_path}"
 
+    from .container import open_container
+    from .container import ContainerError
+
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            names = zf.namelist()
-            return _detect(names)
+        with open_container(zip_path) as reader:
+            return _detect(list(reader.names))
+    except ContainerError as e:
+        return PackKind.UNKNOWN, f"更新包损坏：{e}"
     except zipfile.BadZipFile:
         return PackKind.UNKNOWN, "不是有效的 ZIP 文件"
     except Exception as e:  # noqa: BLE001
