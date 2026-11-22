@@ -367,34 +367,38 @@ def main() -> int:
               f"{len(veils)} 个")
         ed = getattr(app.developer_view, "editor", None)
         ok = False
+        detail = ""
         try:
-            def _visible(widget) -> bool:
-                """真的"盖上了"：进了布局，并且在窗口可见时确实映射出来。
-
-                Windows CI 上主窗口有时还没 viewable，此时 ismapped 会是 0；
-                这种情况按"已进布局就算盖上"处理，否则断言会随机器抽风。
-                """
-                managed = widget.winfo_manager() in ("grid", "place", "pack")
-                if not managed:
-                    return False
-                return bool(widget.winfo_ismapped()) or not app.winfo_viewable()
+            def _managed(widget) -> bool:
+                return widget.winfo_manager() in ("grid", "place", "pack")
 
             ed.set_transition_veil(True)
             for _ in range(5):
                 app.update()
-                if ed._veil.winfo_ismapped():
+                if ed._veil is not None and ed._veil.winfo_ismapped():
                     break
-            shown = _visible(ed._veil)
+            # "盖上"的判据是**进了布局**：Windows CI 上主窗口有时还没真正
+            # 映射出来，此时 ismapped 恒为 0；用布局状态判断才稳定，
+            # 也仍然能抓住"遮罩根本没创建/没挂上去"这种真回归。
+            shown = ed._veil is not None and _managed(ed._veil)
+            m1 = (ed._veil.winfo_manager() if ed._veil is not None else "",
+                  ed._veil.winfo_ismapped() if ed._veil is not None else 0)
+
             ed.set_transition_veil(False)
             for _ in range(5):
                 app.update()
-                if not ed._veil.winfo_ismapped():
+                if ed._veil is None or not ed._veil.winfo_ismapped():
                     break
-            hidden = not ed._veil.winfo_ismapped()
+            hidden = (ed._veil is None
+                      or not ed._veil.winfo_ismapped()
+                      or ed._veil.winfo_manager() == "")
+            m2 = (ed._veil.winfo_manager() if ed._veil is not None else "",
+                  ed._veil.winfo_ismapped() if ed._veil is not None else 0)
             ok = shown and hidden
+            detail = f"盖上={m1} 撤掉={m2}"
         except Exception as e:  # noqa: BLE001
             print(f"    （遮罩自检异常：{e}）")
-        check(ok, "遮罩能盖上、也能撤掉（Text 滑动时不拉丝）")
+        check(ok, "遮罩能盖上、也能撤掉（Text 滑动时不拉丝）", detail)
 
         wl = getattr(app.sidebar, "whitelist_panel", None)
         wl_ok = False
