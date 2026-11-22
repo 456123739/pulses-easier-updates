@@ -140,12 +140,13 @@ check(existsSync(produced), `产物落盘：${produced}`,
 // 5) 让 Python 读回产物做结构断言
 const { spawnSync } = await import('node:child_process')
 const probe = spawnSync(PY, ['-c', `
-import json, sys, zipfile
+import json, sys
+from app.core.container import open_container
 p = ${JSON.stringify(produced)}
-with zipfile.ZipFile(p) as zf:
-    names = zf.namelist()
-    idx = json.loads(zf.read('modrinth.index.json'))
-    man = json.loads(zf.read('ea_manifest.json'))
+with open_container(p) as reader:
+    names = list(reader.names)
+    idx = json.loads(reader.read('modrinth.index.json'))
+    man = json.loads(reader.read('ea_manifest.json'))
 print(json.dumps({
   'files': len(idx['files']),
   'urls': [f['downloads'][0] for f in idx['files']],
