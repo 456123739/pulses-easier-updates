@@ -16,8 +16,7 @@ const OPTIONS = [
   { id: 'tamper_proof', label: '完整性签名', desc: '逐条记录内容哈希，玩家端会拒绝被改坏的更新包（不证明来源）' },
   { id: 'precompute_overrides', label: '预计算覆盖文件', desc: '打包时就比对好，玩家端比对更快' },
   { id: 'min_size', label: '压缩到最小体积', desc: '忽略排除目录，包更小但更新更慢' },
-  { id: 'compact_container', label: '紧凑容器', desc: '用块压缩替代 zip：同样内容小约 5%，解压更快；需要新版客户端' },
-  { id: 'world_transform', label: '存档优化', desc: '去掉 region 文件的逐区块压缩外壳（仅当包含 saves 时生效），世界部分可再小一半' },
+  { id: 'super_compress', label: 'Osmium 超级压缩（beta）', desc: '锇密度引擎：EAPK2 + 存档/JAR 去外壳，包更小；需要新版客户端。关闭时导出旧版 ZIP（旧客户端可读）' },
 ]
 
 const DIR_STRATEGIES = ['完全匹配', '替换重名', '跳过重名']
@@ -26,8 +25,7 @@ const DEFAULT_OPTIONS: Record<string, boolean> = {
   tamper_proof: true,
   precompute_overrides: true,
   min_size: false,
-  compact_container: true,
-  world_transform: true,
+  super_compress: false,
 }
 
 const LOADERS: Record<string, string> = {

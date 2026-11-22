@@ -123,6 +123,15 @@ def export_from_instance(
     log = log or _log_default
     _prog = progress or _prog_default
     opts = dict(opts or {})
+    try:
+        from .database import get_export_options
+        _base = dict(get_export_options())
+        _base.update({k: v for k, v in opts.items() if v is not None})
+        opts = _base
+    except Exception:                                # noqa: BLE001
+        pass
+    from .packwriter import resolve_export_options
+    wopts = resolve_export_options(opts)
     root = Path(root)
     out_path = Path(out_path)
     whitelist = list(whitelist or [])
@@ -263,7 +272,9 @@ def export_from_instance(
                         for item in index_files}
         hashes_data = None
         if opts.get("include_hashes", True) or opts.get("precompute_overrides"):
-            hashes_data = build_hash_manifest(stage, whitelist, index_hashes)
+            hashes_data = build_hash_manifest(
+                stage, whitelist, index_hashes,
+                saves_folder_hash=not wopts["use_v2"])
         _prog(len(items) + 4, total_steps, "写入哈希清单")
 
         # ---- 6) 打 ZIP ----
@@ -295,12 +306,12 @@ def export_from_instance(
         drop(tmp_path)
         _prog(len(items) + 5, total_steps, "写入更新包")
         log("info", f"写入 {out_path.name}...")
-        from .database import get_export_options
-        _opts = get_export_options()
         writer = PackWriter(
             tmp_path,
-            use_v2=bool(_opts.get("compact_container", True)),
-            mca_transform=bool(_opts.get("world_transform", True)),
+            use_v2=wopts["use_v2"],
+            level=wopts["level"],
+            mca_transform=wopts["mca"],
+            jar_transform=wopts["jar"],
             log=log)
         try:
             writer.add_bytes(INDEX_FILENAME, dumps(index), inline=True)

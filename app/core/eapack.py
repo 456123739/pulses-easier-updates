@@ -20,7 +20,8 @@ from pathlib import Path
 from ..config import NEVER_PACK_FILES
 from . import container as ct
 from .packsign import (compute_signature, compute_signature_v2,
-                       content_entries as _content_entries)
+                       content_entries as _content_entries,
+                       zip_content_entries_v2 as _zip_content_entries)
 from .database import get_export_options, get_whitelist
 from .hashing import build_hash_manifest
 from .mrpack import (
@@ -72,8 +73,10 @@ def verify_signature(eapack_path: Path) -> tuple[bool, str]:
     """
     eapack_path = Path(eapack_path)
     crc_entries: list[tuple[str, int, int]] | None = None
+    is_zip = False
     try:
         with ct.open_container(eapack_path) as reader:
+            is_zip = isinstance(reader, ct.ZipReader)
             manifest = json.loads(reader.read(MANIFEST_FILE).decode("utf-8"))
             if not isinstance(manifest, dict):
                 return False, "ea_manifest.json 结构异常"
@@ -85,7 +88,7 @@ def verify_signature(eapack_path: Path) -> tuple[bool, str]:
             except Exception:  # noqa: BLE001
                 settings = {}
             version = int(manifest.get("signature_version") or 1)
-            if version < 2 and isinstance(reader, ct.ZipReader):
+            if version < 2 and is_zip:
                 crc_entries = [(i.filename, i.file_size, i.CRC)
                                for i in reader._zf.infolist()
                                if i.filename != MANIFEST_FILE]
@@ -94,8 +97,9 @@ def verify_signature(eapack_path: Path) -> tuple[bool, str]:
 
     try:
         if version >= 2:
-            got = compute_signature_v2(settings or {}, manifest,
-                                       _content_entries(eapack_path))
+            entries2 = (_zip_content_entries(eapack_path) if is_zip
+                        else _content_entries(eapack_path))
+            got = compute_signature_v2(settings or {}, manifest, entries2)
         else:
             if crc_entries is None:
                 return False, "旧版签名口径只能校验 zip 包"
@@ -117,6 +121,7 @@ def export_eapack(
     changelog_md: str,
     version: str = "",
     excluded_folders: list[str] | None = None,
+    opts: dict | None = None,
     log: Callable[[str, str], None] | None = None,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> Path | None:
@@ -133,7 +138,11 @@ def export_eapack(
     out_path = Path(out_path)
     excluded = set(excluded_folders or [])
 
-    opts = get_export_options()
+    _db_opts = get_export_options()
+    _db_opts.update({k: v for k, v in (opts or {}).items() if v is not None})
+    opts = _db_opts
+    from .packwriter import resolve_export_options
+    wopts = resolve_export_options(opts)
     whitelist = get_whitelist()
 
     if not opts.get("min_size"):
@@ -244,9 +253,10 @@ def export_eapack(
 
         from .packwriter import PackWriter
 
-        use_v2 = bool(opts.get("compact_container", True))
-        writer = PackWriter(tmp_path, use_v2=use_v2,
-                            mca_transform=bool(opts.get("world_transform", True)),
+        writer = PackWriter(tmp_path, use_v2=wopts["use_v2"],
+                            level=wopts["level"],
+                            mca_transform=wopts["mca"],
+                            jar_transform=wopts["jar"],
                             log=_log)
         try:
             # 4.1) index（最小体积模式下按 excluded 过滤 index 条目）

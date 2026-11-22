@@ -76,88 +76,91 @@ class ApiError(Exception):
 class Api:
     def __init__(self, controller, bus: EventBus, jobs=None,
                  e2e: bool | None = None):
-        self.controller = controller
-        self.bus = bus
-        self.jobs = jobs
-        self.window = None
+        # js_api 对象会被 pywebview 反射遍历：所有对象引用一律私有，
+        # 只暴露方法。曾因公有 self.window 触发 window.native 的 COM 递归。
+        self._controller = controller
+        self._bus = bus
+        self._jobs = jobs
+        self._window = None
         # 报告落盘之后才允许关窗：关窗守卫会看这个标记
         self.e2e_done = False
         self.e2e = e2e_enabled() if e2e is None else bool(e2e)
         self._lock = threading.RLock()
         self._methods: dict[str, Callable[[dict], Any]] = {
-            "app.bootstrap": lambda p: self.controller.bootstrap(),
-            "app.state": lambda p: self.controller.snapshot(),
-            "app.role.set": lambda p: self.controller.set_role(p.get("role", "player")),
-            "app.pick_pack": lambda p: self.controller.pick_pack(p.get("path", "")),
-            "app.pack.clear": lambda p: self.controller.clear_pack(),
-            "app.recent.open": lambda p: self.controller.open_path(p.get("path", "")),
-            "app.recent.clear": lambda p: self.controller.clear_recent(),
-            "app.settings.get": lambda p: self.controller.settings(),
-            "app.settings.set": lambda p: self.controller.update_settings(p.get("patch") or {}),
-            "app.dialog.respond": lambda p: self.controller.dialog_respond(
+            "app.bootstrap": lambda p: self._controller.bootstrap(),
+            "app.state": lambda p: self._controller.snapshot(),
+            "app.role.set": lambda p: self._controller.set_role(p.get("role", "player")),
+            "app.pick_pack": lambda p: self._controller.pick_pack(p.get("path", "")),
+            "app.pack.clear": lambda p: self._controller.clear_pack(),
+            "app.recent.open": lambda p: self._controller.open_path(p.get("path", "")),
+            "app.recent.clear": lambda p: self._controller.clear_recent(),
+            "app.settings.get": lambda p: self._controller.settings(),
+            "app.settings.set": lambda p: self._controller.update_settings(p.get("patch") or {}),
+            "app.dialog.respond": lambda p: self._controller.dialog_respond(
                 p.get("id", ""), p.get("button", ""), bool(p.get("checked"))),
-            "app.log.clear": lambda p: self.controller.clear_log(),
-            "app.open_external": lambda p: self.controller.open_external(p.get("url", "")),
+            "app.log.clear": lambda p: self._controller.clear_log(),
+            "app.open_external": lambda p: self._controller.open_external(p.get("url", "")),
             # ---- 更新流程 ----
-            "update.pick": lambda p: self.controller.attach_update(
-                self.controller.flow.import_update(p.get("path", ""))),
-            "update.clear": lambda p: self.controller.flow.clear(),
-            "flow.state": lambda p: self.controller.flow.snapshot(),
-            "update.changelog": lambda p: {"changelog": self.controller.flow.changelog},
-            "pack.scan": lambda p: self.controller.flow.start_scan(
+            "update.pick": lambda p: self._controller.attach_update(
+                self._controller.flow.import_update(p.get("path", ""))),
+            "update.clear": lambda p: self._controller.flow.clear(),
+            "flow.state": lambda p: self._controller.flow.snapshot(),
+            "update.changelog": lambda p: {"changelog": self._controller.flow.changelog},
+            "pack.scan": lambda p: self._controller.flow.start_scan(
                 p.get("strategies") or {}, p.get("checked") or {}),
-            "update.apply": lambda p: self.controller.flow.start_apply(),
-            "update.abort": lambda p: self.controller.flow.abort(),
+            "update.apply": lambda p: self._controller.flow.start_apply(),
+            "update.abort": lambda p: self._controller.flow.abort(),
             "update.pause.resume":
-                lambda p: self.controller.flow.resume_pause(),
+                lambda p: self._controller.flow.resume_pause(),
             "update.pause.rescan":
-                lambda p: self.controller.flow.rescan_pause(),
-            "update.retry": lambda p: self.controller.flow.retry(p.get("path", "")),
-            "update.giveup": lambda p: self.controller.flow.give_up(),
-            "update.strategy.set": lambda p: self.controller.flow.set_strategy(
+                lambda p: self._controller.flow.rescan_pause(),
+            "update.retry": lambda p: self._controller.flow.retry(p.get("path", "")),
+            "update.giveup": lambda p: self._controller.flow.give_up(),
+            "update.strategy.set": lambda p: self._controller.flow.set_strategy(
                 p.get("name", ""), p.get("value", ""), p.get("checked")),
-            "update.strategy.setAll": lambda p: self.controller.flow.set_all(
+            "update.strategy.setAll": lambda p: self._controller.flow.set_all(
                 p.get("value", ""), p.get("checked"), p.get("names")),
-            "update.resume": lambda p: self.controller.flow.resume(),
-            "update.config.export": lambda p: self.controller.flow.export_config(
+            "update.resume": lambda p: self._controller.flow.resume(),
+            "update.config.export": lambda p: self._controller.flow.export_config(
                 p.get("path", "")),
-            "update.config.import": lambda p: self.controller.flow.import_config(
+            "update.config.import": lambda p: self._controller.flow.import_config(
                 p.get("path", "")),
             # ---- 开发者：制作更新包 ----
             # dev.open 是界面用的唯一入口：实例目录 / 导出包都认，认出类型就返回，
             # 扫描与解析在后台线程（见 dev.DevFlow.open）。
-            "dev.open": lambda p: self.controller.dev.open(p.get("path", "")),
-            "dev.pick": lambda p: self.controller.dev.import_zip(p.get("path", "")),
-            "dev.instance.pick": lambda p: self.controller.dev.import_instance(
+            "dev.open": lambda p: self._controller.dev.open(p.get("path", "")),
+            "dev.pick": lambda p: self._controller.dev.import_zip(p.get("path", "")),
+            "dev.instance.pick": lambda p: self._controller.dev.import_instance(
                 p.get("path", "")),
-            "dev.rule.set": lambda p: self.controller.dev.set_rule(
+            "dev.rule.set": lambda p: self._controller.dev.set_rule(
                 p.get("key", ""), bool(p.get("value"))),
-            "dev.cfkey.set": lambda p: self.controller.dev.set_cf_key(
+            "dev.cfkey.set": lambda p: self._controller.dev.set_cf_key(
                 p.get("key", "")),
-            "dev.state": lambda p: self.controller.dev.snapshot(),
-            "dev.clear": lambda p: self.controller.dev.clear(),
-            "dev.option.set": lambda p: self.controller.dev.set_option(
+            "dev.state": lambda p: self._controller.dev.snapshot(),
+            "dev.clear": lambda p: self._controller.dev.clear(),
+            "dev.option.set": lambda p: self._controller.dev.set_option(
                 p.get("key", ""), bool(p.get("value"))),
-            "dev.changelog.set": lambda p: self.controller.dev.set_changelog(
+            "dev.changelog.set": lambda p: self._controller.dev.set_changelog(
                 p.get("text", "")),
-            "dev.strategy.set": lambda p: self.controller.dev.set_strategy(
+            "dev.strategy.set": lambda p: self._controller.dev.set_strategy(
                 p.get("name", ""), p.get("value", ""), p.get("excluded")),
-            "dev.sub.set": lambda p: self.controller.dev.set_sub(
+            "dev.sub.set": lambda p: self._controller.dev.set_sub(
                 p.get("path", ""), p.get("checked"), p.get("strategy")),
-            "dev.sub.all": lambda p: self.controller.dev.set_sub_all(
+            "dev.sub.all": lambda p: self._controller.dev.set_sub_all(
                 p.get("folder", ""), bool(p.get("checked"))),
-            "dev.export": lambda p: self.controller.dev.start_export(p.get("path", "")),
-            "dev.abort": lambda p: self.controller.dev.abort(),
+            "dev.export": lambda p: self._controller.dev.start_export(p.get("path", "")),
+            "dev.abort": lambda p: self._controller.dev.abort(),
             # ---- 白名单 / 数据库 ----
-            "app.whitelist.get": lambda p: self.controller.whitelist(),
-            "app.whitelist.set": lambda p: self.controller.set_whitelist(
+            "app.whitelist.get": lambda p: self._controller.whitelist(),
+            "app.whitelist.set": lambda p: self._controller.set_whitelist(
                 p.get("items") or []),
-            "app.db.get": lambda p: self.controller.db_path(),
-            "app.db.set": lambda p: self.controller.set_db_path(p.get("path", "")),
+            "app.db.get": lambda p: self._controller.db_path(),
+            "app.db.set": lambda p: self._controller.set_db_path(p.get("path", "")),
             # ---- 无边框窗口的控制（浏览器里没有 window，一律 NO_WINDOW）----
             "window.expand": lambda p: self.window_expand(),
             "window.minimize": lambda p: self.window_minimize(),
             "window.toggle_max": lambda p: self.window_toggle_max(),
+            "window.state": lambda p: self.window_state(),
             "window.close": lambda p: self.window_close(),
             "window.move": lambda p: self.window_move(
                 int(p.get("x", 0)), int(p.get("y", 0))),
@@ -183,9 +186,9 @@ class Api:
     # 无边框窗口
     # ------------------------------------------------------------------
     def _win(self):
-        if self.window is None:
+        if self._window is None:
             raise ApiError("NO_WINDOW", "当前不是桌面窗口")
-        return self.window
+        return self._window
 
     def window_expand(self) -> dict:
         """logo 小窗 → 主窗口：Python 侧做尺寸动画，页面只管画内容。"""
@@ -209,17 +212,34 @@ class Api:
         self._win().minimize()
         return {"minimized": True}
 
+    def _is_maxed(self, win) -> bool:
+        from .window_shell import is_maximized
+        import sys as _sys
+        if _sys.platform == "win32":
+            return is_maximized()
+        return bool(getattr(win, "maximized", False))
+
+    def window_state(self) -> dict:
+        win = self._win()
+        return {"maximized": self._is_maxed(win)}
+
     def window_toggle_max(self) -> dict:
         win = self._win()
-        if bool(getattr(win, "maximized", False)):
+        from .window_shell import (apply_window_rounding, clear_window_rounding,
+                                   is_maximized)
+        # 不能信 pywebview 的 window.maximized（maximize() 后不一定更新），
+        # 以 Win32 IsZoomed 为准，否则第二次点会又执行 maximize。
+        if self._is_maxed(win):
             win.restore()
+            apply_window_rounding(win)
             return {"maximized": False}
         win.maximize()
+        clear_window_rounding()
         return {"maximized": True}
 
     def window_close(self) -> dict:
         win = self._win()
-        if not self.controller.can_close():
+        if not self._controller.can_close():
             return {"closed": False, "blocked": True}
         win.destroy()
         return {"closed": True}
@@ -236,16 +256,16 @@ class Api:
         win.resize(w, h)
         if x is not None and y is not None:
             win.move(int(x), int(y))
-        if getattr(self, "window_rounding", "") == "region":
-            try:
-                from .window_shell import apply_window_rounding
-                apply_window_rounding(win)
-            except Exception:                          # noqa: BLE001, S110
-                pass
+        try:
+            from .window_shell import apply_window_rounding
+            apply_window_rounding(win)
+        except Exception:                          # noqa: BLE001, S110
+            pass
         return {"width": w, "height": h}
 
     def bind_window(self, window) -> None:
-        self.window = window
+        # 私有：公有 self.window 会被 js_api 反射遍历到 window.native
+        self._window = window
 
     # ------------------------------------------------------------------
     def invoke(self, method: str, params: dict | None = None) -> dict:
@@ -273,7 +293,7 @@ class Api:
             return _err("INVALID_INPUT", str(exc))
         except Exception as exc:                      # noqa: BLE001
             try:
-                self.bus.log(f"操作 {method} 失败：{exc}", "ERROR")
+                self._bus.log(f"操作 {method} 失败：{exc}", "ERROR")
             except Exception:                          # noqa: BLE001, S110
                 pass
             return _err(getattr(exc, "code", "INTERNAL"), str(exc) or "操作失败")
@@ -348,7 +368,7 @@ class Api:
 
     def _e2e_can_close(self, params: dict) -> dict:
         """真机上这一问等价于 window.events.closing：拦不拦、为什么拦。"""
-        ok = bool(self.controller.can_close())
+        ok = bool(self._controller.can_close())
         return {"canClose": ok, "blocked": not ok}
 
     def _e2e_report(self, payload=None) -> dict:
@@ -403,7 +423,7 @@ class Api:
                                + f"（写报告失败：{exc}）").strip()
         self.e2e_done = True
         try:
-            self.bus.log(f"e2e 报告：{path}（{len(steps)} 步，"
+            self._bus.log(f"e2e 报告：{path}（{len(steps)} 步，"
                          f"{'通过' if report['ok'] else '失败'}）", "INFO")
         except Exception:                              # noqa: BLE001, S110
             pass
@@ -414,7 +434,7 @@ class Api:
 
     def _e2e_quit(self) -> None:
         """后台关窗：报告已落盘，这里失败也不影响结论。"""
-        window = self.window
+        window = self._window
         if window is None:
             return
 
@@ -429,19 +449,19 @@ class Api:
 
     # ------------------------------------------------------------------
     def pick_path(self, kind: str = "file", filters: str = "") -> dict:
-        if self.window is None:
+        if self._window is None:
             return _err("NO_WINDOW", "窗口尚未就绪")
         try:
             import webview
             if kind == "folder":
-                result = self.window.create_file_dialog(
+                result = self._window.create_file_dialog(
                     webview.FileDialog.FOLDER)
             elif kind == "save":
-                result = self.window.create_file_dialog(
+                result = self._window.create_file_dialog(
                     webview.FileDialog.SAVE, save_filename=filters or "")
             else:
                 patterns = tuple(filters) if filters else ()
-                result = self.window.create_file_dialog(
+                result = self._window.create_file_dialog(
                     webview.FileDialog.OPEN,
                     allow_multiple=False,
                     file_types=patterns)
@@ -464,18 +484,18 @@ class Api:
             except Exception:                          # noqa: BLE001, S110
                 continue
         if not clean:
-            self.bus.dnd("error", "没能拿到拖入文件的路径，请用点击选择")
+            self._bus.dnd("error", "没能拿到拖入文件的路径，请用点击选择")
             return _err("NO_PATH", "没能拿到拖入文件的路径")
-        self.bus.emit("dnd", {"kind": "ok", "paths": clean})
+        self._bus.emit("dnd", {"kind": "ok", "paths": clean})
         try:
-            self.controller.open_path(clean[0])
+            self._controller.open_path(clean[0])
         except ApiError as exc:
-            self.bus.dnd("error", exc.message)
+            self._bus.dnd("error", exc.message)
             return _err(exc.code, exc.message)
         except Exception as exc:                       # noqa: BLE001
             # 开发者端的分类错误（例如误拖了 .eapack）走这里：要让玩家看见原因
             message = str(exc) or "打不开这个文件"
-            self.bus.dnd("error", message)
+            self._bus.dnd("error", message)
             return _err(getattr(exc, "code", "DROP_FAILED"), message)
         return {"ok": True, "data": {"paths": clean}}
 

@@ -88,6 +88,21 @@ class WindowApiCase(unittest.TestCase):
         self.assertEqual(res["data"], {"width": 1200, "height": 800})
         self.assertIn(("resize", 1200, 800), self.win.calls)
 
+    def test_js_api_has_no_public_object_graph(self):
+        # pywebview 会反射 js_api 对象：公有 window/controller/bus/jobs 会把
+        # 整个对象图（含 window.native 的 .NET 窗体）拖进遍历，实测刷 COM 递归。
+        for name in ("window", "controller", "bus", "jobs"):
+            self.assertFalse(hasattr(self.api, name), name)
+
+    def test_window_state(self):
+        self.api.bind_window(self.win)
+        res = self.api.invoke("window.state", {})
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["data"]["maximized"])
+        self.win.maximized = True
+        res = self.api.invoke("window.state", {})
+        self.assertTrue(res["data"]["maximized"])
+
     def test_close_respects_guard(self):
         self.api.bind_window(self.win)
         self.ctl.can_close.return_value = False

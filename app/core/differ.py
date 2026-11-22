@@ -404,6 +404,19 @@ def _root_files(root: Path) -> list[Path]:
 SAVES_TOP = "saves"
 
 
+def _dedupe_changes(changes: list[Change]) -> list[Change]:
+    """同一 (路径, 类型) 只保留一条：清单/文件系统两条路径都不许重复。"""
+    seen: set[tuple[str, str]] = set()
+    out: list[Change] = []
+    for change in changes:
+        key = (change.rel_path.as_posix(), change.kind.value)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(change)
+    return out
+
+
 def _saves_worlds(root) -> dict[str, Path]:
     """saves/ 下的一级子目录 = 一个存档（世界）。"""
     if root is None:
@@ -419,26 +432,35 @@ def _saves_worlds(root) -> dict[str, Path]:
     return worlds
 
 
-def _diff_saves(old_root, new_root, index_by_top, folder_hashes) -> list[Change]:
+def _diff_saves(old_root, new_root, index_by_top, folder_hashes,
+                saves_worlds=None) -> list[Change]:
     """
     存档级：每个 `saves/<世界>` 是一条**文件夹级**变更，不细到文件。
 
     - 新包有、本地没有 → ADDED
     - 两侧都有、内容不同 → MODIFIED（优先用 ea_hashes 里 `saves/<世界>` 的记录）
-    - 本地有、新包没有且新包确实管存档 → DELETED
-    - 新旧包都没有逐世界记录（老包只记了 `saves` 整目录）→ 返回 None，
+    - 本地有、新包没有 → **保留**（不判删除）：存档不可再生，取消导出
+      某一世界只是"这次不带它"，不能连玩家的世界一起删。
+    - 没有任何逐世界信息（老包只记了 `saves` 整目录）→ 返回 None，
       调用方退回原来的"整个 saves 目录"粒度，保证兼容。
     """
     old_worlds = _saves_worlds(old_root)
     new_worlds = _saves_worlds(new_root) if new_root is not None else {}
     idx = (index_by_top or {}).get(SAVES_TOP, {})
-    idx_worlds = {rel.split("/", 1)[1] for rel in idx if "/" in rel}
-    recorded = {k.split("/", 1)[1]: v for k, v in (folder_hashes or {}).items()
-                if k.startswith(SAVES_TOP + "/") and v}
+    # index_by_top 的 key 是完整路径（saves/World/region/r.mca）：
+    # 先剥掉 "saves/" 再取第一段，别拿 World/region/r.mca 当世界名。
+    idx_worlds = {str(rel).split(SAVES_TOP + "/", 1)[1].split("/", 1)[0]
+                  for rel in idx if str(rel).startswith(SAVES_TOP + "/")}
+    recorded = dict(saves_worlds or {})
+    if not recorded and SAVES_TOP not in (folder_hashes or {}):
+        # 只有没有整目录哈希时才把 "saves/World" 旧键当逐世界记录；
+        # 两者同时存在时以整目录哈希为准，避免同一世界被两种口径各算一次。
+        recorded = {k.split("/", 1)[1]: v
+                    for k, v in (folder_hashes or {}).items()
+                    if k.startswith(SAVES_TOP + "/") and v}
     if not recorded and not new_worlds and not idx_worlds:
         return None                                     # 老包：叫调用方走原路
     known = set(recorded) | set(new_worlds) | set(idx_worlds)
-    has_pack_saves = bool(known)
     out: list[Change] = []
     for name in sorted(set(old_worlds) | known):
         rel = Path(SAVES_TOP) / name
@@ -446,9 +468,7 @@ def _diff_saves(old_root, new_root, index_by_top, folder_hashes) -> list[Change]
             out.append(Change(rel, ChangeKind.ADDED, is_folder_level=True))
             continue
         if name not in known:
-            if has_pack_saves:
-                out.append(Change(rel, ChangeKind.DELETED, is_folder_level=True))
-            continue
+            continue                       # 本地多出来的世界：保留，不删
         target = recorded.get(name)
         if target is None and name in new_worlds:
             target = folder_hash(new_worlds[name], content=True)
@@ -468,6 +488,7 @@ def diff_packs_parallel(
     threads: int = 16,
     progress: Callable[[int, int, str], None] | None = None,
     folder_hashes: dict[str, str] | None = None,
+    saves_worlds: dict[str, str] | None = None,
 ) -> DiffResult:
     """
     folder_hashes：更新包 `ea_hashes.json` 里记录的**顶层文件夹内容哈希**
@@ -505,7 +526,8 @@ def diff_packs_parallel(
         has_index = name in index_by_top
 
         if name == SAVES_TOP and name not in wl_top:
-            per_world = _diff_saves(old_root, new_root, index_by_top, f_hashes)
+            per_world = _diff_saves(old_root, new_root, index_by_top, f_hashes,
+                        saves_worlds=saves_worlds)
             if per_world is not None:
                 result.added.extend(c for c in per_world
                                     if c.kind == ChangeKind.ADDED)
@@ -587,6 +609,10 @@ def diff_packs_parallel(
 
         _p(i + 1, max(1, total_dirs), "merge")
 
+    result.added = _dedupe_changes(result.added)
+    result.modified = _dedupe_changes(result.modified)
+    result.deleted = _dedupe_changes(result.deleted)
+
     # 根目录散文件：旧实现把"两侧都有"一律判 MODIFIED（从不比内容），
     # 于是每次都会重写 options.txt 之类的文件。现在按内容比对：
     # index 里声明过哈希就用它，否则两侧各算一次 sha1。
@@ -648,6 +674,7 @@ def diff_from_manifest(
     manifest_files: dict[str, dict],
     index_hashes: dict[str, dict] | None = None,
     folder_hashes: dict[str, str] | None = None,
+    saves_worlds: dict[str, str] | None = None,
     whitelist: list[str] | None = None,
     compare_root: Path | None = None,
     pack_tops: set[str] | None = None,
@@ -694,10 +721,10 @@ def diff_from_manifest(
         per_top.setdefault(top, {})[sub] = (algo, value)
 
     # 顶层目录 = 包里的目录（调用方给的）+ 白名单文件清单 + index 清单
-    # + 非白名单目录哈希清单
-    # folders 里可能记的是 `saves/<世界>`：顶层仍要出现，交给存档级比对
+    # + 非白名单目录哈希清单。f_hashes 里可能有 "saves/World" 这类两级键：
+    # 顶层只取第一段，否则会把 saves/World 当成顶层重复处理。
     folder_tops = {str(k).split("/", 1)[0] for k in f_hashes}
-    tops = set(per_top) | set(index_by_top) | set(f_hashes) | folder_tops
+    tops = set(per_top) | set(index_by_top) | folder_tops
     if pack_tops:
         tops |= set(pack_tops)
 
@@ -729,7 +756,9 @@ def diff_from_manifest(
         # 非白名单目录：既没有记录哈希、包里又确实有这个目录 → 判不了
         # （saves 可以只记逐世界哈希，视作"有记录"）
         has_folder_hash = (top in f_hashes
-                           or any(str(k).startswith(top + "/") for k in f_hashes))
+                           or any(str(k).startswith(top + "/") for k in f_hashes)
+                           or top in index_by_top
+                           or (top == SAVES_TOP and bool(saves_worlds)))
         if not has_folder_hash and (top in (pack_tops or set())
                                     or (old_root / top).is_dir()):
             return None
@@ -752,7 +781,8 @@ def diff_from_manifest(
         idx_entries = index_by_top.get(top, {})
 
         if top == SAVES_TOP and top not in wl_top:
-            per_world = _diff_saves(old_root, compare_root, index_by_top, f_hashes)
+            per_world = _diff_saves(old_root, compare_root, index_by_top, f_hashes,
+                        saves_worlds=saves_worlds)
             if per_world is not None:
                 result.added.extend(c for c in per_world
                                     if c.kind == ChangeKind.ADDED)
@@ -890,6 +920,9 @@ def diff_from_manifest(
         # 根目录散文件**不做删除判定**：与文件系统比对保持一致
         # （包没带的根文件一律保留，避免误删玩家自己的文件）
 
+    result.added = _dedupe_changes(result.added)
+    result.modified = _dedupe_changes(result.modified)
+    result.deleted = _dedupe_changes(result.deleted)
     return result
 
 def diff_packs(old_root: Path, new_root: Path,

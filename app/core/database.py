@@ -61,11 +61,12 @@ DEFAULT_EXPORT_OPTIONS = {
     "precompute_overrides": True,
     "min_size": False,
     "compress": True,
-    # 容器：True = 新版块压缩（zstd，比 zip 小 ~6%，解压更快）
-    # False = 传统 zip（老客户端也能打开）
-    "compact_container": True,
-    # 存档 region 去 zlib 外壳（只在包内含 saves 时生效，玩家端自动还原）
-    "world_transform": True,
+    # 0.13.0 的旧键：仅为升级兼容保留，解析时**忽略**（避免老库把默认导出
+    # 悄悄变成新格式）。现在只有 super_compress 决定容器与存档变换。
+    "compact_container": False,
+    "world_transform": False,
+    # Osmium 超级压缩（beta）：EAPK2 + 存档/JAR 变换（需要新版客户端），默认关
+    "super_compress": False,
 }
 
 # ----------------------------------------------------------------------

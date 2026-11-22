@@ -333,6 +333,7 @@ class Flow:
             recorded = eapack_mod.read_hashes(zpath) or {}
             manifest = recorded.get("files") or {}
             folders = recorded.get("folders") or {}
+            saves_worlds = recorded.get("saves_worlds") or {}
             index_hashes = dict(recorded.get("index") or {})
             # "要下载的文件"（index 声明、包内没有）不在 ea_hashes 里，
             # 只能从更新包的 modrinth.index.json 拿。少了这一步，它们既不会
@@ -391,8 +392,8 @@ class Flow:
                 try:
                     diff = diff_from_manifest(
                         root, manifest, index_hashes=index_hashes,
-                        folder_hashes=folders, whitelist=whitelist,
-                        compare_root=content_root,
+                        folder_hashes=folders, saves_worlds=saves_worlds,
+                        whitelist=whitelist, compare_root=content_root,
                         pack_tops=set(zip_tops),
                         threads=max(1, min(64, threads)), progress=_prog)
                 except Exception as exc:                     # noqa: BLE001
@@ -401,7 +402,7 @@ class Flow:
             if diff is None:
                 diff = diff_packs_parallel(
                     root, content_root, whitelist=whitelist,
-                    folder_hashes=folders,
+                    folder_hashes=folders, saves_worlds=saves_worlds,
                     threads=max(1, min(64, threads)), progress=_prog)
                 # 兜底比对只看磁盘上解压出来的内容，index 声明的文件它不知道；
                 # 这里把"包内没有、只在 index 里"的文件补进去（不判删除）。
