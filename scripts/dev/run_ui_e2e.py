@@ -156,8 +156,10 @@ def verify_exported(path: Path) -> bool:
                 "导出包写了文件哈希清单")
     signed, reason = eapack_mod.verify_signature(path)
     ok &= check(bool(signed) and not reason, "导出包签名校验通过", reason or "")
-    with zipfile.ZipFile(path) as zf:
-        names = [n.replace("\\", "/") for n in zf.namelist()]
+    # 导出包可能是 zip 或新版块压缩容器：用统一入口读，别假设格式
+    from app.core.container import open_container
+    with open_container(path) as reader:
+        names = [n.replace("\\", "/") for n in reader.names]
     ok &= check(not any(n.startswith("overrides/config/") for n in names),
                 "被排除的目录没有进包",
                 json.dumps([n for n in names if "config" in n][:5]))
