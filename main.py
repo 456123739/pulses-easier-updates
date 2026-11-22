@@ -63,6 +63,7 @@ def _saved_ui_mode() -> str:
 
 _ui = (os.environ.get("PULSES_UI", "").strip().lower()
        or _saved_ui_mode())
+_WEB_FALLBACK_REASON = ""
 # 只有"当作脚本运行"才启动界面：测试/CI 里 import main 不能顺手拉起一个窗口
 if __name__ == "__main__" and _ui in ("web", "auto", ""):
     _stage = os.environ.get("PULSES_E2E_STAGE", "")
@@ -86,7 +87,8 @@ if __name__ == "__main__" and _ui in ("web", "auto", ""):
         raise RuntimeError(f"新界面没就绪（退出码 {_rc}），退回旧界面")
     except SystemExit:
         raise
-    except Exception:                              # noqa: BLE001
+    except Exception as _exc:                      # noqa: BLE001
+        _WEB_FALLBACK_REASON = str(_exc) or _exc.__class__.__name__
         import traceback as _tb
         _txt = _tb.format_exc()
         _log = Path(os.environ.get("PULSES_E2E_REPORT", "") + ".err") \
@@ -179,6 +181,9 @@ def _setup_frozen_logging() -> None:
 
 def main():
     _setup_frozen_logging()
+    if _WEB_FALLBACK_REASON:
+        # 给 Tk 主窗口一个可读的原因：不要再让玩家以为“新界面就长这样”
+        os.environ["PULSES_WEB_FALLBACK"] = _WEB_FALLBACK_REASON
     try:
         # 记一行资源目录：出问题时看日志就知道 logo 是从哪读的
         from app.paths import assets_dir

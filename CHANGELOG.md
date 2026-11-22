@@ -66,6 +66,10 @@
   944×668 主窗；窗口区域用 `SetWindowRgn` 固定 12 px 圆角，窗口外是桌面。
 * 修复 64 位 `ctypes` 句柄截断、从后台线程访问 `window.native`、
   最大化状态判断、缩放拖拽累加漂移、标题栏双击冒泡等问题。
+* 修复 WebView2 检测漏掉**用户级安装**（`%LOCALAPPDATA%\Microsoft\EdgeWebView`）
+  的问题：Win11 上很常见，旧逻辑会误判“没有运行时”并静默退回 Tk，
+  玩家看到的就是带原生标题栏的兼容界面。
+* 真回退时 Tk 主窗口底部会显示原因和「安装 WebView2」按钮，不再假装新界面。
 * 原生验收探针 `scripts/dev/win_native_probe.py` 纳入 CI 强制门禁：
   真实启动轨迹、圆角像素、最大化/还原/最小化/关闭/resize 全部实测，
   截图或报告缺失也算失败。
