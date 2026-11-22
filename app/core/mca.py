@@ -48,12 +48,23 @@ _DEFAULT_LEVEL = 6           # MC 客户端 Deflater 默认档；实测与存档
 # 通用小工具
 # ----------------------------------------------------------------------
 def is_region_name(name: str) -> bool:
-    """是不是可变换的区域文件（region/ 与 poi/ 下的 .mca/.mcr）。"""
+    """
+    是不是可变换的存档区域文件。
+
+    范围收紧到 **saves/ 下的 region|poi/*.mca|.mcr**：包内路径可能是
+    `overrides/saves/World/region/r.0.0.mca`，也可能没有 overrides 前缀。
+    其他目录（例如 mods 里自带的 region 文件、资源包结构）一律不动，
+    避免把不相干的字节做变换。
+    """
     low = str(name).replace("\\", "/").lower()
     if not low.endswith((".mca", ".mcr")):
         return False
-    parts = low.split("/")
-    return any(p in ("region", "poi") for p in parts[:-1])
+    parts = [p for p in low.split("/") if p]
+    if parts and parts[0] == "overrides":
+        parts = parts[1:]
+    if not parts or parts[0] != "saves":
+        return False
+    return any(p in ("region", "poi") for p in parts[1:-1])
 
 
 def _vint(n: int) -> bytes:
@@ -185,47 +196,100 @@ def strip_region(data: bytes) -> bytes | None:
             + bytes(body))
 
 
+# 恶意/损坏输入的上限：超过一律 ValueError，绝不按声明值预分配。
+MAX_FILE_BYTES = 1 << 30          # 单个 region 文件上限 1 GiB
+MAX_RAW_CHUNK = 64 << 20          # 单个区块裸 NBT 上限 64 MiB
+MAX_BLOCK_COUNT = 1024            # 头部最多 1024 个槽位
+MAX_GAP_COUNT = 65536
+
+
 def restore_region(blob: bytes) -> bytes:
-    """`strip_region` 的逆操作；结果与原始 `.mca` 逐字节相同。"""
+    """
+    `strip_region` 的逆操作；结果与原始 `.mca` 逐字节相同。
+
+    这是玩家端解包时会走的路径，输入可能来自第三方更新包，所以所有
+    长度/偏移都先校验再分配：file_len、裸区块长度、空洞数量/范围、
+    扇区跨度都要在 blob 与 file_len 的范围内，否则直接 ValueError
+    （调用方按"原样存/拒绝"处理，不会巨量分配）。
+    """
     if not blob.startswith(_MAGIC):
         raise ValueError("不是 mca 变换流")
     pos = len(_MAGIC)
+    if len(blob) < pos + 8 + _HEADER_SIZE:
+        raise ValueError("mca 变换流头部不完整")
     file_len, count = struct.unpack_from(">II", blob, pos)
     pos += 8
+    if file_len < _HEADER_SIZE or file_len > MAX_FILE_BYTES:
+        raise ValueError("mca 声明长度不合法")
+    # 合法变换流的原始大小与输入大小同量级（去壳只会更小）；给 64 倍余量，
+    # 防止 20 字节的恶意头声明 1 GiB 触发巨量分配。
+    if file_len > max(1 << 20, len(blob) * 64):
+        raise ValueError("mca 声明长度与数据量不符")
+    if count > MAX_BLOCK_COUNT:
+        raise ValueError("mca 区块数过多")
     header = blob[pos:pos + _HEADER_SIZE]
     pos += _HEADER_SIZE
     if len(header) != _HEADER_SIZE:
         raise ValueError("mca 变换流头部不完整")
 
-    out = bytearray(file_len)
-    out[0:_HEADER_SIZE] = header
-
     slots = list(_iter_slots(header))
     if len(slots) != count:
         raise ValueError(f"mca 区块数不符：头部 {len(slots)} / 流 {count}")
-
+    spans: list[tuple[int, int, int]] = []
     for _idx, start, sectors in slots:
+        span = (sectors or 1) * _SECTOR
+        if start < _HEADER_SIZE or span <= 0 or start + span > file_len:
+            raise ValueError("mca 扇区越界")
+        spans.append((start, sectors, span))
+
+    out = bytearray(file_len)
+    out[0:_HEADER_SIZE] = header
+
+    for start, _sectors, span in spans:
+        if pos >= len(blob):
+            raise ValueError("mca 数据不完整")
         ctype = blob[pos]
         pos += 1
-        n, pos = _read_vint(blob, pos)
+        if ctype not in (_TYPE_ZLIB, 1, 3):
+            raise ValueError("mca 压缩类型不支持")
+        try:
+            n, pos = _read_vint(blob, pos)
+        except (IndexError, ValueError) as exc:
+            raise ValueError("mca 区块长度损坏") from exc
+        if n < 0 or n > MAX_RAW_CHUNK or pos + n > len(blob):
+            raise ValueError("mca 区块裸数据越界")
         raw = blob[pos:pos + n]
         pos += n
-        m, pos = _read_vint(blob, pos)
+        try:
+            m, pos = _read_vint(blob, pos)
+        except (IndexError, ValueError) as exc:
+            raise ValueError("mca 扇区尾巴长度损坏") from exc
+        if m < 0 or pos + m > len(blob) or m > span:
+            raise ValueError("mca 扇区尾巴越界")
         tail = blob[pos:pos + m]
         pos += m
 
         payload = chunk_compress(raw, ctype)
         rec = struct.pack(">I", len(payload) + 1) + bytes([ctype]) + payload
-        span = (sectors or 1) * _SECTOR
         if len(rec) > span:
             raise ValueError("mca 区块超出扇区跨度（数据损坏）")
         out[start:start + len(rec)] = rec
         out[start + len(rec): start + span] = tail
 
-    gap_count, pos = _read_vint(blob, pos)
+    try:
+        gap_count, pos = _read_vint(blob, pos)
+    except (IndexError, ValueError) as exc:
+        raise ValueError("mca 空洞数量损坏") from exc
+    if gap_count < 0 or gap_count > MAX_GAP_COUNT:
+        raise ValueError("mca 空洞数量过多")
     for _ in range(gap_count):
-        start, pos = _read_vint(blob, pos)
-        n, pos = _read_vint(blob, pos)
+        try:
+            start, pos = _read_vint(blob, pos)
+            n, pos = _read_vint(blob, pos)
+        except (IndexError, ValueError) as exc:
+            raise ValueError("mca 空洞损坏") from exc
+        if start < 0 or n < 0 or start + n > file_len or pos + n > len(blob):
+            raise ValueError("mca 空洞越界")
         out[start:start + n] = blob[pos:pos + n]
         pos += n
     return bytes(out)

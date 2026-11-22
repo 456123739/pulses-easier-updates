@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 
 MANIFEST_FILE = "ea_manifest.json"
@@ -75,4 +76,37 @@ def content_entries(path: Path) -> list[tuple[str, int, str]]:
                 digest.update(chunk)
                 size += len(chunk)
             out.append((name, size, digest.hexdigest()))
+    return out
+
+
+def compute_zip_signature_v1(zip_path: Path, settings: dict,
+                             manifest: dict) -> str:
+    """
+    v1 校验口径（只用于读 0.10.x 及更早的旧包；新导出不再写 v1）：entries 用 zip 目录里记录的
+    (名字, 解压大小, CRC32)，**包含目录条目**，不读文件内容。
+
+    新版导出旧版兼容 zip 时用这个口径：真实 v0.12.0 的 verify_signature
+    会按 version=1 走 CRC 分支并通过；0.10.x 也认。
+    """
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        entries = [(i.filename, i.file_size, i.CRC)
+                   for i in zf.infolist() if i.filename != MANIFEST_FILE]
+    return compute_signature(settings, manifest, entries)
+
+
+def zip_content_entries_v2(zip_path: Path) -> list[tuple[str, int, str]]:
+    """旧版 v2 签名口径：zip 里每个条目（含目录）的内容 sha1。"""
+    out: list[tuple[str, int, str]] = []
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for info in zf.infolist():
+            if info.filename == MANIFEST_FILE:
+                continue
+            digest = hashlib.sha1()
+            with zf.open(info) as fh:
+                while True:
+                    chunk = fh.read(1 << 20)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            out.append((info.filename, info.file_size, digest.hexdigest()))
     return out

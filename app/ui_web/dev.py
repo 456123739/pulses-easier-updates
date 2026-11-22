@@ -26,8 +26,7 @@ from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
                            parse_mrpack)
 
 EXPORT_KEYS = ("include_hashes", "tamper_proof", "precompute_overrides",
-               "min_size", "compact_container", "world_transform",
-               "super_compress")
+               "min_size", "super_compress")
 
 
 class DevError(RuntimeError):
@@ -716,6 +715,7 @@ class DevFlow:
                 changelog_md=self.changelog,
                 version=self.version,
                 excluded_folders=sorted(self.excluded),
+                opts=dict(self.options),
                 log=lambda level, msg: self.bus.log(msg, level.upper()),
                 progress=self._progress)
             if res is None:

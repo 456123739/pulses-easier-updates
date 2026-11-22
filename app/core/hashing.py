@@ -67,6 +67,8 @@ def build_hash_manifest(
     whitelist: list[str],
     index_hashes: dict[str, dict] | None = None,
     exclude_tops: list[str] | None = None,
+    *,
+    saves_folder_hash: bool = True,
 ) -> dict:
     """
     构建哈希清单。
@@ -83,6 +85,7 @@ def build_hash_manifest(
     {
       "files": {rel_path: {"algo": "...", "value": "..."}, ...},
       "folders": {top_folder: "sha256...", ...},
+      "saves_worlds": {world_name: "sha256...", ...},
       "whitelist": [...],
     }
     """
@@ -132,6 +135,7 @@ def build_hash_manifest(
 
     # 2) 非白名单顶层文件夹 → 文件夹级哈希
     folders: dict[str, str] = {}
+    saves_worlds: dict[str, str] = {}
     try:
         for entry in root.iterdir():
             if not entry.is_dir():
@@ -141,17 +145,22 @@ def build_hash_manifest(
             if entry.name in exclude_set:
                 continue
             if entry.name == "saves":
-                # 存档按"世界"记哈希：玩家端可以一个世界一条变更（存档级），
-                # 不再整目录一刀切。recorded 形如 {"saves": {...}} 的旧包
-                # 由 differ 自动退回整目录粒度。
+                # 逐世界哈希放独立字段 saves_worlds：0.12 只认 folders 里的
+                # 顶层键，把 "saves/World" 塞进 folders 会被它当成一个顶层
+                # 目录重复处理。folders["saves"] 只在导出旧版 ZIP 时写，
+                # 保证旧客户端仍按整目录比对。
                 try:
                     for world in sorted(entry.iterdir()):
                         if world.is_dir():
                             wh = folder_hash(world)
                             if wh:
-                                folders[f"saves/{world.name}"] = wh
+                                saves_worlds[world.name] = wh
                 except OSError:
                     pass
+                if saves_folder_hash:
+                    h = folder_hash(entry)
+                    if h:
+                        folders["saves"] = h
                 continue
             h = folder_hash(entry)
             if h:
@@ -162,6 +171,7 @@ def build_hash_manifest(
     return {
         "files": files,
         "folders": folders,
+        "saves_worlds": saves_worlds,
         "whitelist": wl,
         "partial_tops": sorted(partial_tops),
     }

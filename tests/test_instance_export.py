@@ -125,15 +125,14 @@ class ExportCase(unittest.TestCase):
         leftovers = [p.name for p in self.out.parent.glob("*.part-*")]
         self.assertEqual(leftovers, [])
 
-    def test_signature_v2_detects_content_change(self):
+    def test_signature_detects_content_change(self):
         path = EX.export_from_instance(
             self.root, self.out, rules=R.expand_rules(),
             opts={"tamper_proof": True}, lookup_fn=lambda wanted: {})
         manifest = eapack.read_manifest(path)
+        # 默认导出旧版兼容 zip：签名用与 0.12 相同的 v2 内容口径
         self.assertEqual(manifest.get("signature_version"), 2)
         self.assertEqual(eapack.verify_signature(path), (True, ""))
-
-        # 改了内容但保持长度：v1（CRC）可能漏，v2（内容 sha1）必须发现
         import shutil
         bad = self.tmp / "bad.eapack"
         shutil.copy(path, bad)

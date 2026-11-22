@@ -1,4 +1,4 @@
-"""导出选项以调用方为准：zip / 紧凑容器不能只认数据库里的值。"""
+"""导出选项以调用方为准：super_compress 是唯一格式开关，老键不生效。"""
 
 from __future__ import annotations
 
@@ -46,17 +46,26 @@ class ExportContainerOptsCase(unittest.TestCase):
 
     def test_opts_override_db(self):
         db.set_export_options({**db.get_export_options(),
-                               "compact_container": False,
-                               "world_transform": False})
-        self.assertTrue(self._export("v2.eapack",
-                                     {"compact_container": True}).startswith(b"EAPK2"))
+                               "super_compress": True})
         self.assertTrue(self._export("zip.eapack",
-                                     {"compact_container": False}).startswith(b"PK"))
-
-    def test_db_used_when_opts_missing(self):
+                                     {"super_compress": False}).startswith(b"PK"))
         db.set_export_options({**db.get_export_options(),
-                               "compact_container": True})
-        self.assertTrue(self._export("defaults.eapack", {}).startswith(b"EAPK2"))
+                               "super_compress": False})
+        self.assertTrue(self._export("v2.eapack",
+                                     {"super_compress": True}).startswith(b"EAPK2"))
+
+    def test_old_db_keys_never_force_new_format(self):
+        # 0.13.0 的老库 compact_container=True 不能把默认导出变成 EAPK2
+        db.set_export_options({**db.get_export_options(),
+                               "compact_container": True,
+                               "world_transform": True,
+                               "super_compress": False})
+        self.assertTrue(self._export("defaults.eapack", {}).startswith(b"PK"))
+
+    def test_db_super_used_when_opts_missing(self):
+        db.set_export_options({**db.get_export_options(),
+                               "super_compress": True})
+        self.assertTrue(self._export("db.eapack", {}).startswith(b"EAPK2"))
 
 
 if __name__ == "__main__":
