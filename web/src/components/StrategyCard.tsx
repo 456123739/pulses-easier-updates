@@ -188,7 +188,7 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact, regi
             {disabled.length > 0 ? ` · ${disabled.length} 项已禁用` : ''}
             {dirtyNames.length > 0
               ? ` · ${dirtyNames.length} 项待应用（点底部主按钮一次提交）`
-              : ' · 策略已应用'}
+              : ' · 策略已生效'}
           </span>
         </div>
       )}

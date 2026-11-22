@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@/bridge'
 import { AnimatePresence, motion } from 'framer-motion'
 import { pickPath } from '@/bridge'
+import type { AppState } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { usePlayer } from '@/store/player'
 import { useUi } from '@/store/ui'
@@ -57,7 +58,20 @@ export default function PlayerView() {
   const toggleSlots = usePlayer((s) => s.toggleSlots)
   const setHint = usePlayer((s) => s.setHint)
   const [showTree, setShowTree] = useState(true)
+  const setState = useApp((s) => s.setState)
   const strategyCommit = useRef<() => Promise<void>>(async () => {})
+
+  const onLocatePack = async () => {
+    if (!connected) return
+    try {
+      const path = await pickPath('file', '')
+      if (!path) return
+      const res = await invoke<{ state: AppState }>('app.pick_pack', { path })
+      if (res.state) setState(res.state)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '定位失败', 'error')
+    }
+  }
 
   const onPickUpdate = async () => {
     if (!connected) return
@@ -121,6 +135,15 @@ export default function PlayerView() {
     <div className={styles.page}>
       <section className={styles.left}>
         <div className={styles.dropWrap}>
+          <DropZone
+            step="STEP 1"
+            title={pack ? pack.name : '定位整合包'}
+            subtitle={pack ? '点击更换实例' : '实例目录 / 整合包文件'}
+            hint={pack ? undefined : '或点击选择'}
+            height={104}
+            onPick={onLocatePack}
+            ariaLabel="玩家端定位整合包"
+          />
           <DropZone
             step="STEP 2"
             title={updatePack ? `更新包：${updatePack.name}` : '拖入更新包'}
