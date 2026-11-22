@@ -132,6 +132,67 @@ jobs:
             Get-ChildItem "dist/Pulses Easier/_internal/web" -Recurse -Depth 2 | Select-Object FullName
           }
 
+      - name: UI 截图（启动 / 展开 / 主界面）
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public class WinCap {
+            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+            [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+          }
+          "@
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          # 控制台挪走，别挡在窗口后面
+          [WinCap]::ShowWindow([WinCap]::GetConsoleWindow(), 6) | Out-Null
+          $exe = "dist/Pulses Easier/Pulses Easier.exe"
+          $log = Join-Path $env:RUNNER_TEMP "ui-shot.log"
+          $env:PULSES_WEB_LOG = $log
+          Remove-Item Env:PULSES_UI -ErrorAction SilentlyContinue
+          Remove-Item $log -ErrorAction SilentlyContinue
+          function Shot([string]$name) {
+            $hwnd = [WinCap]::FindWindow($null, "Pulses Easier")
+            if ($hwnd -eq [IntPtr]::Zero) { Write-Host "没找到窗口，跳过 $name"; return }
+            $r = New-Object WinCap+RECT
+            [WinCap]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+            $pad = 24
+            $x = [Math]::Max(0, $r.Left - $pad); $y = [Math]::Max(0, $r.Top - $pad)
+            $w = ($r.Right - $r.Left) + $pad * 2; $h = ($r.Bottom - $r.Top) + $pad * 2
+            $bmp = New-Object System.Drawing.Bitmap($w, $h)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $h)))
+            $bmp.Save((Join-Path (Get-Location) $name), [System.Drawing.Imaging.ImageFormat]::Png)
+            $g.Dispose(); $bmp.Dispose()
+            Write-Host "$name : rect=($($r.Left),$($r.Top)) $($r.Right - $r.Left)x$($r.Bottom - $r.Top)"
+          }
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Milliseconds 1200
+          Shot "ui-1-splash.png"
+          for ($i = 0; $i -lt 120; $i++) {
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern "page-ready" -Quiet)) { break }
+            Start-Sleep -Seconds 1
+          }
+          Start-Sleep -Seconds 3
+          Shot "ui-2-expanded.png"
+          Start-Sleep -Seconds 8
+          Shot "ui-3-main.png"
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+
+      - name: 上传 UI 截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-shots
+          path: ui-*.png
+          if-no-files-found: ignore
+
+
       # 真机端到端（打包壳）：和第 9 步同一套断言，跑的是 dist 里的 exe
       # 打包壳里跑完整 e2e：目前在这条流水线环境里会卡在起窗后（同一个 Python/JS
       # 代码在源码壳里全绿），先只留证据、不阻断；产品侧真正的阻断判据在下一步。
@@ -198,66 +259,6 @@ jobs:
           throw "打包后起窗冒烟三次都没通过"
 
       # 真机 UI 目检：启动 logo → 展开 → 主界面，各截一张（不阻断出包）
-      - name: UI 截图（启动 / 展开 / 主界面）
-        continue-on-error: true
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          public class WinCap {
-            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
-            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
-            [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-          }
-          "@
-          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          # 控制台挪走，别挡在窗口后面
-          [WinCap]::ShowWindow([WinCap]::GetConsoleWindow(), 6) | Out-Null
-          $exe = "dist/Pulses Easier/Pulses Easier.exe"
-          $log = Join-Path $env:RUNNER_TEMP "ui-shot.log"
-          $env:PULSES_WEB_LOG = $log
-          Remove-Item Env:PULSES_UI -ErrorAction SilentlyContinue
-          Remove-Item $log -ErrorAction SilentlyContinue
-          function Shot([string]$name) {
-            $hwnd = [WinCap]::FindWindow($null, "Pulses Easier")
-            if ($hwnd -eq [IntPtr]::Zero) { Write-Host "没找到窗口，跳过 $name"; return }
-            $r = New-Object WinCap+RECT
-            [WinCap]::GetWindowRect($hwnd, [ref]$r) | Out-Null
-            $pad = 24
-            $x = [Math]::Max(0, $r.Left - $pad); $y = [Math]::Max(0, $r.Top - $pad)
-            $w = ($r.Right - $r.Left) + $pad * 2; $h = ($r.Bottom - $r.Top) + $pad * 2
-            $bmp = New-Object System.Drawing.Bitmap($w, $h)
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $h)))
-            $bmp.Save((Join-Path (Get-Location) $name), [System.Drawing.Imaging.ImageFormat]::Png)
-            $g.Dispose(); $bmp.Dispose()
-            Write-Host "$name : rect=($($r.Left),$($r.Top)) $($r.Right - $r.Left)x$($r.Bottom - $r.Top)"
-          }
-          $p = Start-Process -FilePath $exe -PassThru
-          Start-Sleep -Milliseconds 1200
-          Shot "ui-1-splash.png"
-          for ($i = 0; $i -lt 90; $i++) {
-            if ((Test-Path $log) -and (Select-String -Path $log -Pattern "page-ready" -Quiet)) { break }
-            Start-Sleep -Seconds 1
-          }
-          Start-Sleep -Seconds 3
-          Shot "ui-2-expanded.png"
-          Start-Sleep -Seconds 8
-          Shot "ui-3-main.png"
-          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
-
-      - name: 上传 UI 截图
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-shots
-          path: ui-*.png
-          if-no-files-found: ignore
-
       - name: 上传新界面截图
         if: always()
         uses: actions/upload-artifact@v4
