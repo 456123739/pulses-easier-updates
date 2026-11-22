@@ -215,7 +215,10 @@ class Api:
     def _is_maxed(self, win) -> bool:
         from .window_shell import is_maximized
         import sys as _sys
-        if _sys.platform == "win32":
+        # 只有真正挂在 pywebview 上的原生窗口才问 Win32；单测/浏览器里的
+        # FakeWindow 没有 HWND，必须回落到对象自己的状态。
+        native = type(win).__module__.startswith("webview")
+        if _sys.platform == "win32" and native:
             return is_maximized()
         return bool(getattr(win, "maximized", False))
 
