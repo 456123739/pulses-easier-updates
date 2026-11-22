@@ -88,7 +88,11 @@ export default function MainButton({ onScanToggle, beforeConfirm }: Props) {
       }
       if (btn === 'confirm') {
         setHint('正在应用策略并写入…')
-        await beforeConfirm?.()
+        try {
+          await beforeConfirm?.()
+        } catch (err) {
+          pushToast(err instanceof Error ? err.message : '策略提交失败', 'error')
+        }
         await call('update.apply')
         return
       }

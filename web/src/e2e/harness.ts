@@ -498,7 +498,6 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
     '更新包信息（含更新日志）', JSON.stringify(snap?.update))
 
   // ---- 3. 开始更新（比对）----
-  await clickText('开始更新', { exact: true })
   // 「变更内容」这张卡片是一直在的，不能拿它当"扫描完成"的信号；
   // 真正的判据是 phase 回 idle 且策略表已有行（见 waitScanDone）。
   snap = await waitScanDone()
@@ -661,7 +660,7 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
     '数据库位置已还原', dbBefore)
 
   // ---- 应用 + 磁盘为准（界面说完成不算）----
-  await clickText('确认更新', { exact: true })
+  await clickText('写入更新', { exact: false })
   need(await waitText(/更新完成|已应用/, 240000), '更新应用完成')
   await sleep(400)
   const report = (await flowSnap())?.report
@@ -686,7 +685,7 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
     return
   }
   await clickText('开发者', { exact: true })
-  need(await waitText(/开始制作更新包/), '切到开发者视图')
+  need(await waitText(/第一步 · 选择导出内容/), '切到开发者视图')
   const waitDevIdle = () => waitFor(async () => {
     const d = await devSnap()
     return d && d.phase !== 'loading' ? d : null
@@ -747,6 +746,8 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
     return el && el.value === 'E2EExport.eapack' ? el.value : null
   }, 10000)
   check(!!filled, '输出文件名已回填', outFile)
+  await clickText('下一步：设置策略', { exact: false })
+  need(await waitText(/第二步 · 更新策略与确认/), '进入策略确认')
   await clickText('开始制作更新包', { exact: true })
   need(await waitText(/已生成：/, 180000), '开发者导出完成（完成态可见）')
   const exportedProbe = await probe([outFile])
@@ -775,7 +776,6 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   setPicks([dl.update])
   await clickStep('STEP 2')
   need(await waitText(/E2EPackDL-a\.eapack/), '导入更新包（带 URL 文件）')
-  await clickText('开始更新', { exact: true })
   need(!!(await waitScanDone()), '比对完成（真下载）')
   await waitText(/e2e-big\.jar/, 30000)
   const snap = await flowSnap()
@@ -786,7 +786,7 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   // ---- H：确认更新 → 边下边采样 ----
   // 同一页里跑过基本流程，"更新完成"可能还挂在提示条上：只认**新增的**完成提示。
   const doneBefore = (bodyText().match(/更新完成/g) ?? []).length
-  await clickText('确认更新', { exact: true })
+  await clickText('写入更新', { exact: false })
   const seen = {
     barMid: 0,
     slots: new Set<string>(),
@@ -855,15 +855,14 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   setPicks([dl.abortUpdate])
   await clickStep('STEP 2')
   need(await waitText(/E2EPackDL-b\.eapack/), '导入续传用更新包')
-  await clickText('开始更新', { exact: true })
   need(!!(await waitScanDone()), '比对完成（续传包）')
   // 上一轮的变更树可能还没被替换掉：等这一轮独有的条目出现
   need(await waitText(/e2e-abort-big\.jar/, 30000), '变更列表已换成续传包内容')
-  await clickText('确认更新', { exact: true })
+  await clickText('写入更新', { exact: false })
   // 下载态的唯一可靠信号：主按钮变成「取消下载」（界面必须能取消）
-  need(!!(await waitFor(() => buttonLabels().includes('取消下载'), 20000)),
-    '进入下载态（主按钮变成「取消下载」）')
-  await clickText('取消下载', { exact: true })
+  need(!!(await waitFor(() => buttonLabels().includes('停止下载'), 20000)),
+    '进入下载态（主按钮变成「停止下载」）')
+  await clickText('停止下载', { exact: true })
   need(await waitText(/已请求中止/, 10000), '中止请求已送到后端')
   const stopped = await waitFor(async () => {
     const phase = (await flowSnap())?.phase
@@ -901,6 +900,8 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
 /* ------------------------------------------------------------------ */
 
 export async function start(): Promise<void> {
+  // 端到端里所有确认框都按“确认”处理（浏览器脚本无法弹原生框）
+  window.confirm = () => true
   trapErrors()
   statusBox()
   startedAt = Date.now()

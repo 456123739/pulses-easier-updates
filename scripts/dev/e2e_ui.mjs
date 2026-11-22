@@ -223,7 +223,7 @@ async function basicSuite() {
         JSON.stringify(imported?.update))
 
   // ---- 3. 开始更新（比对）----
-  await clickText('开始更新', { exact: true })
+  
   // 卡片是一直在的，判据是 phase 回 idle + 策略表已有行
   let snap = await waitScanDone()
   check(!!snap && (snap.strategies?.length ?? 0) > 0, '比对完成', JSON.stringify(snap?.phase))
@@ -239,6 +239,7 @@ async function basicSuite() {
   // ---- A. 策略交互：完全匹配 → 跳过重名 → 重新扫描 → 改回 ----
   await waitRow('mods')
   await clickRowChip('mods', '跳过重名')
+  await call('update.strategies.set', { values: { mods: '跳过重名' } }, '提交策略草稿')
   snap = await flowState()
   const modsRow = () => (snap?.strategies ?? []).find((r) => r.name === 'mods')
   check(modsRow()?.current === '跳过重名', '策略已切到「跳过重名」',
@@ -268,6 +269,7 @@ async function basicSuite() {
 
   // 改回「完全匹配」：跳过应归零（deleted/ modified 重新参与更新）
   await clickRowChip('mods', '完全匹配')
+  await call('update.strategies.set', { values: { mods: '完全匹配' } }, '提交策略草稿')
   snap = await flowState()
   check(modsRow()?.current === '完全匹配', '策略已改回「完全匹配」',
         JSON.stringify(modsRow()))
@@ -373,7 +375,7 @@ async function basicSuite() {
         '数据库位置已还原', dbBefore)
 
   // ---- 应用 + 磁盘为准（界面说完成不算）----
-  await clickText('确认更新', { exact: true })
+  await clickText('写入更新', { exact: false })
   check(await waitBody(/更新完成|已应用/, 180000), '更新应用完成')
   await sleep(400)
   const report = (await flowState())?.report
@@ -390,7 +392,7 @@ async function basicSuite() {
 
   // ---- G. 开发者端：导入 → 选项 → 导出 ----
   await clickText('开发者', { exact: true })
-  check(await waitBody(/开始制作更新包/), '切到开发者视图')
+  check(await waitBody(/第一步 · 选择导出内容/), '切到开发者视图')
 
   // 识别在后台跑：等 phase 离开 loading，别用"标题一直在"的页面文案当判据
   const waitDevIdle = () => waitFor(async () => {
@@ -546,6 +548,8 @@ async function basicSuite() {
     const v = await page.locator('input[placeholder="输出文件名"]').inputValue()
     return v === 'E2EExport.eapack'
   }), '输出文件名已回填', outFile)
+  await clickText('下一步：设置策略', { exact: false })
+  check(await waitBody(/第二步 · 更新策略与确认/), '进入策略确认')
   await clickText('开始制作更新包', { exact: true })
   check(await waitBody(/已生成：/, 120000), '开发者导出完成（完成态可见）')
   check(existsSync(outFile) && statSync(outFile).size > 500,
@@ -628,7 +632,7 @@ async function downloadSuite() {
   await clickStep('STEP 2')
   check(await waitBody(/E2EPackDL-a\.eapack/), '导入更新包（带 URL 文件）')
 
-  await clickText('开始更新', { exact: true })
+  
   const scan1 = await waitScanDone()
   check(!!scan1 && (scan1.strategies?.length ?? 0) > 0, '比对完成', JSON.stringify(scan1?.phase))
   await waitBody(/e2e-big\.jar/, 30000)      // 等新条目真的画出来
@@ -639,7 +643,7 @@ async function downloadSuite() {
         '要下载的大文件出现在变更列表')
 
   // ---- H：确认更新 → 边下边采样 ----
-  await clickText('确认更新', { exact: true })
+  await clickText('写入更新', { exact: false })
   const seen = { barMid: 0, slots: new Set(), hints: new Set(), guard: null, done: false }
   const t0 = Date.now()
   let opened = false
@@ -700,18 +704,19 @@ async function downloadSuite() {
   await setPicks([fixture.abortUpdate])
   await clickStep('STEP 2')
   check(await waitBody(/E2EPackDL-b\.eapack/), '导入续传用更新包')
-  await clickText('开始更新', { exact: true })
+  
   const scan2 = await waitScanDone()
   check(!!scan2 && (scan2.strategies?.length ?? 0) > 0, '比对完成（续传包）',
         JSON.stringify(scan2?.phase))
   // 上一轮的变更树可能还没被替换掉：等这一轮独有的条目出现
   check(await waitBody(/e2e-abort-big\.jar/, 30000), '变更列表已换成续传包内容')
-  await clickText('确认更新', { exact: true })
+  await clickText('写入更新', { exact: false })
   // 下载态的唯一可靠信号：主按钮变成「取消下载」（界面必须能取消）
   const started = await waitFor(async () =>
-    (await buttonLabels()).includes('取消下载'), 20000)
-  check(!!started, '进入下载态（主按钮变成「取消下载」）')
-  await clickText('取消下载', { exact: true })
+    (await buttonLabels()).includes('停止下载'), 20000)
+  check(!!started, '进入下载态（主按钮变成「停止下载」）')
+  page.once('dialog', (d) => d.accept())
+  await clickText('停止下载', { exact: true })
   check(await waitBody(/已请求中止/, 10000), '中止请求已送到后端')
   const stopped = await waitFor(async () => {
     const st = (await invoke('flow.state'))?.data?.phase
