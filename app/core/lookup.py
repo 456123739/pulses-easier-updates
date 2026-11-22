@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 import urllib.error
 import urllib.request
@@ -90,6 +91,15 @@ def _chunks(items: list, size: int):
         yield items[i:i + size]
 
 
+
+
+def _run_parts(parts: list, fn, workers: int = 4) -> list:
+    """分批查询并行跑；单批保持同步（不增加小包的线程开销）。"""
+    if len(parts) <= 1:
+        return [fn(p) for p in parts]
+    with ThreadPoolExecutor(max_workers=min(workers, len(parts))) as pool:
+        return list(pool.map(fn, parts))
+
 class CurseForgeClient:
     def __init__(self, api_key: str, *, fetch=_default_fetch, timeout: float = 30,
                  retries: int = 2, sleep=time.sleep) -> None:
@@ -107,11 +117,15 @@ class CurseForgeClient:
         headers = {"x-api-key": self.api_key,
                    "Content-Type": "application/json",
                    "Accept": "application/json"}
-        for part in _chunks([int(f) for f in fingerprints], BATCH):
-            data = _call(self.fetch, f"{CF_BASE}/fingerprints/432",
+        parts = list(_chunks([int(f) for f in fingerprints], BATCH))
+
+        def _one(part):
+            return _call(self.fetch, f"{CF_BASE}/fingerprints/432",
                          {"fingerprints": part}, headers,
                          timeout=self.timeout, retries=self.retries,
                          sleep=self.sleep, cancel=cancel)
+
+        for part, data in zip(parts, _run_parts(parts, _one)):
             payload = (data or {}).get("data") or {}
             for item in payload.get("exactMatches") or []:
                 file = (item or {}).get("file") or {}
@@ -144,11 +158,15 @@ class ModrinthClient:
         out: dict[str, LookupHit] = {}
         headers = {"User-Agent": self.ua, "Content-Type": "application/json",
                    "Accept": "application/json"}
-        for part in _chunks([str(s).lower() for s in sha1s], BATCH):
-            data = _call(self.fetch, f"{MR_BASE}/version_files",
+        parts = list(_chunks([str(s).lower() for s in sha1s], BATCH))
+
+        def _one(part):
+            return _call(self.fetch, f"{MR_BASE}/version_files",
                          {"hashes": part, "algorithm": "sha1"}, headers,
                          timeout=self.timeout, retries=self.retries,
                          sleep=self.sleep, cancel=cancel)
+
+        for part, data in zip(parts, _run_parts(parts, _one)):
             for sha1, version in (data or {}).items():
                 if sha1 not in part:
                     continue
