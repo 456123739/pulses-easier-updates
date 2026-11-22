@@ -138,11 +138,16 @@ export const useApp = create<Store>((set, get) => ({
         case 'dialog':
           dialog = ev.data
           break
-        case 'dnd':
+        case 'dnd': {
           if (ev.data.kind === 'error') {
             toasts.push({ id: ++seq, message: ev.data.message ?? '拖入失败', level: 'error' })
+          } else if (ev.data.kind === 'ok') {
+            const raw = String(ev.data.paths?.[0] ?? '')
+            const name = raw.split(/[\\/]/).pop() || '文件'
+            toasts.push({ id: ++seq, message: `已收到「${name}」，正在识别…`, level: 'info' })
           }
           break
+        }
         default:
           break
       }

@@ -134,8 +134,21 @@ img {
 }
 
 
-/* 桌面版（pywebview 无边框 + 透明）：圆角外必须透出桌面，不能是直角黑底 */
+/* 桌面版：窗口用 SetWindowRgn 裁圆角，窗口外不属于窗口；
+   WebView2 本身保持不透明——透明合成会明显拖慢整窗重绘。 */
 html[data-desktop='1'],
 html[data-desktop='1'] body {
-  background: transparent;
+  background: var(--c-base);
+}
+
+/* 尊重系统"减少动态"设置：动画改成即时，避免晕动/卡顿 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

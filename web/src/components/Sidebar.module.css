@@ -140,3 +140,20 @@
   color: var(--c-muted);
   padding-top: 2px;
 }
+
+.currentPack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 2px 2px;
+}
+.packLink {
+  text-align: left;
+  color: var(--c-text);
+  font-size: var(--fs-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.packLink:hover { color: var(--c-accent-text); }
+.packHint { color: var(--c-muted); font-size: var(--fs-tiny); }

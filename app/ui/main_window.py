@@ -38,7 +38,9 @@ class MainWindow(ctk.CTk):
         # 否则窗口会莫名其妙变成半透明（详见 win11.py 顶部注释）
         win11.neutralize_ctk_alpha_flash()
 
-        self.title("Pulses Easier")
+        self.title("Pulses Easier（兼容界面）"
+                   if os.environ.get("PULSES_WEB_FALLBACK")
+                   else "Pulses Easier")
         self._set_window_icon()
         self.geometry(f"{Size.WIN_W}x{Size.WIN_H}")
         self.minsize(Size.WIN_MIN_W, Size.WIN_MIN_H)

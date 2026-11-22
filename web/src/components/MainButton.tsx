@@ -7,16 +7,19 @@ import styles from './MainButton.module.css'
 
 interface Props {
   onScanToggle?: () => void
+  beforeConfirm?: () => Promise<void>
 }
 
 /** 主按钮：六态（含下载覆盖态），配色与文案按 Tk 版逐条对齐。 */
-export default function MainButton({ onScanToggle }: Props) {
+export default function MainButton({ onScanToggle, beforeConfirm }: Props) {
   const btn = usePlayer((s) => s.btn)
   const phase = usePlayer((s) => s.phase)
   const setBtn = usePlayer((s) => s.setBtn)
   const setPhase = usePlayer((s) => s.setPhase)
   const setHint = usePlayer((s) => s.setHint)
   const pushLog = usePlayer((s) => s.pushLog)
+  const counts = usePlayer((s) => s.counts)
+  const totalChanges = (counts?.added ?? 0) + (counts?.modified ?? 0) + (counts?.deleted ?? 0)
 
   const downloading = phase === 'download'
   const [aborting, setAborting] = useState(false)
@@ -25,12 +28,12 @@ export default function MainButton({ onScanToggle }: Props) {
     if (!downloading) setAborting(false)
   }, [downloading])
   const label = downloading
-    ? (aborting ? '取消中…' : '取消下载')
+    ? (aborting ? '停止中…' : '停止下载')
     : {
-        disabled: '开始更新',
-        ready: '开始更新',
-        confirm: '确认更新',
-        rescan: '重新扫描',
+        disabled: '先定位整合包',
+        ready: '比对变更',
+        confirm: totalChanges > 0 ? `写入更新（${totalChanges} 项）` : '写入更新',
+        rescan: '重新比对',
         resume: '继续更新',
         busy: '处理中…',
       }[btn]
@@ -67,6 +70,7 @@ export default function MainButton({ onScanToggle }: Props) {
   const onClick = async () => {
     if (connected) {
       if (downloading) {
+        if (!window.confirm('停止下载？已下载的缓存会保留。')) return
         setAborting(true)
         const ok = await call('update.abort')
         if (!ok) setAborting(false)
@@ -83,7 +87,8 @@ export default function MainButton({ onScanToggle }: Props) {
         return
       }
       if (btn === 'confirm') {
-        setHint('准备开始…')
+        setHint('正在应用策略并写入…')
+        await beforeConfirm?.()
         await call('update.apply')
         return
       }
@@ -122,8 +127,7 @@ export default function MainButton({ onScanToggle }: Props) {
       className={`${styles.btn} ${styles[variant]}`}
       disabled={disabled}
       onClick={onClick}
-      whileTap={disabled ? undefined : { scale: 0.985 }}
-      transition={{ type: 'spring', stiffness: 480, damping: 34 }}
+      whileTap={disabled ? undefined : { scale: 0.995 }}
     >
       <span className={styles.label}>{label}</span>
       {variant === 'primary' && <span className={styles.sheen} aria-hidden />}

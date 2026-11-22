@@ -18,13 +18,13 @@ export default function ProgressBar({ onClick }: Props) {
         <motion.span
           className={styles.fill}
           animate={{ width: `${pct}%` }}
-          transition={{ type: 'spring', stiffness: 160, damping: 26, mass: 0.6 }}
+          transition={{ duration: 0.12, ease: 'linear' }}
         />
         {file !== null && file !== undefined && (
           <motion.span
             className={styles.fileFill}
             animate={{ width: `${Math.max(0, Math.min(1, file)) * pct}%` }}
-            transition={{ type: 'spring', stiffness: 220, damping: 28 }}
+            transition={{ duration: 0.12, ease: 'linear' }}
           />
         )}
       </span>

@@ -110,6 +110,8 @@ export interface DevSubScope {
 export interface DevStrategy {
   name: string;
   current: string;
+  /** 该行可选的策略（config 多「智能剔除」，根文件多「保留键位」） */
+  strategies?: string[];
   excluded: boolean;
   isFile: boolean;
   /** 目录的中文名（只有子项表格的目录带） */

@@ -33,8 +33,8 @@
 
   /* ---- 文字 ---- */
   --c-text: #e9e9ec;
-  --c-text-2: rgba(233, 233, 236, 0.58);
-  --c-muted: rgba(233, 233, 236, 0.34);
+  --c-text-2: rgba(233, 233, 236, 0.74);
+  --c-muted: rgba(233, 233, 236, 0.56);
   --c-on-accent: #0b1f1b;
   --c-border: rgba(255, 255, 255, 0.08);
 
@@ -55,10 +55,10 @@
   --font-mono: "SF Mono", "Cascadia Mono", "Consolas", "DejaVu Sans Mono",
     monospace;
   --fs-display: 24px;
-  --fs-title: 15px;
-  --fs-body: 13px;
-  --fs-small: 11.5px;
-  --fs-tiny: 10.5px;
+  --fs-title: 16px;
+  --fs-body: 13.5px;
+  --fs-small: 12px;
+  --fs-tiny: 11.5px;
   --fw-bold: 590;
 
   /* ---- 尺寸 ---- */

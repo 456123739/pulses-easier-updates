@@ -55,7 +55,9 @@
 }
 
 .placeholder {
-  flex: 1;
+  flex: 0 0 auto;
+  min-height: 120px;
+  max-height: 170px;
   display: grid;
   place-items: center;
   font-size: var(--fs-body);
@@ -98,4 +100,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.transferMeta {
+  margin-top: 4px;
+  text-align: right;
+  color: var(--c-text-2);
+  font-size: var(--fs-tiny);
+  font-variant-numeric: tabular-nums;
 }

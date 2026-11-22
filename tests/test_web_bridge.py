@@ -103,6 +103,26 @@ class BridgeContract(unittest.TestCase):
         self.ctl.flow._thread.join(120)
         self.assertEqual((self.pack / "mods" / "a.jar").read_text(), "NEW")
 
+    def test_strategy_rows_keep_smart_and_keybind_options(self):
+        flow = self.ctl.flow
+        flow.tops = ["config"]
+        flow.root_files = ["options.txt"]
+        flow.strategies = {"config": "智能剔除", "options.txt": "保留键位"}
+        rows = {r["name"]: r for r in flow.strategy_rows()}
+        self.assertIn("智能剔除", rows["config"]["strategies"])
+        self.assertIn("保留键位", rows["options.txt"]["strategies"])
+
+    def test_batch_strategy_update_pushes_once(self):
+        flow = self.ctl.flow
+        flow.tops = ["config"]
+        flow.root_files = ["options.txt"]
+        flow.strategies = {"config": "完全匹配", "options.txt": "完全匹配"}
+        before = len(self.bus.drain(1000))
+        flow.set_strategies({"config": "智能剔除", "options.txt": "保留键位"})
+        self.assertEqual(flow.strategies["config"], "智能剔除")
+        self.assertEqual(flow.strategies["options.txt"], "保留键位")
+        self.assertGreater(len(self.bus.drain(1000)), before)
+
     def test_busy_guard_and_state_event(self):
         self.api.invoke("app.pick_pack", {"path": str(self.pack)})
         self.api.invoke("update.pick", {"path": str(self.update)})

@@ -82,9 +82,12 @@ class DevSpecialsCase(unittest.TestCase):
         self.assertEqual(keys, ["optifine", "mods-disabled", "jei", "screenshots"])
         self.assertTrue(all(s["checked"] is False for s in snap["specials"]))
         self.assertEqual(snap["specials"][0]["files"], 1)
-        # 默认不导出：这些内容不该出现在更新范围里
-        self.assertNotIn("optionsof.txt", self.names(snap))
-        self.assertNotIn("screenshots", self.names(snap))
+        # 默认不导出，但要在第一步里看得见（以 excluded 标记），不能悄悄消失
+        rows = {r["name"]: r for r in snap["strategies"]}
+        self.assertIn("optionsof.txt", rows)
+        self.assertTrue(rows["optionsof.txt"]["excluded"])
+        self.assertIn("screenshots", rows)
+        self.assertTrue(rows["screenshots"]["excluded"])
 
     def test_enabling_optifine_brings_file_into_scope(self):
         before = self.open(self.pack)
@@ -97,7 +100,9 @@ class DevSpecialsCase(unittest.TestCase):
 
         # 关掉又回到原样（不会残留）
         snap = self.api.invoke("dev.rule.set", {"key": "optifine", "value": False})["data"]
-        self.assertNotIn("optionsof.txt", self.names(snap))
+        rows = {r["name"]: r for r in snap["strategies"]}
+        self.assertIn("optionsof.txt", rows)
+        self.assertTrue(rows["optionsof.txt"]["excluded"])
         self.assertEqual(snap["instance"]["totals"]["files"], files_before)
 
     def test_enabling_screenshots_adds_row(self):

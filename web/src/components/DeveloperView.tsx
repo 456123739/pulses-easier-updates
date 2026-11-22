@@ -19,7 +19,6 @@ const OPTIONS = [
   { id: 'super_compress', label: 'Osmium 超级压缩（beta）', desc: '锇密度引擎：EAPK2 + 存档/JAR 去外壳，包更小；需要新版客户端。关闭时导出旧版 ZIP（旧客户端可读）' },
 ]
 
-const DIR_STRATEGIES = ['完全匹配', '替换重名', '跳过重名']
 const DEFAULT_OPTIONS: Record<string, boolean> = {
   include_hashes: true,
   tamper_proof: true,
@@ -62,6 +61,11 @@ export default function DeveloperView() {
   const [outPath, setOutPath] = useState('')
   const [specialBusy, setSpecialBusy] = useState('')
   const [subBusy, setSubBusy] = useState(false)
+  // PCL 式三步：选条目 → 设策略 → 确认并开始
+  const [stage, setStage] = useState<'scope' | 'strategy'>('scope')
+  const [scope, setScope] = useState<Set<string>>(new Set())
+  const [scopeBusy, setScopeBusy] = useState(false)
+  const [estimate, setEstimate] = useState<{ files: number; bytes: number; pack_low: number; pack_high: number } | null>(null)
   // 特殊导出选项的悬浮详情（同一套 3D 叠层）
   const [peek, setPeek] = useState<{ key: string; anchor: HTMLElement } | null>(null)
   const peekOpen = useRef<number | null>(null)
@@ -155,6 +159,7 @@ export default function DeveloperView() {
     }
   }
 
+  const recent = useApp((s) => s.state?.recent ?? [])
   const instance = dev?.instance ?? null
   const specials = dev?.specials ?? []
   const exporting = dev?.phase === 'exporting'
@@ -164,11 +169,20 @@ export default function DeveloperView() {
   const rootPath = instance?.root ?? dev?.source?.path ?? ''
 
   useEffect(() => {
-    if (outName) return
+    const rows = dev?.strategies ?? []
+    if (!rows.length) return
+    setScope(new Set(rows.filter((r) => !r.excluded).map((r) => r.name)))
+    setStage('scope')
+    setEstimate(null)
+  }, [dev?.instance?.root, dev?.source?.path])
+
+  useEffect(() => {
     const base = instance?.name ?? dev?.source?.name
     if (!base) return
-    setOutName(`${base.replace(/\.(zip|mrpack)$/i, '')}_update.eapack`)
-  }, [instance?.name, dev?.source?.name, outName])
+    const ver = (dev?.version || '').replace(/[^0-9A-Za-z._-]/g, '')
+    const stem = base.replace(/\.(zip|mrpack)$/i, '')
+    setOutName(`${stem}${ver ? `_${ver}` : ''}_update.eapack`)
+  }, [instance?.name, instance?.root, dev?.source?.name, dev?.version])
 
   // STEP 1 只有一个动作：把路径交给后端判断（实例目录 / 导出包都行）。
   // 后端只做"认出是什么"就返回，扫描在后台；所以点完不会被卡住。
@@ -246,10 +260,39 @@ export default function DeveloperView() {
 
   const clearSource = async () => {
     if (!connected) return
+    if (!window.confirm('清空当前整合包和导出设置？')) return
     try {
       await invoke('dev.clear')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '清空失败', 'error')
+    }
+  }
+
+  const toggleScope = (name: string) => {
+    setScope((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const applyScope = async () => {
+    if (!connected || !scope.size || scopeBusy) return
+    setScopeBusy(true)
+    try {
+      await invoke('dev.scope.set', { included: [...scope] })
+      try {
+        const info = await invoke<{ files: number; bytes: number; pack_low: number; pack_high: number }>('dev.estimate')
+        setEstimate(info)
+      } catch {
+        setEstimate(null)
+      }
+      setStage('strategy')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '保存范围失败', 'error')
+    } finally {
+      setScopeBusy(false)
     }
   }
 
@@ -298,8 +341,12 @@ export default function DeveloperView() {
     ? (dev?.specials ?? []).find((item) => item.key === peek.key) ?? null
     : null
 
+  const allRows = dev?.strategies ?? []
+  const visibleRows = stage === 'strategy'
+    ? allRows.filter((row) => !row.excluded)
+    : allRows
   const activeRow = layer
-    ? (dev?.strategies ?? []).find((row) => row.name === layer.name) ?? null
+    ? allRows.find((row) => row.name === layer.name) ?? null
     : null
 
   return (
@@ -318,7 +365,7 @@ export default function DeveloperView() {
           }
           subtitle={
             loading
-              ? pending?.path ?? ''
+              ? dev?.progress?.label ?? pending?.path ?? ''
               : instance
                 ? `本地实例 · ${instance.root}`
                 : dev?.source
@@ -337,7 +384,7 @@ export default function DeveloperView() {
             {loading
               ? '正在读取整合包…（不挡界面，读完自动出现）'
               : hasSource
-                ? '拖入 / 点击卡片可更换整合包'
+                ? ''
                 : '本地实例直接选目录，不用先让启动器导出'}
           </span>
           <button
@@ -348,6 +395,23 @@ export default function DeveloperView() {
             选择目录…
           </button>
         </div>
+
+        {!hasSource && !loading && recent.length > 0 && (
+          <div className={styles.recentRow}>
+            <span className="t-small">最近打开</span>
+            {recent.slice(0, 4).map((r) => (
+              <button
+                key={r.path}
+                className="chip"
+                title={r.path}
+                onClick={() => void openPath(r.path)}
+                disabled={!connected || exporting}
+              >
+                {r.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         {instance && (
           <div className={`${styles.surface} ${styles.panel} ${styles.instance}`}>
@@ -391,13 +455,18 @@ export default function DeveloperView() {
 
         <div className={`${styles.surface} ${styles.table}`}>
           <div className={styles.tableHead}>
-            <span className="t-title">更新范围</span>
+            <span className="t-title">
+              {stage === 'scope'
+                ? '第一步 · 选择导出内容'
+                : '第二步 · 更新策略与确认'}
+            </span>
             <span className={styles.tableTools}>
               <span className="t-small">
-                {dev?.strategies.length ?? 0} 项 · 点目录名可排除 ·
-                「完全匹配」以包为准（包里没有的文件会被删除）
+                {stage === 'scope'
+                  ? '勾选要进包的目录/文件；下一步再设策略，不会每点一下重扫'
+                  : '只显示已勾选条目；预计大小已算好，直接开始制作'}
               </span>
-              {hasSource && (
+              {hasSource && stage === 'scope' && (
                 <button
                   className={`btn btn-ghost ${styles.clearBtn}`}
                   onClick={() => void clearSource()}
@@ -409,7 +478,21 @@ export default function DeveloperView() {
             </span>
           </div>
           <div className={`${styles.rows} scroll`}>
-            {(dev?.strategies ?? []).map((row) => (
+            {stage === 'strategy' && (
+              <div className={styles.confirm}>
+                <div className={styles.confirmGrid}>
+                  <span>导出条目</span><b>{allRows.filter((r) => !r.excluded).length} 项</b>
+                  <span>文件数量</span><b>{fmtInt(estimate?.files ?? instance?.totals.files)}</b>
+                  <span>原始体积</span><b>{fmtBytes(estimate?.bytes ?? instance?.totals.bytes)}</b>
+                  <span>预计包大小</span>
+                  <b>{estimate ? `${fmtBytes(estimate.pack_low)} – ${fmtBytes(estimate.pack_high)}` : '—'}</b>
+                </div>
+                <p className={styles.confirmHint}>
+                  预计为粗略区间；直接开始制作，不再重复扫描。
+                </p>
+              </div>
+            )}
+            {visibleRows.map((row) => (
               <div
                 key={row.name}
                 ref={(el) => {
@@ -417,16 +500,26 @@ export default function DeveloperView() {
                   else rowRefs.current.delete(row.name)
                 }}
                 className={styles.row}
-                data-off={row.excluded}
+                data-off={stage === 'scope' ? !scope.has(row.name) : row.excluded}
                 data-layer={layer?.name === row.name ? 'true' : undefined}
                 onPointerEnter={(e) => scheduleOpen(row, e.currentTarget)}
                 onPointerLeave={scheduleClose}
               >
-                <button className={styles.rowName} onClick={() => void toggleExcluded(row)}>
+                <button
+                  className={styles.rowName}
+                  onClick={() => stage === 'scope'
+                    ? toggleScope(row.name)
+                    : void toggleExcluded(row)}
+                >
+                  {stage === 'scope' && (
+                    <span className={styles.checkBox} data-on={scope.has(row.name)}>
+                      {scope.has(row.name) && <Icon name="check" size={12} />}
+                    </span>
+                  )}
                   <Icon name={row.isFile ? 'file' : 'folder'} size={13} />
                   <span>{row.name}</span>
                 </button>
-                {row.subs && row.subs.length > 0 && (
+                {stage === 'strategy' && row.subs && row.subs.length > 0 && (
                   <button
                     type="button"
                     className={styles.subBtn}
@@ -445,8 +538,9 @@ export default function DeveloperView() {
                     <Icon name="chevron" size={11} />
                   </button>
                 )}
+                {stage === 'strategy' && (
                 <div className={styles.chips}>
-                  {DIR_STRATEGIES.map((s) => (
+                  {(row.strategies ?? ['完全匹配', '替换重名', '跳过重名']).map((s) => (
                     <button
                       key={s}
                       className="chip"
@@ -458,6 +552,7 @@ export default function DeveloperView() {
                     </button>
                   ))}
                 </div>
+                )}
               </div>
             ))}
             {!hasSource && (
@@ -504,26 +599,49 @@ export default function DeveloperView() {
           </Floating3DLayer>
         </div>
 
-        <div className={styles.actions}>
-          <input
-            className="input"
-            value={outName}
-            onChange={(e) => setOutName(e.target.value)}
-            placeholder="输出文件名"
-            style={{ flex: 1, minWidth: 0 }}
-          />
-          <button className="btn" style={{ height: 38 }} onClick={() => void chooseOut()}>
-            位置…
-          </button>
-          <button
-            className="btn btn-primary"
-            style={{ height: 38, padding: '0 20px' }}
-            onClick={() => void build()}
-            disabled={!rootPath || exporting || loading}
-          >
-            {exporting ? '制作中…' : '开始制作更新包'}
-          </button>
-        </div>
+        {hasSource && (
+          <div className={styles.actions}>
+            {stage === 'strategy' && (
+              <>
+                <input
+                  className="input"
+                  value={outName}
+                  onChange={(e) => setOutName(e.target.value)}
+                  placeholder="输出文件名"
+                  style={{ flex: 1, minWidth: 0, height: 44 }}
+                />
+                <button className="btn" style={{ height: 44 }} onClick={() => void chooseOut()}>
+                  位置…
+                </button>
+              </>
+            )}
+            {stage === 'scope' && (
+              <button
+                className="btn btn-primary btn-lg"
+                style={{ marginLeft: 'auto' }}
+                onClick={() => void applyScope()}
+                disabled={!scope.size || scopeBusy || exporting || loading}
+              >
+                {scopeBusy ? '正在保存…' : `下一步：设置策略（${scope.size}）`}
+              </button>
+            )}
+            {stage === 'strategy' && (
+              <>
+                <button className="btn" style={{ height: 44 }} onClick={() => setStage('scope')}>
+                  上一步
+                </button>
+                <button
+                  className="btn btn-primary btn-lg"
+                  style={{ marginLeft: 'auto' }}
+                  onClick={() => void build()}
+                  disabled={!rootPath || exporting || loading}
+                >
+                  {exporting ? '制作中…' : '开始制作更新包'}
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         {(exporting || dev?.phase === 'done' || dev?.phase === 'error') && (
           <div className={`${styles.surface} ${styles.progressCard}`}>

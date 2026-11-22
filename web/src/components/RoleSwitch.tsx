@@ -11,18 +11,17 @@ const ITEMS: { id: Role; label: string }[] = [
 ]
 
 export default function RoleSwitch() {
-  const state = useApp((s) => s.state)
+  const role = useApp((s) => s.state?.role ?? 'player')
   const connected = useApp((s) => s.connected)
-  const setState = useApp((s) => s.setState)
-  const role: Role = state?.role ?? 'player'
+  const patchState = useApp((s) => s.patchState)
   const setCovering = useUi((s) => s.setCovering)
 
   const pick = async (next: Role) => {
-    if (!state || next === role) return
+    if (next === role) return
     // 换页时先盖一层：内容在遮罩后面换，视觉上是一次"刷新"而不是跳变
     setCovering(true)
     window.setTimeout(() => setCovering(false), 260)
-    setState({ ...state, role: next })
+    patchState({ role: next })
     if (connected) {
       try {
         await invoke('app.role.set', { role: next })

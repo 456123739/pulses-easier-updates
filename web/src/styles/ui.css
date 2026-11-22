@@ -59,8 +59,8 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 14px;
+  height: 36px;
+  padding: 0 16px;
   border-radius: var(--r-btn);
   font-size: var(--fs-body);
   color: var(--c-text);
@@ -85,6 +85,7 @@
   color: var(--c-on-accent);
   font-weight: var(--fw-bold);
   border: 1px solid transparent;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset;
 }
 .btn-primary:hover {
   background: var(--c-accent-hover);
@@ -107,6 +108,24 @@
   color: var(--c-text);
 }
 
+/* 主操作：更大的点击目标，和普通按钮拉开层级 */
+.btn-lg {
+  height: 44px;
+  padding: 0 22px;
+  font-size: 14px;
+  border-radius: 12px;
+}
+.btn-danger {
+  color: var(--c-error);
+  border-color: rgba(224, 141, 124, 0.28);
+  background: var(--c-error-soft);
+}
+.btn-danger:hover { background: rgba(224, 141, 124, 0.16); }
+
+.text-success { color: var(--c-added); }
+.text-warning { color: var(--c-warn); }
+.text-danger { color: var(--c-error); }
+
 /* ---------- 输入 ---------- */
 .input {
   height: 32px;
@@ -119,6 +138,10 @@
 }
 .input:focus {
   border-color: var(--c-accent-line);
+}
+.input::placeholder,
+textarea::placeholder {
+  color: rgba(233, 233, 236, 0.52);
 }
 
 /* ---------- 分段控件 ---------- */
@@ -173,9 +196,10 @@
   color: var(--c-text);
 }
 .chip[data-on='true'] {
-  color: var(--c-accent-text);
-  background: var(--c-accent-soft);
-  border-color: var(--c-accent-line);
+  color: #d8fff7;
+  background: rgba(95, 184, 166, 0.24);
+  border-color: rgba(95, 184, 166, 0.72);
+  font-weight: 600;
 }
 .chip:disabled {
   color: var(--c-muted);
