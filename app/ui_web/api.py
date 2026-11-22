@@ -236,6 +236,12 @@ class Api:
         win.resize(w, h)
         if x is not None and y is not None:
             win.move(int(x), int(y))
+        if getattr(self, "window_rounding", "") == "region":
+            try:
+                from .window_shell import apply_window_rounding
+                apply_window_rounding(win)
+            except Exception:                          # noqa: BLE001, S110
+                pass
         return {"width": w, "height": h}
 
     def bind_window(self, window) -> None:

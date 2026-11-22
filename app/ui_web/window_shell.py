@@ -82,6 +82,7 @@ def expand(window, target: tuple[int, int],
         window.min_size = MIN_SIZE                    # 展开后再限制最小尺寸
     except Exception:                                 # noqa: BLE001, S110
         pass
+    apply_window_rounding(window)                     # 区域裁剪方案要按新尺寸重设
     return tw, th
 
 
@@ -108,3 +109,84 @@ def compute_resize(edge: str, start: dict, dx: int, dy: int,
         y = y + (h - new_h)
         h = new_h
     return {"x": x, "y": y, "width": w, "height": h}
+
+
+# ----------------------------------------------------------------------
+# Windows 圆角：优先 DWM（Win11，抗锯齿、随窗口自动更新），
+# 退而求其次用 SetWindowRgn（Win10，区域裁剪，缩放后要重设）。
+# ----------------------------------------------------------------------
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_ROUND = 2
+DWMWCP_ROUNDSMALL = 3
+
+
+def _win_hwnd(window, title: str = "Pulses Easier") -> int:
+    if sys.platform != "win32":
+        return 0
+    try:
+        native = getattr(window, "native", None)
+        handle = getattr(native, "Handle", None)
+        if handle is not None:
+            try:
+                return int(handle.ToInt64())
+            except Exception:                        # noqa: BLE001
+                return int(handle)
+    except Exception:                                # noqa: BLE001
+        pass
+    try:
+        import ctypes
+        return int(ctypes.windll.user32.FindWindowW(None, title) or 0)
+    except Exception:                                # noqa: BLE001
+        return 0
+
+
+def _dwm_round(hwnd: int, small: bool = False) -> bool:
+    try:
+        import ctypes
+        pref = ctypes.c_int(DWMWCP_ROUNDSMALL if small else DWMWCP_ROUND)
+        res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+            ctypes.byref(pref), ctypes.sizeof(pref))
+        return res == 0
+    except Exception:                                # noqa: BLE001
+        return False
+
+
+def _region_round(window, radius: int = 14) -> bool:
+    """Win10 兜底：用圆角区域裁窗口；窗口缩放后必须重调（调用方负责）。"""
+    try:
+        import ctypes
+        hwnd = _win_hwnd(window)
+        if not hwnd:
+            return False
+        rect = ctypes.wintypes.RECT()
+        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        if w <= 0 or h <= 0:
+            return False
+        rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
+            0, 0, w + 1, h + 1, radius * 2, radius * 2)
+        if not rgn:
+            return False
+        ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+        return True
+    except Exception:                                # noqa: BLE001
+        return False
+
+
+def apply_window_rounding(window, radius: int = 14) -> str:
+    """
+    给无边框窗口加圆角。返回用了哪种方式（"dwm" / "region" / ""），
+    方便日志和 CI 断言；失败不影响启动。
+    """
+    if sys.platform != "win32":
+        return ""
+    hwnd = _win_hwnd(window)
+    if not hwnd:
+        return ""
+    if _dwm_round(hwnd):
+        return "dwm"
+    if _region_round(window, radius):
+        return "region"
+    return ""

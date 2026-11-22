@@ -23,8 +23,8 @@ from ..paths import bundle_dir, exe_dir, project_root
 from .api import Api
 from .controller import AppController
 from .events import EventBus, EventPump
-from .window_shell import (SPLASH_H, SPLASH_W, center_rect, expand as expand_window,
-                           screen_size)
+from .window_shell import (SPLASH_H, SPLASH_W, apply_window_rounding,
+                           center_rect, expand as expand_window, screen_size)
 
 WINDOW_TITLE = "Pulses Easier"
 WINDOW_W, WINDOW_H = 1440, 860
@@ -50,7 +50,7 @@ def _later_expand(window, api, target):
     """兜底：页面若因为脚本错误没调 window.expand，2.5 秒后自己长开，
     避免玩家永远停在一个 300×300 的小窗上。"""
     import time as _t
-    _t.sleep(2.5)
+    _t.sleep(8.0)
     try:
         if getattr(api, "expanded", False):
             return
@@ -60,7 +60,7 @@ def _later_expand(window, api, target):
         pass
 
 
-BG = "#101011"          # 与新界面底色一致，避免启动时闪一下浅灰
+BG = "#121214"          # 与新界面 --c-base 完全一致，避免启动/圆角处色差
 
 
 def web_dist_dir() -> Path:
@@ -211,7 +211,8 @@ def run(argv: list[str] | None = None) -> int:
     start_w, start_h = (SPLASH_W, SPLASH_H) if splash_first else size
     start_x, start_y = center_rect(start_w, start_h, screen_size()) if splash_first else (None, None)
     frameless = os.environ.get("PULSES_FRAMELESS", "1") != "0"
-    transparent = frameless and sys.platform == "win32"
+    # 不用 WebView2 透明（实测 Win11 上仍是黑底、直角）：改成无边框 + 系统圆角。
+    transparent = False
     window = webview.create_window(
         WINDOW_TITLE,
         target,
@@ -236,6 +237,14 @@ def run(argv: list[str] | None = None) -> int:
     api.window_target = size
     api.window_min_size = min_size
     api.start_frameless = frameless
+    def _round_later():
+        import time as _t
+        _t.sleep(0.6)                                # 等窗口句柄就绪
+        how = apply_window_rounding(window)
+        _note(f"window-rounding={how or 'none'}")
+        api.window_rounding = how
+
+    threading.Thread(target=_round_later, daemon=True).start()
     if splash_first:
         threading.Thread(
             target=lambda: _later_expand(window, api, size),
