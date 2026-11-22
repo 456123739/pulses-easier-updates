@@ -108,7 +108,6 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact, regi
     <div className={`card ${styles.card}`}>
       <div className={styles.head}>
         <span className="t-title">更新策略</span>
-        <span className="t-small">悬停策略可看说明；改完点底部主按钮一次提交</span>
         <div className={styles.headBtns}>
           <button className={styles.mini} onClick={() => void importConfig()}>
             导入配置
