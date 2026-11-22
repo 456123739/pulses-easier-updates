@@ -282,6 +282,20 @@ def main() -> int:
     distinct = len(set(widths))
     probe.check("展开是连续动画（>=6 个不同宽度）", distinct >= 6,
                 f"distinct={distinct}")
+    probe.cat = "visual"
+    if expand_png.is_file():
+        try:
+            from PIL import Image
+            im = Image.open(expand_png).convert("RGB")
+            ew, eh = im.size
+            mid = im.getpixel((ew // 2, eh // 2))
+            # 展开时 logo 应已模糊淡出成 #121214 底色，不能是被拉大的 logo。
+            bg_ok = all(abs(int(a) - int(b)) <= 8
+                        for a, b in zip(mid, (18, 18, 20)))
+            probe.check("展开中 logo 已淡出为纯色底", bg_ok,
+                        f"center={mid} size={ew}x{eh}")
+        except Exception as exc:                  # noqa: BLE001
+            probe.check("展开中 logo 已淡出为纯色底", False, str(exc))
     if not splash_saved:
         # 兜底：至少留一张窗口图，避免"缺截图也算过"
         r = rect_of(hwnd)

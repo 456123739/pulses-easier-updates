@@ -2,16 +2,21 @@
 .wrap {
   position: absolute;
   inset: 0;
-  background: #363841;
+  /* 与主界面 --c-base 一致：logo 淡出后就是主界面的底色，不出现色差 */
+  background: #121214;
   z-index: 200;
   overflow: hidden;
+  pointer-events: none;
 }
 
 .logo {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  left: 50%;
+  top: 50%;
+  width: 240px;
+  height: 240px;
+  transform: translate(-50%, -50%);
+  object-fit: contain;
   object-position: center;
+  will-change: opacity, filter;
 }

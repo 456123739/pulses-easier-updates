@@ -28,6 +28,7 @@ export default function App() {
   const pushToast = useApp((s) => s.pushToast)
   const sheet = useUi((s) => s.sheet)
   const [editorReady, setEditorReady] = useState(false)
+  const [expanding, setExpanding] = useState(false)
 
   // 第一次点开才加载编辑器；之后保活，关闭动画不丢
   useEffect(() => {
@@ -52,9 +53,12 @@ export default function App() {
         if (cancelled) return
         setState(state)
         if (isDesktop()) {
-          // logo 小窗 → 主窗口：窗口动画与内容切换同时进行
+          // 先把 logo 模糊淡出成主界面底色（固定 240px，不随窗口拉伸），
+          // 再展开纯色窗口；中间不挂载 Shell，避免每帧重排整个界面。
+          setExpanding(true)
+          await new Promise((resolve) => setTimeout(resolve, 180))
           await expandWindow()
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await new Promise((resolve) => setTimeout(resolve, 620))
         }
       } catch (err) {
         pushToast(err instanceof Error ? err.message : '启动失败', 'error')
@@ -70,7 +74,7 @@ export default function App() {
 
   return (
     <>
-      <AnimatePresence>{booting && <Splash key="splash" />}</AnimatePresence>
+      <AnimatePresence>{booting && <Splash key="splash" expanding={expanding} />}</AnimatePresence>
       {!booting && <Shell />}
       <Cover />
       <PreferencesSheet />
