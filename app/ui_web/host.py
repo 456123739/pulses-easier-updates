@@ -81,7 +81,8 @@ def runtime_available() -> bool:
     """本机有没有 WebView2 运行时（没有就别起新界面，否则只会卡在黑窗口）。"""
     if sys.platform != "win32":
         return True                                  # macOS/Linux 交给 GTK/WebKit 自己报错
-    bases = [os.environ.get("ProgramFiles(x86)", ""),
+    bases = [os.environ.get("LOCALAPPDATA", ""),
+             os.environ.get("ProgramFiles(x86)", ""),
              os.environ.get("ProgramFiles", "")]
     for base in bases:
         if not base:

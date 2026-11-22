@@ -117,7 +117,11 @@ def runtime_available() -> bool:
     """本机有没有 WebView2 运行时（没有就别起新界面）。"""
     if sys.platform != "win32":
         return True
-    bases = [os.environ.get("ProgramFiles(x86)", ""),
+    # WebView2 既有机器级安装（Program Files），也有用户级安装
+    # （%LOCALAPPDATA%\Microsoft\EdgeWebView）。Win11 上后者很常见，
+    # 只查 Program Files 会误判成“没有运行时”，把用户静默退回 Tk。
+    bases = [os.environ.get("LOCALAPPDATA", ""),
+             os.environ.get("ProgramFiles(x86)", ""),
              os.environ.get("ProgramFiles", "")]
     for base in bases:
         if not base:

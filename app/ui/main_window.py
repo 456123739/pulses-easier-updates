@@ -6,6 +6,8 @@ main_window.py — 主窗口
 - 启动流程：屏幕外预热 → withdraw → splash → on_boot_done()
 """
 
+import os
+import webbrowser
 from pathlib import Path
 from typing import ClassVar
 
@@ -64,6 +66,7 @@ class MainWindow(ctk.CTk):
 
         self._build_sidebar()
         self._build_page_host()
+        self._build_web_fallback_banner()
 
         # 默认只放玩家端
         self.player_view.place(in_=self.page_host, relx=0, rely=0,
@@ -109,6 +112,28 @@ class MainWindow(ctk.CTk):
             app_state=self.app_state,
             on_identity_changed=self._on_identity_changed)
         self.sidebar.grid(row=0, column=0, sticky="nsw")
+
+    def _build_web_fallback_banner(self):
+        """新界面没起来时，明确告诉玩家“这是兼容界面”，别再以为新 UI 就长这样。"""
+        reason = os.environ.get("PULSES_WEB_FALLBACK", "").strip()
+        if not reason:
+            return
+        self.grid_rowconfigure(1, weight=0)
+        bar = ctk.CTkFrame(self, fg_color=Color.CARD_BG, corner_radius=0,
+                           height=30)
+        bar.grid(row=1, column=0, columnspan=3, sticky="ew")
+        bar.grid_propagate(False)
+        text = (f"当前为兼容界面（{reason[:70]}）"
+                " · 新界面需要 Microsoft WebView2 运行时")
+        ctk.CTkLabel(bar, text=text, text_color=Color.TEXT_MUTED,
+                     font=("Microsoft YaHei UI", 12),
+                     anchor="w").pack(side="left", padx=12, pady=4)
+        ctk.CTkButton(
+            bar, text="安装 WebView2", width=112, height=22,
+            fg_color=Color.ACCENT, hover_color=Color.ACCENT_HOVER,
+            command=lambda: webbrowser.open(
+                "https://go.microsoft.com/fwlink/p/?LinkId=2124703")
+        ).pack(side="right", padx=10)
 
     def _build_page_host(self):
         self.page_host = ctk.CTkFrame(self, fg_color=Color.WORKSPACE_BG,
