@@ -65,6 +65,7 @@ def resolve_export_options(opts: dict | None = None) -> dict:
         "use_v2": bool(sup and ct.available()),
         "level": max(1, min(22, level)) if sup else ct.DEFAULT_LEVEL,
         "mca": sup,                    # 存档变换只随 super 开启
+        "jar": sup,                    # JAR 可逆去壳也只随 super 开启
     }
 
 
@@ -74,6 +75,7 @@ class PackWriter:
     def __init__(self, path: Path, *, use_v2: bool = True,
                  level: int = ct.DEFAULT_LEVEL,
                  mca_transform: bool = True,
+                 jar_transform: bool = False,
                  log=None):
         self.path = Path(path)
         self.use_v2 = bool(use_v2 and ct.available())
@@ -85,7 +87,9 @@ class PackWriter:
         self._wrote_file = False
 
         if self.use_v2:
-            self._v2 = ct.ContainerWriter(self.path, level=level, log=self._log)
+            self._v2 = ct.ContainerWriter(
+                self.path, level=level, jar_transform=jar_transform,
+                log=self._log)
             self._zf = None
         else:
             self._v2 = None

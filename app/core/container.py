@@ -31,7 +31,7 @@ zip 每个成员独立 deflate，窗口只有 32 KB，看不到"这个 jar 和�
     9   .. 12   u32    header_offset      （索引块在文件里的绝对偏移）
     13  .. 16   u32    header_comp_len
     17  .. 20   u32    header_raw_len
-    21  .. 24   u32    format_version     （=2）
+    21  .. 24   u32    format_version     （=3，读端兼容 2）
     25  ..      blocks   （每块一个独立 zstd 帧，长度记在索引里）
     header_off  zstd(json 索引)
 
@@ -76,7 +76,7 @@ except Exception:                     # pragma: no cover - 环境相关
 MAGIC = b"EAPK2\r\n\x1a\n"
 JAR_MAGIC = b"JAR1"
 MAX_JAR_SIZE = 2 << 30                # 单个 jar 逻辑大小上限 2 GB
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 _FIXED_HEAD = len(MAGIC) + 16         # magic + 4 × u32
 # 块大小：64 MB。块越大越"接近 solid"，压缩率更好；代价是解压单块时的内存
 # 峰值（64 MB）与随机访问粒度。实测 8/32/64/128/单块 之间体积差 <1%，

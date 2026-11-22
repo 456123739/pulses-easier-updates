@@ -311,6 +311,7 @@ def export_from_instance(
             use_v2=wopts["use_v2"],
             level=wopts["level"],
             mca_transform=wopts["mca"],
+            jar_transform=wopts["jar"],
             log=log)
         try:
             writer.add_bytes(INDEX_FILENAME, dumps(index), inline=True)

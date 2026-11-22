@@ -256,6 +256,7 @@ def export_eapack(
         writer = PackWriter(tmp_path, use_v2=wopts["use_v2"],
                             level=wopts["level"],
                             mca_transform=wopts["mca"],
+                            jar_transform=wopts["jar"],
                             log=_log)
         try:
             # 4.1) index（最小体积模式下按 excluded 过滤 index 条目）

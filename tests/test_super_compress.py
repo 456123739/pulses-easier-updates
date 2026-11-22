@@ -72,6 +72,7 @@ class ResolveOptionsCase(unittest.TestCase):
                                       "world_transform": False})
         self.assertTrue(got["use_v2"])
         self.assertTrue(got["mca"])
+        self.assertTrue(got["jar"])
         self.assertEqual(got["level"], 17)
 
     def test_off_is_legacy_zip_even_if_old_db_keys_true(self):
@@ -165,7 +166,11 @@ class ExportCompatCase(unittest.TestCase):
 
     def test_super_is_eapk2_and_verifies(self):
         out = self._export("super.eapack", {"super_compress": True})
-        self.assertEqual(out.read_bytes()[:5], b"EAPK2")
+        raw = out.read_bytes()
+        self.assertEqual(raw[:5], b"EAPK2")
+        from app.core.container import MAGIC
+        ver = struct.unpack_from(">IIII", raw, len(MAGIC))[3]
+        self.assertEqual(ver, 3)
         with open_container(out) as reader:
             manifest = json.loads(reader.read("ea_manifest.json"))
         self.assertEqual(manifest.get("signature_version"), 2)
@@ -382,3 +387,49 @@ class RestoreBoundsCase(unittest.TestCase):
                 + b"\xff\xff\xff\xff\x0f")
         with self.assertRaises(ValueError):
             mca.restore_region(blob)
+
+
+class JarTransformCase(unittest.TestCase):
+    """超级档对合法 JAR 做可逆去壳；关掉时原样写。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="pe-super-jar-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        dbdir = self.tmp / "db"
+        db.create_database(dbdir)
+        self._cfg = mock.patch.object(db, "_APP_CFG", self.tmp / "app-config.json")
+        self._cfg.start()
+        self.addCleanup(self._cfg.stop)
+        db.set_db_path(dbdir)
+        self.pack = self.tmp / "versions" / "P"
+        jar = self.pack / "mods" / "real.jar"
+        jar.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(jar, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("fabric.mod.json", '{"id":"real"}')
+            zf.writestr("data.bin", b"hello" * 1000)
+        self.jar_bytes = jar.read_bytes()
+
+    def _export(self, name, opts):
+        out = self.tmp / name
+        res = instance_export.export_from_instance(
+            self.pack, out,
+            rules=export_rules.expand_rules(export_rules.default_keys()),
+            strategies={"mods": "完全匹配"}, whitelist=["mods"], opts=opts,
+            cf_key="", lookup_fn=lambda wanted: {})
+        self.assertTrue(res and out.is_file(), res)
+        return out
+
+    def test_super_uses_jar_transform_and_roundtrips(self):
+        out = self._export("s.eapack", {"super_compress": True})
+        with open_container(out) as reader:
+            names = [n for n in reader.names if n.endswith("real.jar")]
+            self.assertEqual(len(names), 1)
+            self.assertEqual(reader.info(names[0]).get("transform"), "jar")
+            self.assertEqual(reader.read(names[0]), self.jar_bytes)
+
+    def test_off_keeps_jar_raw(self):
+        out = self._export("o.eapack", {"super_compress": False})
+        import zipfile as _zf
+        with _zf.ZipFile(out) as zf:
+            names = [n for n in zf.namelist() if n.endswith("real.jar")]
+            self.assertEqual(zf.read(names[0]), self.jar_bytes)

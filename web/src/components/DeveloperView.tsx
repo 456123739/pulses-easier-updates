@@ -16,7 +16,7 @@ const OPTIONS = [
   { id: 'tamper_proof', label: '完整性签名', desc: '逐条记录内容哈希，玩家端会拒绝被改坏的更新包（不证明来源）' },
   { id: 'precompute_overrides', label: '预计算覆盖文件', desc: '打包时就比对好，玩家端比对更快' },
   { id: 'min_size', label: '压缩到最小体积', desc: '忽略排除目录，包更小但更新更慢' },
-  { id: 'super_compress', label: '超级压缩（beta）', desc: '新版 EAPK2 + 存档去外壳：包更小；需要新版客户端。关闭时导出旧版 ZIP（旧客户端可读）' },
+  { id: 'super_compress', label: 'Osmium 超级压缩（beta）', desc: '锇密度引擎：EAPK2 + 存档/JAR 去外壳，包更小；需要新版客户端。关闭时导出旧版 ZIP（旧客户端可读）' },
 ]
 
 const DIR_STRATEGIES = ['完全匹配', '替换重名', '跳过重名']

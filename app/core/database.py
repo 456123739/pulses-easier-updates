@@ -65,7 +65,7 @@ DEFAULT_EXPORT_OPTIONS = {
     # 悄悄变成新格式）。现在只有 super_compress 决定容器与存档变换。
     "compact_container": False,
     "world_transform": False,
-    # 超级压缩（beta）：EAPK2 + 存档变换（需要新版客户端），默认关
+    # Osmium 超级压缩（beta）：EAPK2 + 存档/JAR 变换（需要新版客户端），默认关
     "super_compress": False,
 }
 
