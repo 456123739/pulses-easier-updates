@@ -63,6 +63,7 @@ import json
 import os
 import struct
 import zipfile
+import zlib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,6 +74,8 @@ except Exception:                     # pragma: no cover - 环境相关
     _zstd = None
 
 MAGIC = b"EAPK2\r\n\x1a\n"
+JAR_MAGIC = b"JAR1"
+MAX_JAR_SIZE = 2 << 30                # 单个 jar 逻辑大小上限 2 GB
 FORMAT_VERSION = 2
 _FIXED_HEAD = len(MAGIC) + 16         # magic + 4 × u32
 # 块大小：64 MB。块越大越"接近 solid"，压缩率更好；代价是解压单块时的内存
@@ -111,6 +114,128 @@ def _sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
 
 
+def _jar_local(all_data: bytes, off: int, comp_size: int):
+    """读一个 local file header（原样返回 header 字节）与压缩数据。"""
+    if off < 0 or off + 30 > len(all_data):
+        return None
+    (sig, _ver, flag, method, _t, _d, _crc,
+     _cs, _us, nl, el) = struct.unpack_from("<IHHHHHIIIHH", all_data, off)
+    if sig != 0x04034B50:
+        return None
+    end = off + 30 + nl + el
+    if end > len(all_data):
+        return None
+    header = all_data[off:end]
+    comp = all_data[end:end + comp_size]
+    if len(comp) != comp_size:
+        return None
+    return flag, method, header, comp, end
+
+
+def jar_encode(path: Path) -> bytes | None:
+    """
+    把 jar 的 deflate 外壳剥掉，只存每个 entry 的 raw 数据 + 原始头部。
+
+    还原时用 zlib level 6 重压；**每个 entry 都必须在导出时验证能逐字节
+    复现**，任何一个不能（不同的 zlib 版本/参数、加密、非 deflate 方法）
+    就整包 fallback 返回 None，绝不写入"可能还原不回去"的变换。
+    """
+    path = Path(path)
+    try:
+        if path.stat().st_size > MAX_JAR_SIZE:
+            return None
+        all_data = path.read_bytes()
+        with zipfile.ZipFile(path) as zf:
+            infos = zf.infolist()
+            if not infos:
+                return None
+            out = bytearray(JAR_MAGIC)
+            out += struct.pack(">I", len(infos))
+            prev_end = 0
+            for zi in infos:
+                got = _jar_local(all_data, zi.header_offset, zi.compress_size)
+                if got is None:
+                    return None
+                flag, method, header, comp, data_off = got
+                if flag & 0x1 or flag & 0x40:          # 加密
+                    return None
+                if method == 8:
+                    raw = zlib.decompress(comp, -15)
+                    co = zlib.compressobj(6, zlib.DEFLATED, -15)
+                    if co.compress(raw) + co.flush() != comp:
+                        return None
+                elif method == 0:
+                    raw = comp
+                else:
+                    return None
+                gap = all_data[prev_end:zi.header_offset]
+                prev_end = data_off + len(comp)
+                out += struct.pack(">I", len(gap)) + gap
+                out += struct.pack(">I", len(header)) + header
+                out += bytes([method]) + struct.pack(">I", len(raw)) + raw
+            tail = all_data[prev_end:]
+            out += struct.pack(">I", len(tail)) + tail
+            return bytes(out)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def jar_decode(blob: bytes) -> bytes:
+    """还原 jar 原始字节；结构错误抛 ContainerError。"""
+    if not blob.startswith(JAR_MAGIC):
+        raise ContainerError("jar 变换数据损坏")
+    try:
+        pos = len(JAR_MAGIC)
+        if pos + 4 > len(blob):
+            raise ContainerError("jar 变换数据截断")
+        count = struct.unpack_from(">I", blob, pos)[0]; pos += 4
+        if count > MAX_ENTRIES:
+            raise ContainerError(f"jar 条目过多：{count}")
+        out = bytearray()
+        for _ in range(count):
+            if pos + 4 > len(blob):
+                raise ContainerError("jar 变换数据截断")
+            gl = struct.unpack_from(">I", blob, pos)[0]; pos += 4
+            if pos + gl > len(blob):
+                raise ContainerError("jar gap 越界")
+            out += blob[pos:pos + gl]; pos += gl
+            if pos + 4 > len(blob):
+                raise ContainerError("jar 变换数据截断")
+            hl = struct.unpack_from(">I", blob, pos)[0]; pos += 4
+            if pos + hl > len(blob):
+                raise ContainerError("jar header 越界")
+            out += blob[pos:pos + hl]; pos += hl
+            if pos + 5 > len(blob):
+                raise ContainerError("jar 变换数据截断")
+            method = blob[pos]; pos += 1
+            rl = struct.unpack_from(">I", blob, pos)[0]; pos += 4
+            if pos + rl > len(blob):
+                raise ContainerError("jar raw 越界")
+            raw = blob[pos:pos + rl]; pos += rl
+            if method == 8:
+                co = zlib.compressobj(6, zlib.DEFLATED, -15)
+                out += co.compress(raw) + co.flush()
+            elif method == 0:
+                out += raw
+            else:
+                raise ContainerError(f"jar 条目方法不支持：{method}")
+            if len(out) > MAX_JAR_SIZE:
+                raise ContainerError("jar 还原后超出上限")
+        if pos + 4 > len(blob):
+            raise ContainerError("jar 变换数据截断")
+        tl = struct.unpack_from(">I", blob, pos)[0]; pos += 4
+        if pos + tl > len(blob):
+            raise ContainerError("jar tail 越界")
+        out += blob[pos:pos + tl]
+        if len(out) > MAX_JAR_SIZE:
+            raise ContainerError("jar 还原后超出上限")
+        return bytes(out)
+    except ContainerError:
+        raise
+    except Exception as e:                              # noqa: BLE001
+        raise ContainerError(f"jar 变换数据损坏：{e}") from e
+
+
 # ----------------------------------------------------------------------
 # 写
 # ----------------------------------------------------------------------
@@ -145,12 +270,17 @@ class ContainerWriter:
                  block_size: int = DEFAULT_BLOCK,
                  long_window: bool = True,
                  compress: bool = True,
+                 jar_transform: bool | None = None,
                  log: Callable[[str, str], None] | None = None):
         self.path = Path(path)
         self.level = max(1, min(22, int(level)))
         self.block_size = max(64 * 1024, int(block_size))
         self._log = log or (lambda _l, _m: None)
         self._compress = compress and _zstd is not None
+        # 超级压缩档（level >= 20）默认尝试 jar 去壳；普通档保持旧行为。
+        # 显式传 jar_transform 可覆盖。
+        self._jar_transform = ((self.level >= 20) if jar_transform is None
+                               else bool(jar_transform))
         self._entries: list[dict] = []
         self._inline: dict[str, str] = {}
         self._blocks: list[list[int]] = []
@@ -232,14 +362,15 @@ class ContainerWriter:
         self._stats.entries.append(name)
 
     def add_transformed(self, name: str, blob: bytes, *,
-                        logical_size: int, logical_sha1: str) -> None:
+                        logical_size: int, logical_sha1: str,
+                        transform: str = "mca") -> None:
         """
         存"变换后"的字节，但对外仍以逻辑文件的体积/sha1 记账。
 
         签名和玩家端的核对都按**逻辑内容**（还原后的 `.mca`）算，
         这样存档变换对上层完全透明。
         """
-        self._add(name, blob, "mca", sha1=logical_sha1,
+        self._add(name, blob, transform, sha1=logical_sha1,
                   logical_size=logical_size)
 
     @property
@@ -263,6 +394,15 @@ class ContainerWriter:
                                      logical_sha1=_sha1(data))
                 return
             transform = None                       # 变换失败 → 原样存
+        if transform is None and self._jar_transform \
+                and name.lower().endswith(".jar"):
+            blob = jar_encode(src)
+            if blob is not None:
+                data = src.read_bytes()
+                self.add_transformed(name, blob, logical_size=len(data),
+                                     logical_sha1=_sha1(data),
+                                     transform="jar")
+                return
         # 普通文件：分块读，避免大文件一次性进内存
         try:
             size = src.stat().st_size
@@ -453,7 +593,7 @@ def validate_header(header, *, file_size: int, data_start: int) -> tuple[int, li
             raise ContainerError(f"条目重复：{name}")
         seen.add(name)
         transform = ent.get("transform")
-        if transform not in (None, "mca"):
+        if transform not in (None, "mca", "jar"):
             raise ContainerError(f"未知变换：{transform}")
         size = _as_int(ent.get("size", 0), f"{name} 的逻辑大小")
         stored = _as_int(ent.get("stored", 0), f"{name} 的存储大小")
@@ -621,6 +761,15 @@ class Eapk2Reader(ContainerReader):
         if ent.get("inline"):
             import base64
             yield base64.b64decode(self._inline[name])
+            return
+        if ent.get("transform") == "jar":
+            parts = []
+            for blk, off, length in ent["chunks"]:
+                block = self._block(blk)
+                if off + length > len(block):
+                    raise ContainerError(f"{name} 的 chunk 越过块 {blk}")
+                parts.append(block[off:off + length])
+            yield jar_decode(b"".join(parts))
             return
         if ent.get("transform") == "mca":
             # 存档变换是"整文件可逆"的，必须先拼齐再还原。
