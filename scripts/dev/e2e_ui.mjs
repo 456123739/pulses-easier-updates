@@ -423,8 +423,8 @@ async function basicSuite() {
   dev = await devState()
   check(dev?.mode === 'zip' && Boolean(dev?.source), '拒绝后来源没丢',
         JSON.stringify({ mode: dev?.mode, source: dev?.source }))
-  // 导出内容面板已经去掉：顶层目录交给「更新范围」自己表达
-  check(!(await bodyText()).includes('导出内容'), '「导出内容」面板已移除')
+  // 第一步标题本身包含「导出内容」，这里只确认旧的独立面板不再出现
+  check(!(await bodyText()).includes('「导出内容」'), '旧的「导出内容」面板已移除')
 
   // ---- 特殊导出选项：扫到才出现，默认一个都不勾 ----
   mkdirSync(join(fixture.pack, 'screenshots'), { recursive: true })
@@ -440,8 +440,11 @@ async function basicSuite() {
   check((dev?.specials ?? []).every((x) => x.checked === false),
         '特殊导出选项默认都不勾', JSON.stringify((dev?.specials ?? []).map((x) => [x.key, x.checked])))
   check(await waitBody(/特殊导出选项/), '右栏出现「特殊导出选项」')
-  check(!(dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
-        '没勾之前它不该混进更新范围')
+  {
+    const rows = Object.fromEntries((dev?.strategies ?? []).map((r) => [r.name, r]))
+    check(!!rows['optionsof.txt'] && rows['optionsof.txt'].excluded === true,
+      '没勾之前特殊文件只展示、不导出', JSON.stringify(rows['optionsof.txt']))
+  }
 
   // 勾上 → 重扫后 optionsof.txt 出现在更新范围；再关掉恢复原样
   const waitDev = (fn) => waitFor(async () => {
@@ -451,16 +454,23 @@ async function basicSuite() {
   await clickText('OptiFine 画质设置')
   dev = await waitDev((d) => (d.specials ?? []).find((x) => x.key === 'optifine')?.checked === true)
   check(!!dev, '勾选特殊选项后状态回写')
-  check((dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
-        '勾选后文件进入更新范围', JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
+  {
+    const row = (dev?.strategies ?? []).find((r) => r.name === 'optionsof.txt')
+    check(!!row && row.excluded === false,
+      '勾选后文件进入更新范围', JSON.stringify(row))
+  }
   await clickText('OptiFine 画质设置')
   dev = await waitDev((d) => (d.specials ?? []).find((x) => x.key === 'optifine')?.checked === false)
-  check(!!dev && !(dev?.strategies ?? []).some((r) => r.name === 'optionsof.txt'),
-        '取消后文件退出更新范围')
+  {
+    const row = (dev?.strategies ?? []).find((r) => r.name === 'optionsof.txt')
+    check(!!row && row.excluded === true, '取消后文件退出更新范围', JSON.stringify(row))
+  }
 
   // 排除 config（点目录名）—— 快照到了不代表行已经画出来
   await waitRow('config')
   await clickRowName('config')
+  await clickText('下一步：设置策略', { exact: false })
+  check(await waitBody(/第二步 · 更新策略与确认/), '进入策略确认')
   dev = await waitDev((d) => (d.strategies ?? []).find((r) => r.name === 'config')?.excluded === true)
   check(!!dev, '目录可被排除（config）')
   // 改策略
@@ -548,8 +558,6 @@ async function basicSuite() {
     const v = await page.locator('input[placeholder="输出文件名"]').inputValue()
     return v === 'E2EExport.eapack'
   }), '输出文件名已回填', outFile)
-  await clickText('下一步：设置策略', { exact: false })
-  check(await waitBody(/第二步 · 更新策略与确认/), '进入策略确认')
   await clickText('开始制作更新包', { exact: true })
   check(await waitBody(/已生成：/, 120000), '开发者导出完成（完成态可见）')
   check(existsSync(outFile) && statSync(outFile).size > 500,
