@@ -88,6 +88,9 @@ def main() -> int:
         return 3
     dump(win, pcl / "before.json")
     print("before", win.window_text())
+    if click_name(win, "同意", timeout=3):
+        print("eula accepted")
+        time.sleep(2)
     print("version settings click", click_name(win, "版本设置"))
     time.sleep(2)
     dump(win, pcl / "instance.json")
