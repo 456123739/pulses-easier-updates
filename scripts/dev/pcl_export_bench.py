@@ -59,6 +59,11 @@ def click_name(win, name: str, timeout: float = 8) -> bool:
             try:
                 if c.window_text() == name and c.is_visible():
                     c.click_input()
+                    time.sleep(0.2)
+                    try:
+                        c.parent().click_input()
+                    except Exception:
+                        pass
                     return True
             except Exception:
                 pass
@@ -98,7 +103,17 @@ def main() -> int:
     time.sleep(2)
     dump(win, pcl / "export.json")
     print("start click", click_name(win, "开始导出"))
-    time.sleep(2)
+    time.sleep(5)
+    dump(win, pcl / "after.json")
+    try:
+        print("top-windows", [w.window_text() for w in desk.windows()])
+    except Exception as exc:
+        print("top-windows-error", exc)
+    for lg in pcl.rglob("Log*.txt"):
+        try:
+            print("pcl-log-tail", lg.read_text(encoding="utf-8", errors="replace").splitlines()[-15:])
+        except Exception:
+            pass
     # 保存对话框
     try:
         dlg = None
