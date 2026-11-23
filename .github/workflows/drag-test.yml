@@ -1,0 +1,24 @@
+name: drag-test
+on:
+  workflow_dispatch:
+jobs:
+  drag:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements.txt pywinauto pillow
+      - name: 安装 WebView2 运行时
+        run: |
+          $p = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\*" -ErrorAction SilentlyContinue
+          if (-not $p) { choco install webview2-runtime -y --no-progress }
+      - run: python scripts/dev/win_drag_probe.py --source
+        env: { PYTHONIOENCODING: "utf-8" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: drag-evidence
+          path: |
+            ${{ runner.temp }}/pe-drag-*/drag.png
+          if-no-files-found: warn

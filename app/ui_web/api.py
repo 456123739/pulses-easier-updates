@@ -495,6 +495,16 @@ class Api:
             self._bus.dnd("error", "没能拿到拖入文件的路径，请用点击选择")
             return _err("NO_PATH", "没能拿到拖入文件的路径")
         self._bus.emit("dnd", {"kind": "ok", "paths": clean})
+        # CI/自动化专用：只写一个状态文件，不改变正常拖拽行为
+        import os as _os
+        _state = _os.environ.get("PULSES_E2E_STATE")
+        if _state:
+            try:
+                Path(_state).write_text(
+                    __import__("json").dumps({"paths": clean}, ensure_ascii=False),
+                    encoding="utf-8")
+            except OSError:
+                pass
         try:
             self._controller.open_path(clean[0])
         except ApiError as exc:

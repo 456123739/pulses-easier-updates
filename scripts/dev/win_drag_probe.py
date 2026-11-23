@@ -1,0 +1,169 @@
+"""Windows 真机拖拽探针：资源管理器 -> 应用 STEP2，真实鼠标轨迹。
+
+需要 pywinauto；全部在临时目录，不碰玩家数据。
+"""
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def make_update(path: Path) -> None:
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("modrinth.index.json", json.dumps({
+            "formatVersion": 1, "game": "minecraft", "name": "DragProbe",
+            "versionId": "1.0.0", "dependencies": {"minecraft": "1.20.1"},
+            "files": [],
+        }))
+        z.writestr("overrides/config/drag-probe.toml", "drag = true\n")
+
+
+def find_window(substr: str) -> int:
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def cb(hwnd, _):
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n:
+            b = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, b, n + 1)
+            if substr.lower() in b.value.lower() and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(cb, 0)
+    return int(found[0]) if found else 0
+
+
+def rect(hwnd):
+    r = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
+    return r.left, r.top, r.right - r.left, r.bottom - r.top
+
+
+def main() -> int:
+    if sys.platform != "win32":
+        print("windows only")
+        return 2
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    tmp = Path(tempfile.mkdtemp(prefix="pe-drag-"))
+    home = tmp / "home"
+    home.mkdir()
+    update = tmp / "update.zip"
+    make_update(update)
+    state = tmp / "drop-state.json"
+    env = dict(os.environ)
+    env.update({"PULSES_E2E_STATE": str(state), "PULSES_UI": "web",
+                "HOME": str(home), "USERPROFILE": str(home)})
+    source = "--source" in sys.argv
+    exe = ""
+    if not source:
+        i = sys.argv.index("--exe") if "--exe" in sys.argv else -1
+        if i < 0 or i + 1 >= len(sys.argv):
+            print("need --exe or --source")
+            return 2
+        exe = sys.argv[i + 1]
+    proc = (subprocess.Popen([sys.executable, str(ROOT / "main.py")], cwd=str(ROOT), env=env)
+            if source else subprocess.Popen([exe], cwd=str(Path(exe).parent), env=env))
+    hwnd = 0
+    for _ in range(80):
+        time.sleep(0.5)
+        hwnd = find_window("Pulses Easier")
+        if hwnd:
+            break
+    if not hwnd:
+        print("NO_APP_WINDOW")
+        proc.kill()
+        return 3
+    print("app", hwnd)
+    # 左半边放应用，右半边放资源管理器，避免 Explorer 挡住投放点
+    ctypes.windll.user32.MoveWindow(hwnd, 10, 10, 700, 668, True)
+    time.sleep(6)
+    explorer = subprocess.Popen(["explorer.exe", f"/select,{update}"])
+    exp = 0
+    for _ in range(40):
+        time.sleep(0.5)
+        exp = find_window("pe-drag-")
+        if not exp:
+            exp = find_window("update.zip")
+        if exp:
+            break
+    if not exp:
+        # 标题不一定包含目录名，取 CabinetWClass
+        exp = ctypes.windll.user32.FindWindowW("CabinetWClass", None)
+    if not exp:
+        print("NO_EXPLORER")
+        proc.kill()
+        explorer.kill()
+        return 4
+    ctypes.windll.user32.MoveWindow(exp, 720, 10, 300, 620, True)
+    time.sleep(2)
+    try:
+        from pywinauto import Desktop
+        win = Desktop(backend="uia").window(handle=exp)
+        target = None
+        for c in win.descendants():
+            try:
+                if c.window_text() == "update.zip" and c.is_visible():
+                    target = c
+                    break
+            except Exception:
+                pass
+        if target is None:
+            print("NO_FILE_ITEM")
+            return 5
+        left, top, width, height = target.rectangle()
+        sx, sy = (left + width // 2, top + height // 2)
+        ax, ay, aw, ah = rect(hwnd)
+        # STEP2 卡片在左侧 46% 栏的上部
+        tx, ty = ax + int(aw * 0.40), ay + int(ah * 0.30)
+        print("drag", sx, sy, "->", tx, ty)
+        u = ctypes.windll.user32
+        u.SetForegroundWindow(hwnd)
+        time.sleep(0.3)
+        u.SetCursorPos(sx, sy)
+        time.sleep(0.3)
+        u.mouse_event(0x0002, 0, 0, 0, 0)   # left down
+        for i in range(1, 25):
+            u.SetCursorPos(int(sx + (tx - sx) * i / 24), int(sy + (ty - sy) * i / 24))
+            time.sleep(0.03)
+        time.sleep(0.4)
+        u.mouse_event(0x0004, 0, 0, 0, 0)   # left up
+        ok = False
+        for _ in range(60):
+            time.sleep(0.5)
+            if state.is_file():
+                data = json.loads(state.read_text(encoding="utf-8"))
+                print("STATE", data)
+                ok = any(str(p).endswith("update.zip") for p in data.get("paths", []))
+                break
+        try:
+            from PIL import ImageGrab
+            ImageGrab.grab().save(tmp / "drag.png")
+        except Exception:
+            pass
+        print("RESULT", "PASS" if ok else "FAIL")
+        return 0 if ok else 6
+    finally:
+        try: proc.terminate()
+        except Exception: pass
+        try: explorer.kill()
+        except Exception: pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())
