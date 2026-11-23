@@ -130,7 +130,7 @@ def main() -> int:
         proc.kill()
         explorer.kill()
         return 4
-    ctypes.windll.user32.MoveWindow(exp, 720, 10, 300, 620, True)
+    ctypes.windll.user32.MoveWindow(exp, 990, 10, 285, 620, True)
     time.sleep(2)
     try:
         from pywinauto import Desktop
