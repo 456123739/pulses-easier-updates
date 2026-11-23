@@ -90,6 +90,11 @@ def main() -> int:
         out["files"] = [str(p.relative_to(pcl)) for p in pcl.rglob("*") if p.is_file()][:80]
     except Exception:
         pass
+    for lg in pcl.rglob("Log*.txt"):
+        try:
+            out.setdefault("pcl_log", []).extend(lg.read_text(encoding="utf-8", errors="replace").splitlines()[-80:])
+        except Exception:
+            pass
     log.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         proc.terminate()
