@@ -10,8 +10,17 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - run: pip install pywinauto pillow
+      - name: 下载真实夹具
+        run: |
+          curl -L -o fixture.zip https://github.com/456123739/pulses-easier-updates/releases/download/fixture-minerizon-beta-1/minerizon-pcl-fixture.zip
+          mkdir -p "${{ runner.temp }}/real"
+          unzip -q fixture.zip -d "${{ runner.temp }}/real"
+          dir "${{ runner.temp }}/real"
+          dir "${{ runner.temp }}/real/versions"
       - run: python scripts/dev/pcl_export_bench.py
-        env: { PYTHONIOENCODING: "utf-8" }
+        env:
+          PYTHONIOENCODING: "utf-8"
+          PULSES_REAL_FIXTURE: ${{ runner.temp }}/real
       - uses: actions/upload-artifact@v4
         if: always()
         with:
