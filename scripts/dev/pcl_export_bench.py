@@ -111,7 +111,11 @@ def main() -> int:
     if click_name(win, "同意", timeout=3):
         print("eula accepted")
         time.sleep(2)
-    print("version settings click", click_name(win, "版本设置"))
+    print("version select click", click_name(win, "版本选择"))
+    time.sleep(2)
+    dump(win, pcl / "select.json")
+    # 版本选择页里点当前实例名，进入实例管理页
+    print("instance click", click_name(win, "Minerizon beta", timeout=3))
     time.sleep(2)
     dump(win, pcl / "instance.json")
     print("export click", click_name(win, "导出"))
