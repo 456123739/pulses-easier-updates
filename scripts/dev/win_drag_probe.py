@@ -212,7 +212,11 @@ def main() -> int:
                 ctypes.c_uint32.from_address(ptr + 16).value = 1
                 ctypes.memmove(ptr + 20, path_bytes, len(path_bytes))
                 k32.GlobalUnlock(ctypes.c_void_p(h))
-                ctypes.windll.user32.PostMessageW(hwnd, 0x0233, h, 0)
+                u32 = ctypes.windll.user32
+                u32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                             ctypes.c_void_p, ctypes.c_void_p]
+                u32.PostMessageW(ctypes.c_void_p(hwnd), 0x0233,
+                                 ctypes.c_void_p(h), None)
                 for _ in range(20):
                     time.sleep(0.5)
                     if state.is_file():
