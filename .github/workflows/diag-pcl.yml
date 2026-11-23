@@ -16,5 +16,5 @@ jobs:
         with:
           name: pcl-probe
           path: |
-            ${{ runner.temp }}/pe-pcl-probe
+            bench-run
           if-no-files-found: warn

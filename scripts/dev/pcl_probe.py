@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 def setup() -> tuple[Path, Path]:
-    root = Path(os.environ.get("TEMP", ".")) / "pe-pcl-probe"
+    root = Path.cwd() / "bench-run" / "pcl"
     shutil.rmtree(root, ignore_errors=True)
     pcl = root / "PCL"
     pcl.mkdir(parents=True)
@@ -59,7 +59,25 @@ def main() -> int:
     proc = subprocess.Popen([str(pcl / "PCL.exe")], cwd=str(pcl),
                             stdout=err, stderr=subprocess.STDOUT)
     time.sleep(20)
-    out = {"pid": proc.pid, "exit": proc.poll(), "windows": [], "controls": []}
+    out = {"pid": proc.pid, "exit": proc.poll(), "windows": [], "controls": [], "win32": []}
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        titles = []
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def cb(hwnd, _):
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(hwnd, buf, n + 1)
+                titles.append({"hwnd": int(hwnd), "title": buf.value,
+                               "visible": bool(user32.IsWindowVisible(hwnd))})
+            return True
+        user32.EnumWindows(cb, 0)
+        out["win32"] = titles
+    except Exception as exc:
+        out["win32_error"] = str(exc)
     try:
         from pywinauto import Desktop
         desk = Desktop(backend="uia")
