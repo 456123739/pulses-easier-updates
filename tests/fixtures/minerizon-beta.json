@@ -1,0 +1,14 @@
+{
+  "name": "Minerizon beta",
+  "zip_sha256": "09f9033a9f7589cc527d226647faa6a4ff2bda2582d326f0d6b1a879977fa498",
+  "zip_bytes": 749872105,
+  "files": 2785,
+  "bytes": 1762512837,
+  "loader": "neoforge",
+  "minecraft": "1.21.1",
+  "loaderVersion": "21.1.219",
+  "exportable_files": 838,
+  "exportable_bytes": 369098752,
+  "reference_export_zip_bytes": 159019122,
+  "reference_super_eapack_bytes": 141069693
+}

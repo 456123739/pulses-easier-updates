@@ -175,7 +175,7 @@ if (probe.status !== 0) {
   check(info.files >= minIndex, `index 有 ${info.files} 个网络资源（期望≥${minIndex}）`)
   check(info.urls.every((u) => u.startsWith('http')), 'index 里都是 http 直链', info.urls[0] || '')
   check(info.overrides.some((n) => n.includes('config/')), '本地文件进了 overrides')
-  check(!info.overrides.some((n) => n.endsWith('options.txt')), 'options.txt 未进包')
+  check(info.overrides.some((n) => n.endsWith('options.txt')), 'options.txt 随包（PCL 默认）')
   check(info.deps.minecraft === '1.20.1', `依赖版本：${JSON.stringify(info.deps)}`)
 }
 

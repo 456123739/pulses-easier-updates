@@ -20,6 +20,11 @@ Pulses Easier 程序入口
 
 import os
 import sys
+try:
+    import multiprocessing
+    multiprocessing.freeze_support()
+except Exception:
+    pass
 import time
 import traceback
 from pathlib import Path

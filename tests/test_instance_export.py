@@ -203,14 +203,14 @@ class ExportCase(unittest.TestCase):
         self.assertNotIn("overrides/screenshots/shot.png", names)
         self.assertFalse(any(n.startswith("overrides/mods/") for n in names))
 
-    def test_chinese_paths_and_options_excluded(self):
+    def test_chinese_paths_and_options_included(self):
         (self.root / "config" / "中文配置.toml").write_text("a=1\n", encoding="utf-8")
         path = EX.export_from_instance(
             self.root, self.out, rules=R.expand_rules(),
             lookup_fn=lambda wanted: {}, whitelist=["config"])
         names = set(packread.names(path))
         self.assertTrue(any("中文配置.toml" in n for n in names))
-        self.assertNotIn("overrides/options.txt", names)
+        self.assertIn("overrides/options.txt", names)
         self.assertTrue(all(n.isprintable() for n in names))
 
     def test_excluded_tops_recorded_in_settings(self):

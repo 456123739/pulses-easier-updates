@@ -123,7 +123,9 @@ KEYBIND_FILES = frozenset({"options.txt"})
 DEFAULT_DISABLED_FILES = frozenset({"options.txt"})
 
 # 开发者打包时**永远不带**的根目录散文件（即使勾选了也不打进去）
-NEVER_PACK_FILES = frozenset({"options.txt"})
+# PCL 默认导出 options.txt/configureddefaults；为与 PCL 完整性对齐，
+# 不再把 options.txt 当作“永不进包”。玩家侧仍可用文件策略选择保留本地。
+NEVER_PACK_FILES = frozenset()
 
 
 def default_strategy_for_file(name: str) -> Strategy:

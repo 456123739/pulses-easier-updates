@@ -143,8 +143,8 @@ class TestManifestDiff(unittest.TestCase):
         self.assertIsNotNone(fast)
         modified = {str(c.rel_path) for c in fast.modified}
         self.assertIn("config", modified)      # 目录级（非白名单）
-        # options.txt 永不随包（NEVER_PACK_FILES）→ 不该出现在差异里
-        self.assertNotIn("options.txt", modified)
+        # options.txt 现在随包（PCL 默认导出）→ 差异里应能看到
+        self.assertIn("options.txt", modified)
 
     def test_missing_manifest_falls_back(self):
         """没有清单（老包）时，调用方必须能拿到 None 信号走老路径。"""

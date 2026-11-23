@@ -218,16 +218,74 @@ def detect_loader(root: Path) -> dict:
 
     ident = str(data.get("id") or "")
     inherit = str(data.get("inheritsFrom") or "")
-    joined = f"{ident} {inherit}".lower()
+    client = str(data.get("clientVersion") or "")
+    main_class = str(data.get("mainClass") or "")
+    lib_names = [str(x.get("name") or "") for x in (data.get("libraries") or [])
+                 if isinstance(x, dict)]
+    joined = f"{ident} {inherit} {client} {main_class} {' '.join(lib_names)}".lower()
 
-    if "neoforge" in joined:
-        info["loader"] = "neoforge"
-    elif "forge" in joined:
-        info["loader"] = "forge"
-    elif "fabric" in joined:
-        info["loader"] = "fabric"
+    # 先看 libraries 的坐标，比在整段文本里找 "forge" 可靠：
+    #   net.neoforged:neoforge:21.1.172
+    #   net.minecraftforge:forge:1.20.1-47.2.0
+    #   net.fabricmc:fabric-loader:0.15.11
+    for name in lib_names:
+        low = name.lower()
+        parts = name.split(":")
+        if "neoforge" in low and (low.startswith("net.neoforged:neoforge")
+                                  or low.startswith("net.neoforged:neoforge")):
+            info["loader"] = "neoforge"
+            if len(parts) >= 3:
+                info["loaderVersion"] = parts[2].split("-")[-1]
+            break
+        if low.startswith("net.minecraftforge:forge:"):
+            info["loader"] = "forge"
+            if len(parts) >= 3:
+                info["loaderVersion"] = parts[2].split("-")[-1]
+            break
+        if low.startswith("net.fabricmc:fabric-loader:"):
+            info["loader"] = "fabric"
+            if len(parts) >= 3:
+                info["loaderVersion"] = parts[2]
+            break
+        if low.startswith("org.quiltmc:quilt-loader:"):
+            info["loader"] = "quilt"
+            if len(parts) >= 3:
+                info["loaderVersion"] = parts[2]
+            break
 
-    for text in (inherit, ident):
+    # 没有 libraries 坐标时，再按 id / inheritsFrom / mainClass 判断。
+    if info["loader"] == "vanilla":
+        if "neoforge" in joined or "fancymodloader" in joined:
+            info["loader"] = "neoforge"
+        elif "forge" in joined:
+            info["loader"] = "forge"
+        elif "quilt" in joined:
+            info["loader"] = "quilt"
+        elif "fabric" in joined:
+            info["loader"] = "fabric"
+
+    # NeoForge/Forge 的启动参数里带真实加载器版本：
+    #   --fml.neoForgeVersion 21.1.219
+    #   --fml.forgeVersion 47.2.0
+    game_args = []
+    try:
+        args = data.get("arguments") or {}
+        game_args = [str(x) for x in (args.get("game") or []) if isinstance(x, str)]
+    except Exception:
+        game_args = []
+    for key, loader_key in (("--fml.neoForgeVersion", "neoforge"),
+                            ("--fml.forgeVersion", "forge")):
+        if key in game_args:
+            try:
+                ver = game_args[game_args.index(key) + 1]
+            except IndexError:
+                ver = ""
+            if ver and info["loader"] == loader_key:
+                info["loaderVersion"] = ver
+                break
+
+    # clientVersion 是 NeoForge/Forge 合并 profile 里最准的原版版本。
+    for text in (client, inherit, ident):
         m = re.search(r"(1\.\d+(?:\.\d+)?)", text)
         if m:
             info["minecraft"] = m.group(1)

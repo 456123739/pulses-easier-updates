@@ -26,6 +26,8 @@ from pathlib import Path
 
 from ..config import NEVER_PACK_FILES
 from . import fingerprint as fpmod
+import os
+import sys
 from . import instance_scan, lookup
 from .eapack import (CHANGELOG_FILE, EAPACK_FORMAT_VERSION, HASHES_FILE,
                      SETTINGS_FILE)
@@ -94,6 +96,77 @@ def _link_or_copy(src: Path, dst: Path) -> None:
 def _uniq() -> str:
     """进程 + 线程 + 随机串：并发导出时各自的临时文件不会互相踩。"""
     return f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex[:8]}"
+
+
+def _fp_worker(job):
+    """进程池任务：只返回 (path, Fingerprints)，不碰 UI。"""
+    path, cf = job
+    from .fingerprint import compute
+    return path, compute(path, curseforge=cf, sha512=cf)
+
+
+CF_FINGERPRINT_LIMIT = 8 << 20   # 超过 16MB 的 mod 直接本地打包；CF 指纹很贵
+
+
+def _fingerprints_for(items, root, cache, stopped, progress, total_steps):
+    """算清单哈希；大候选文件用进程池，其他走顺序。失败返回列表。"""
+    hashes = {}
+    failed = []
+    pending = []
+    for n, item in enumerate(items, 1):
+        if stopped():
+            return hashes, failed
+        path = root / item["path"]
+        cached = cache.get(path) if hasattr(cache, "get") else None
+        if cached is not None and (not item["candidate"] or cached.curseforge):
+            hashes[item["path"]] = cached
+            continue
+        cf = bool(item["candidate"]) and path.stat().st_size <= CF_FINGERPRINT_LIMIT
+        if item["candidate"] and path.stat().st_size > CF_FINGERPRINT_LIMIT:
+            # 大文件不查 CF：仍算 sha1 给 Modrinth/本地清单，避免几秒纯 Python 指纹
+            try:
+                hashes[item["path"]] = cache.compute(path, curseforge=False)
+            except OSError:
+                failed.append(item["path"])
+            continue
+        if item["candidate"] and path.stat().st_size >= 4 << 20 and (os.cpu_count() or 1) >= 2:
+            pending.append((item["path"], cf, path))
+            continue
+        try:
+            hashes[item["path"]] = cache.compute(path, curseforge=cf)
+        except OSError:
+            failed.append(item["path"])
+            continue
+        if n % 25 == 0 or n == len(items):
+            try: progress(n, total_steps, f"计算哈希 {n}/{len(items)}")
+            except Exception: pass
+
+    if pending and not stopped():
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        jobs = [(str(path), cf) for _rel, cf, path in pending]
+        try:
+            workers = min(12, max(2, os.cpu_count() or 2), len(jobs))
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futs = {pool.submit(_fp_worker, job): (rel, path)
+                        for job, (rel, _cf, path) in zip(jobs, pending)}
+                for i, fut in enumerate(as_completed(futs), 1):
+                    rel, path = futs[fut]
+                    try:
+                        _p, fp = fut.result()
+                        hashes[rel] = fp
+                        cache.put(path, fp)
+                    except Exception:
+                        failed.append(rel)
+                    if i % 5 == 0 or i == len(futs):
+                        try: progress(len(items) + i, total_steps,
+                                      f"计算哈希（并行）{i}/{len(futs)}")
+                        except Exception: pass
+        except Exception:
+            for rel, _cf, path in pending:
+                if stopped(): break
+                try: hashes[rel] = cache.compute(path, curseforge=True)
+                except OSError: failed.append(rel)
+    return hashes, failed
 
 
 def export_from_instance(
@@ -189,26 +262,15 @@ def export_from_instance(
 
     # ---- 1) 指纹：只有候选资源需要 CurseForge 指纹（省一遍大文件读盘）----
     cands = [i for i in items if i["candidate"]]
-    hashes: dict[str, fpmod.Fingerprints] = {}
-    failed: list[str] = []
     total_steps = len(items) + 6
-    for n, item in enumerate(items, 1):
-        if stopped():
-            log("warn", "已取消")
-            return None
-        try:
-            hashes[item["path"]] = cache.compute(
-                root / item["path"], curseforge=bool(item["candidate"]))
-        except OSError as exc:
-            # 读不出来 = 包里会缺这个文件。缺一个 mod 玩家就崩，
-            # 所以这里必须失败，不能"跳过并报成功"。
-            log("error", f"读取失败：{item['path']}（{exc}）")
-            failed.append(item["path"])
-            continue
-        if n % 25 == 0 or n == len(items):
-            _prog(n, total_steps, f"计算哈希 {n}/{len(items)}")
+    hashes, failed = _fingerprints_for(items, root, cache, stopped, _prog, total_steps)
+    for p in failed:
+        log("error", f"读取失败：{p}")
     if failed:
         log("error", f"{len(failed)} 个文件读不出来，导出中止（避免产出缺文件的包）")
+        return None
+    if stopped():
+        log("warn", "已取消")
         return None
 
     # ---- 2) 联网查询 ----
