@@ -160,10 +160,10 @@ def main() -> int:
         tx, ty = ax + int(aw * 0.40), ay + int(ah * 0.30)
         print("drag", sx, sy, "->", tx, ty)
         u = ctypes.windll.user32
-        u.SetForegroundWindow(hwnd)
-        time.sleep(0.3)
+        u.SetForegroundWindow(exp)
+        time.sleep(0.5)
         u.SetCursorPos(sx, sy)
-        time.sleep(0.3)
+        time.sleep(0.5)
         u.mouse_event(0x0002, 0, 0, 0, 0)   # left down
         time.sleep(0.8)
         for i in range(1, 25):
