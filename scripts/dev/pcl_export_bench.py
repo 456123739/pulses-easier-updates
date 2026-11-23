@@ -67,6 +67,10 @@ def click_name(win, name: str, timeout: float = 8) -> bool:
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     if sys.platform != "win32":
         return 2
     pcl, mc, out = setup()
