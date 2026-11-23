@@ -201,13 +201,17 @@ def main() -> int:
                 import struct
                 path_bytes = (str(update) + "\0\0").encode("utf-16-le")
                 size = 20 + len(path_bytes)
-                h = ctypes.windll.kernel32.GlobalAlloc(0x0042, size)
-                ptr = ctypes.windll.kernel32.GlobalLock(h)
+                k32 = ctypes.windll.kernel32
+                k32.GlobalAlloc.restype = ctypes.c_void_p
+                k32.GlobalLock.restype = ctypes.c_void_p
+                k32.GlobalLock.argtypes = [ctypes.c_void_p]
+                h = k32.GlobalAlloc(0x0042, size)
+                ptr = k32.GlobalLock(ctypes.c_void_p(h))
                 ctypes.memset(ptr, 0, size)
                 ctypes.c_uint32.from_address(ptr).value = 20
                 ctypes.c_uint32.from_address(ptr + 16).value = 1
                 ctypes.memmove(ptr + 20, path_bytes, len(path_bytes))
-                ctypes.windll.kernel32.GlobalUnlock(h)
+                k32.GlobalUnlock(ctypes.c_void_p(h))
                 ctypes.windll.user32.PostMessageW(hwnd, 0x0233, h, 0)
                 for _ in range(20):
                     time.sleep(0.5)
