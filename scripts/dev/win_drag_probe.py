@@ -158,7 +158,12 @@ def main() -> int:
         ax, ay, aw, ah = rect(hwnd)
         # STEP2 卡片在左侧 46% 栏的上部
         tx, ty = ax + int(aw * 0.40), ay + int(ah * 0.30)
-        print("drag", sx, sy, "->", tx, ty)
+        print("drag", sx, sy, "->", tx, ty, "rects", rect(hwnd), rect(exp))
+        try:
+            from PIL import ImageGrab
+            ImageGrab.grab().save(ROOT / "drag-debug.png")
+        except Exception as exc:
+            print("shot", exc)
         u = ctypes.windll.user32
         u.SetForegroundWindow(exp)
         time.sleep(0.5)
