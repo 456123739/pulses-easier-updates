@@ -165,10 +165,11 @@ def main() -> int:
         u.SetCursorPos(sx, sy)
         time.sleep(0.3)
         u.mouse_event(0x0002, 0, 0, 0, 0)   # left down
+        time.sleep(0.8)
         for i in range(1, 25):
             u.SetCursorPos(int(sx + (tx - sx) * i / 24), int(sy + (ty - sy) * i / 24))
             time.sleep(0.03)
-        time.sleep(0.4)
+        time.sleep(1.2)
         u.mouse_event(0x0004, 0, 0, 0, 0)   # left up
         ok = False
         for _ in range(60):
@@ -183,7 +184,13 @@ def main() -> int:
             ImageGrab.grab().save(tmp / "drag.png")
         except Exception:
             pass
+        try:
+            from PIL import ImageGrab
+            ImageGrab.grab().save(tmp / "drag.png")
+        except Exception:
+            pass
         print("RESULT", "PASS" if ok else "FAIL")
+        print("APPTAIL", (tmp / "app.log").read_text(encoding="utf-8", errors="replace")[-1000:])
         return 0 if ok else 6
     finally:
         try: proc.terminate()
