@@ -77,8 +77,11 @@ def main() -> int:
             print("need --exe or --source")
             return 2
         exe = sys.argv[i + 1]
-    proc = (subprocess.Popen([sys.executable, str(ROOT / "main.py")], cwd=str(ROOT), env=env)
-            if source else subprocess.Popen([exe], cwd=str(Path(exe).parent), env=env))
+    applog = open(tmp / "app.log", "w", encoding="utf-8")
+    proc = (subprocess.Popen([sys.executable, str(ROOT / "main.py")], cwd=str(ROOT),
+                             env=env, stdout=applog, stderr=subprocess.STDOUT)
+            if source else subprocess.Popen([exe], cwd=str(Path(exe).parent),
+                                            env=env, stdout=applog, stderr=subprocess.STDOUT))
     hwnd = 0
     for _ in range(80):
         time.sleep(0.5)
@@ -86,7 +89,24 @@ def main() -> int:
         if hwnd:
             break
     if not hwnd:
-        print("NO_APP_WINDOW")
+        print("NO_APP_WINDOW exit", proc.poll())
+        try:
+            print((tmp / "app.log").read_text(encoding="utf-8", errors="replace")[-3000:])
+        except Exception:
+            pass
+        # 列出所有可见标题，便于诊断
+        u = ctypes.windll.user32
+        titles = []
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def cb(h, _):
+            n = u.GetWindowTextLengthW(h)
+            if n and u.IsWindowVisible(h):
+                b = ctypes.create_unicode_buffer(n + 1)
+                u.GetWindowTextW(h, b, n + 1)
+                titles.append(b.value)
+            return True
+        u.EnumWindows(cb, 0)
+        print("WINDOWS", titles[:30])
         proc.kill()
         return 3
     print("app", hwnd)
