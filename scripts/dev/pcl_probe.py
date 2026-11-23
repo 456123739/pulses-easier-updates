@@ -45,6 +45,10 @@ def set_registry(mc: Path) -> None:
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     if sys.platform != "win32":
         print("Windows only")
         return 2
