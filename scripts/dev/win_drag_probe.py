@@ -151,7 +151,9 @@ def main() -> int:
         if target is None:
             print("NO_FILE_ITEM", names[:60])
             return 5
-        left, top, width, height = target.rectangle()
+        tr = target.rectangle()
+        left, top = tr.left, tr.top
+        width, height = tr.right - tr.left, tr.bottom - tr.top
         sx, sy = (left + width // 2, top + height // 2)
         ax, ay, aw, ah = rect(hwnd)
         # STEP2 卡片在左侧 46% 栏的上部
