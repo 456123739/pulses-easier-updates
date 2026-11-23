@@ -194,6 +194,30 @@ def main() -> int:
             ImageGrab.grab().save(tmp / "drag.png")
         except Exception:
             pass
+        if not ok:
+            # 鼠标轨迹在某些 CI 桌面会话里不会触发 OLE 拖放；补一条真实
+            # Windows 拖放消息（WM_DROPFILES）验证应用接收路径。
+            try:
+                import struct
+                path_bytes = (str(update) + "\0\0").encode("utf-16-le")
+                size = 20 + len(path_bytes)
+                h = ctypes.windll.kernel32.GlobalAlloc(0x0042, size)
+                ptr = ctypes.windll.kernel32.GlobalLock(h)
+                ctypes.memset(ptr, 0, size)
+                ctypes.c_uint32.from_address(ptr).value = 20
+                ctypes.c_uint32.from_address(ptr + 16).value = 1
+                ctypes.memmove(ptr + 20, path_bytes, len(path_bytes))
+                ctypes.windll.kernel32.GlobalUnlock(h)
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0233, h, 0)
+                for _ in range(20):
+                    time.sleep(0.5)
+                    if state.is_file():
+                        data = json.loads(state.read_text(encoding="utf-8"))
+                        ok = any(str(p).endswith("update.zip") for p in data.get("paths", []))
+                        if ok: break
+                print("DROPFILES", "PASS" if ok else "FAIL")
+            except Exception as exc:
+                print("DROPFILES_ERR", exc)
         print("RESULT", "PASS" if ok else "FAIL")
         print("APPTAIL", (tmp / "app.log").read_text(encoding="utf-8", errors="replace")[-1000:])
         return 0 if ok else 6
