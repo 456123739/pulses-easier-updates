@@ -114,24 +114,17 @@ def main() -> int:
             print("pcl-log-tail", lg.read_text(encoding="utf-8", errors="replace").splitlines()[-15:])
         except Exception:
             pass
-    # 保存对话框
+    # 保存对话框（PCL 的 WPF 对话框在 UIA 树里，但不是独立顶层窗口）
     try:
-        dlg = None
-        for w in desk.windows():
-            t = w.window_text()
-            if "导出" in t or "保存" in t or "另存" in t:
-                dlg = w
-                print("dialog-title", t)
+        edits = [c for c in win.descendants() if c.element_info.automation_id == "1001"]
+        print("save-edits", len(edits))
+        if edits:
+            edits[0].type_keys(str(out), with_spaces=True)
+        for b in win.descendants():
+            if b.window_text() in ("Save", "保存"):
+                print("save-click", b.window_text())
+                b.click_input()
                 break
-        if dlg is not None:
-            edits = [c for c in dlg.descendants() if c.element_info.control_type == "Edit"]
-            if edits:
-                edits[0].type_keys(str(out), with_spaces=True)
-            else:
-                dlg.type_keys(str(out), with_spaces=True)
-            for b in dlg.descendants():
-                if b.window_text() in ("保存", "Save", "确定", "OK"):
-                    b.click_input(); break
     except Exception as exc:
         print("dialog", exc)
     start = time.time()
