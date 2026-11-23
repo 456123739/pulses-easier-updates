@@ -136,15 +136,20 @@ def main() -> int:
         from pywinauto import Desktop
         win = Desktop(backend="uia").window(handle=exp)
         target = None
+        names = []
         for c in win.descendants():
             try:
-                if c.window_text() == "update.zip" and c.is_visible():
-                    target = c
-                    break
+                if c.is_visible():
+                    t = c.window_text()
+                    if t:
+                        names.append(t)
+                    if "update" in t.lower() and ("zip" in t.lower() or t.lower() == "update"):
+                        target = c
+                        break
             except Exception:
                 pass
         if target is None:
-            print("NO_FILE_ITEM")
+            print("NO_FILE_ITEM", names[:60])
             return 5
         left, top, width, height = target.rectangle()
         sx, sy = (left + width // 2, top + height // 2)
