@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 def setup() -> tuple[Path, Path, Path, Path]:
@@ -24,6 +25,8 @@ def setup() -> tuple[Path, Path, Path, Path]:
     fixture = os.environ.get("PULSES_REAL_FIXTURE", "").strip()
     if fixture:
         src = Path(fixture) / "versions" / "Minerizon beta"
+        if not src.is_dir():
+            raise FileNotFoundError(f"real fixture missing: {src}; root={list(Path(fixture).rglob('*'))[:20]}")
         inst = mc / "versions" / "Minerizon beta"
         shutil.copytree(src, inst)
         # Setup.ini 让 PCL 直接扫 portable .minecraft
