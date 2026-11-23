@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 
-def setup() -> tuple[Path, Path, Path]:
+def setup() -> tuple[Path, Path, Path, Path]:
     root = Path.cwd() / "bench-run" / "pcl"
     shutil.rmtree(root, ignore_errors=True)
     pcl = root / "PCL"
@@ -21,20 +21,32 @@ def setup() -> tuple[Path, Path, Path]:
     here = Path(__file__).resolve().parents[2]
     shutil.copy2(here / "bench" / "pcl" / "PCL.exe", pcl / "PCL.exe")
     mc = pcl / ".minecraft"
-    inst = mc / "versions" / "BenchPack"
-    (inst / "mods").mkdir(parents=True)
-    (inst / "config").mkdir()
-    (inst / "saves" / "World").mkdir(parents=True)
-    shutil.copy2(here / "bench" / "pcl" / "BenchPack.json", inst / "BenchPack.json")
-    (inst / "version.json").write_text((inst / "BenchPack.json").read_text(encoding="utf-8"), encoding="utf-8")
-    (inst / "BenchPack.jar").write_bytes(b"")
-    for i in range(40):
-        (inst / "mods" / f"m{i}.jar").write_bytes(os.urandom(2048))
-    for i in range(100):
-        (inst / "config" / f"c{i}.toml").write_text(f"a={i}\n", encoding="utf-8")
-    (inst / "saves" / "World" / "level.dat").write_bytes(b"level" * 100)
+    fixture = os.environ.get("PULSES_REAL_FIXTURE", "").strip()
+    if fixture:
+        src = Path(fixture) / "versions" / "Minerizon beta"
+        inst = mc / "versions" / "Minerizon beta"
+        shutil.copytree(src, inst)
+        # Setup.ini 让 PCL 直接扫 portable .minecraft
+        (pcl / "PCL").mkdir(exist_ok=True)
+        (pcl / "PCL" / "Setup.ini").write_text(
+            "LaunchFolderSelect:$.minecraft\\\n", encoding="utf-8")
+        name = "Minerizon beta"
+    else:
+        inst = mc / "versions" / "BenchPack"
+        (inst / "mods").mkdir(parents=True)
+        (inst / "config").mkdir()
+        (inst / "saves" / "World").mkdir(parents=True)
+        shutil.copy2(here / "bench" / "pcl" / "BenchPack.json", inst / "BenchPack.json")
+        (inst / "version.json").write_text((inst / "BenchPack.json").read_text(encoding="utf-8"), encoding="utf-8")
+        (inst / "BenchPack.jar").write_bytes(b"")
+        for i in range(40):
+            (inst / "mods" / f"m{i}.jar").write_bytes(os.urandom(2048))
+        for i in range(100):
+            (inst / "config" / f"c{i}.toml").write_text(f"a={i}\n", encoding="utf-8")
+        (inst / "saves" / "World" / "level.dat").write_bytes(b"level" * 100)
+        name = "BenchPack"
     out = root / "out.zip"
-    return pcl, mc, out
+    return pcl, mc, out, inst
 
 
 def dump(win, path: Path) -> None:
@@ -78,7 +90,7 @@ def main() -> int:
         pass
     if sys.platform != "win32":
         return 2
-    pcl, mc, out = setup()
+    pcl, mc, out, inst = setup()
     proc = subprocess.Popen([str(pcl / "PCL.exe")], cwd=str(pcl))
     time.sleep(12)
     from pywinauto import Desktop
@@ -131,7 +143,46 @@ def main() -> int:
     for _ in range(120):
         time.sleep(1)
         if out.exists() and out.stat().st_size > 0:
-            print("done", time.time() - start, out.stat().st_size)
+            pcl_time = time.time() - start
+            pcl_size = out.stat().st_size
+            print("done", pcl_time, pcl_size)
+            # 同一实例跑我们的引擎（冷缓存），并做完整性对比
+            try:
+                from app.core.instance_scan import scan_instance
+                from app.core.export_rules import expand_rules
+                from app.core.instance_export import export_from_instance
+                from app.core.fingerprint import FingerprintCache
+                src = inst
+                rules = expand_rules()
+                sc = scan_instance(src, rules)
+                our = pcl / "our.zip"
+                t0 = time.time()
+                r = export_from_instance(
+                    src, our, rules=rules, scan=sc,
+                    pack_name="Minerizon beta", pack_version="1.0.0",
+                    cache=FingerprintCache(pcl / "fp.json"),
+                )
+                our_time = time.time() - t0
+                import zipfile
+                pcl_names = {n for n in zipfile.ZipFile(out).namelist() if n.startswith("overrides/")}
+                pcl_names = {n[len("overrides/"):] for n in pcl_names}
+                our_names = set()
+                if r:
+                    z = zipfile.ZipFile(r)
+                    our_names = {n[len("overrides/"):] for n in z.namelist()
+                                 if n.startswith("overrides/")}
+                    import json as _json
+                    idx = _json.loads(z.read("modrinth.index.json"))
+                    our_names |= {f["path"] for f in idx.get("files", [])}
+                missing = sorted(pcl_names - our_names)
+                report = {"pcl_time": pcl_time, "pcl_size": pcl_size,
+                          "our_time": our_time, "our_size": r.stat().st_size if r else 0,
+                          "pcl_files": len(pcl_names), "our_files": len(our_names),
+                          "missing": missing[:50], "missing_count": len(missing)}
+                (pcl / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+                print("report", json.dumps(report, ensure_ascii=False)[:1000])
+            except Exception as exc:
+                print("our-export-error", repr(exc))
             return 0
         if proc.poll() is not None:
             print("PCL exited", proc.returncode)
