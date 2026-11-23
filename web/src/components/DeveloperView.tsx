@@ -396,7 +396,7 @@ export default function DeveloperView() {
           </button>
         </div>
 
-        {!hasSource && !loading && recent.length > 0 && (
+        {!loading && recent.length > 0 && (
           <div className={styles.recentRow}>
             <span className="t-small">最近打开</span>
             {recent.slice(0, 4).map((r) => (
@@ -507,6 +507,7 @@ export default function DeveloperView() {
               >
                 <button
                   className={styles.rowName}
+                  data-on={stage === 'scope' ? scope.has(row.name) : !row.excluded}
                   onClick={() => stage === 'scope'
                     ? toggleScope(row.name)
                     : void toggleExcluded(row)}

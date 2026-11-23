@@ -313,6 +313,17 @@
 .rowName:hover {
   background: rgba(95, 184, 166, 0.16);
 }
+.rowName[data-on='true'] {
+  background: #7fe0cd;
+  color: #06211b;
+  font-weight: 600;
+}
+.rowName[data-on='true'] svg {
+  color: #06211b;
+}
+.rowName[data-on='true'] .checkBox {
+  border-color: #06211b;
+}
 
 .chips {
   display: flex;

@@ -93,11 +93,11 @@ class InstanceModeCase(unittest.TestCase):
         rows = {r["name"] for r in self.flow.snapshot()["instance"]["rows"]}
         self.assertNotIn("screenshots", rows)
 
-    def test_never_pack_files_not_in_scope(self):
+    def test_options_in_scope_for_pcl_completeness(self):
         (self.root / "options.txt").write_text("fov:0.5\n", encoding="utf-8")
         self.flow._rescan()
         names = list(self.flow.tops) + list(self.flow.root_files)
-        self.assertNotIn("options.txt", names)
+        self.assertIn("options.txt", names)
 
     def test_set_rule_rescans(self):
         self.flow.set_rule("screenshots", True)

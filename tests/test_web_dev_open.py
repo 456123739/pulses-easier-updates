@@ -120,7 +120,7 @@ class DevOpenCase(unittest.TestCase):
         self.assertEqual(done["mode"], "instance")
         self.assertEqual(done["instance"]["name"], "DemoPack")
         self.assertEqual(sorted(s["name"] for s in done["strategies"]),
-                         ["config", "mods"])
+                         ["config", "mods", "options.txt"])
 
     def test_zip_source(self):
         self.open(self.zip_path)

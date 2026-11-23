@@ -20,8 +20,8 @@ body {
   user-select: none;
   -webkit-user-select: none;
   overflow: hidden;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: subpixel-antialiased;
+  text-rendering: auto;
 }
 
 /* 全局底：一层极淡的极光渐变，让"纯色面板"有空间感 */

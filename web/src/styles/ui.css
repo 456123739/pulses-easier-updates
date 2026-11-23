@@ -196,10 +196,10 @@ textarea::placeholder {
   color: var(--c-text);
 }
 .chip[data-on='true'] {
-  color: #d8fff7;
-  background: rgba(95, 184, 166, 0.24);
-  border-color: rgba(95, 184, 166, 0.72);
-  font-weight: 600;
+  color: #06211b;
+  background: #7fe0cd;
+  border-color: #7fe0cd;
+  font-weight: 650;
 }
 .chip:disabled {
   color: var(--c-muted);

@@ -185,3 +185,56 @@ class ScanCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+    def test_loader_neoforge_libraries_and_client_version(self):
+        import json as _json
+        (self.tmp / f"{self.tmp.name}.json").write_text(_json.dumps({
+            "id": "Minerizon beta",
+            "clientVersion": "1.21.1",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "libraries": [
+                {"name": "net.neoforged:neoforge:21.1.172"},
+                {"name": "net.neoforged.fancymodloader:loader:4.0.42"},
+            ],
+        }), encoding="utf-8")
+        info = S.detect_loader(self.tmp)
+        self.assertEqual(info["loader"], "neoforge")
+        self.assertEqual(info["minecraft"], "1.21.1")
+        self.assertEqual(info["loaderVersion"], "21.1.172")
+
+    def test_loader_forge_library_coordinate(self):
+        import json as _json
+        (self.tmp / f"{self.tmp.name}.json").write_text(_json.dumps({
+            "id": "1.20.1-forge-47.2.0",
+            "clientVersion": "1.20.1",
+            "libraries": [{"name": "net.minecraftforge:forge:1.20.1-47.2.0"}],
+        }), encoding="utf-8")
+        info = S.detect_loader(self.tmp)
+        self.assertEqual(info["loader"], "forge")
+        self.assertEqual(info["loaderVersion"], "47.2.0")
+
+    def test_loader_fabric_library_coordinate(self):
+        import json as _json
+        (self.tmp / f"{self.tmp.name}.json").write_text(_json.dumps({
+            "id": "1.20.1-fabric0.15.11",
+            "clientVersion": "1.20.1",
+            "libraries": [{"name": "net.fabricmc:fabric-loader:0.15.11"}],
+        }), encoding="utf-8")
+        info = S.detect_loader(self.tmp)
+        self.assertEqual(info["loader"], "fabric")
+        self.assertEqual(info["loaderVersion"], "0.15.11")
+    def test_loader_neoforge_fml_argument_version(self):
+        import json as _json
+        (self.tmp / f"{self.tmp.name}.json").write_text(_json.dumps({
+            "id": "Minerizon beta",
+            "clientVersion": "1.21.1",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "arguments": {"game": [
+                "--fml.neoForgeVersion", "21.1.219",
+                "--fml.mcVersion", "1.21.1",
+            ]},
+            "libraries": [{"name": "net.neoforged.fancymodloader:loader:4.0.42"}],
+        }), encoding="utf-8")
+        info = S.detect_loader(self.tmp)
+        self.assertEqual(info["loader"], "neoforge")
+        self.assertEqual(info["minecraft"], "1.21.1")
+        self.assertEqual(info["loaderVersion"], "21.1.219")

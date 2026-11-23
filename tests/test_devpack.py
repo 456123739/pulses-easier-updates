@@ -217,7 +217,7 @@ class TestRoundTrip(_Base):
 # min_size / 完整性 / 原子写
 # ======================================================================
 class TestNeverPack(_Base):
-    """options.txt 永远不进更新包（与「最小体积」开关无关）。"""
+    """options.txt 现在随包（PCL 默认导出，保证完整性）。"""
 
     def test_options_txt_is_never_packed(self):
         from app.core import eapack as ep
@@ -251,8 +251,8 @@ class TestNeverPack(_Base):
             self.db.set_export_options({"min_size": False})
         self.assertIsNotNone(res)
         names = packread.names(out)
-        self.assertFalse([n for n in names if n.endswith("options.txt")],
-                         f"options.txt 不该进包：{names}")
+        self.assertTrue([n for n in names if n.endswith("options.txt")],
+                        f"options.txt 应随包（PCL 默认导出）：{names}")
         self.assertTrue([n for n in names if n.endswith("config/c.toml")],
                         "其它内容必须照常打进去")
 

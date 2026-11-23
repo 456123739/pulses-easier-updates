@@ -112,11 +112,15 @@ def _murmur2_file(path: Path, length: int) -> int:
     return h & _MASK
 
 
-def compute(path: str | Path, *, curseforge: bool = True) -> Fingerprints:
-    """算哈希；`curseforge=False` 时跳过 murmur2（大文件且非候选时省一遍 IO）。"""
+def compute(path: str | Path, *, curseforge: bool = True,
+            sha512: bool = True) -> Fingerprints:
+    """算哈希；`curseforge=False` 跳过 murmur2，`sha512=False` 跳过 sha512。
+
+    非候选文件只需要 sha1 进本地清单，没必要算三种哈希。
+    """
     path = Path(path)
     sha1 = hashlib.sha1()
-    sha512 = hashlib.sha512()
+    sha512_hash = hashlib.sha512() if sha512 else None
     size = 0
     filtered_len = 0
     buf = bytearray()
@@ -128,7 +132,8 @@ def compute(path: str | Path, *, curseforge: bool = True) -> Fingerprints:
                 break
             size += len(chunk)
             sha1.update(chunk)
-            sha512.update(chunk)
+            if sha512_hash is not None:
+                sha512_hash.update(chunk)
             if not curseforge:
                 continue
             filtered = chunk.translate(None, _SKIP_BYTES)
@@ -144,7 +149,8 @@ def compute(path: str | Path, *, curseforge: bool = True) -> Fingerprints:
         cf = _murmur2_known(bytes(buf), filtered_len)
     else:
         cf = _murmur2_file(path, filtered_len)
-    return Fingerprints(sha1=sha1.hexdigest(), sha512=sha512.hexdigest(),
+    return Fingerprints(sha1=sha1.hexdigest(),
+                        sha512=sha512_hash.hexdigest() if sha512_hash else "",
                         curseforge=cf, size=size)
 
 
@@ -223,9 +229,9 @@ class FingerprintCache:
     def compute(self, path: str | Path, *,
                 curseforge: bool = True) -> Fingerprints:
         cached = self.get(path)
-        if cached is not None and (cached.curseforge or not curseforge):
-            return cached
-        fp = compute(path, curseforge=curseforge)
-        if fp.curseforge:              # 没算 CF 的结果不落盘，避免污染缓存
-            self.put(path, fp)
+        if cached is not None:
+            if not curseforge or cached.curseforge:
+                return cached
+        fp = compute(path, curseforge=curseforge, sha512=curseforge)
+        self.put(path, fp)
         return fp
