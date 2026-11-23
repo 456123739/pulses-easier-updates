@@ -114,8 +114,10 @@ def main() -> int:
     print("version select click", click_name(win, "版本选择"))
     time.sleep(2)
     dump(win, pcl / "select.json")
-    # 版本选择页里点当前实例名，进入实例管理页
+    # 版本选择页里点当前实例名，回到启动页，再进“版本设置”（实例管理）
     print("instance click", click_name(win, "Minerizon beta", timeout=3))
+    time.sleep(2)
+    print("settings click", click_name(win, "版本设置"))
     time.sleep(2)
     dump(win, pcl / "instance.json")
     print("export click", click_name(win, "导出"))
