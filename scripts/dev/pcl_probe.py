@@ -54,7 +54,7 @@ def main() -> int:
     err = open(pcl / "stderr.txt", "w", encoding="utf-8")
     proc = subprocess.Popen([str(pcl / "PCL.exe")], cwd=str(pcl),
                             stdout=err, stderr=subprocess.STDOUT)
-    time.sleep(15)
+    time.sleep(20)
     out = {"pid": proc.pid, "exit": proc.poll(), "windows": [], "controls": []}
     try:
         from pywinauto import Desktop

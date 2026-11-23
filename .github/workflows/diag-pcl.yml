@@ -6,6 +6,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with: { ref: diag/pcl }
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - run: pip install pywinauto pillow
@@ -15,6 +16,5 @@ jobs:
         with:
           name: pcl-probe
           path: |
-            ${{ runner.temp }}/pe-pcl-probe/PCL/probe.log
-            ${{ runner.temp }}/pe-pcl-probe/PCL/screen.png
+            ${{ runner.temp }}/pe-pcl-probe/PCL/**
           if-no-files-found: warn
