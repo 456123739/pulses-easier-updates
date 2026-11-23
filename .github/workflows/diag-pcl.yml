@@ -1,0 +1,20 @@
+name: diagnose-pcl
+on:
+  workflow_dispatch:
+jobs:
+  pcl:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install pywinauto pillow
+      - run: python scripts/dev/pcl_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pcl-probe
+          path: |
+            ${{ runner.temp }}/pe-pcl-probe/PCL/probe.log
+            ${{ runner.temp }}/pe-pcl-probe/PCL/screen.png
+          if-no-files-found: warn
