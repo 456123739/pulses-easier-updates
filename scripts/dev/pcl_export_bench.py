@@ -101,11 +101,21 @@ def main() -> int:
     time.sleep(2)
     # 保存对话框
     try:
-        dlg = desk.window(class_name="#32770")
-        if dlg.exists():
-            dlg.Edit.type_keys(str(out), with_spaces=True)
+        dlg = None
+        for w in desk.windows():
+            t = w.window_text()
+            if "导出" in t or "保存" in t or "另存" in t:
+                dlg = w
+                print("dialog-title", t)
+                break
+        if dlg is not None:
+            edits = [c for c in dlg.descendants() if c.element_info.control_type == "Edit"]
+            if edits:
+                edits[0].type_keys(str(out), with_spaces=True)
+            else:
+                dlg.type_keys(str(out), with_spaces=True)
             for b in dlg.descendants():
-                if b.window_text() in ("保存", "Save"):
+                if b.window_text() in ("保存", "Save", "确定", "OK"):
                     b.click_input(); break
     except Exception as exc:
         print("dialog", exc)
