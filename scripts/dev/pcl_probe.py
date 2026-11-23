@@ -51,10 +51,11 @@ def main() -> int:
     pcl, mc = setup()
     set_registry(mc)
     log = pcl / "probe.log"
+    err = open(pcl / "stderr.txt", "w", encoding="utf-8")
     proc = subprocess.Popen([str(pcl / "PCL.exe")], cwd=str(pcl),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(10)
-    out = {"pid": proc.pid, "windows": [], "controls": []}
+                            stdout=err, stderr=subprocess.STDOUT)
+    time.sleep(15)
+    out = {"pid": proc.pid, "exit": proc.poll(), "windows": [], "controls": []}
     try:
         from pywinauto import Desktop
         desk = Desktop(backend="uia")
@@ -85,6 +86,10 @@ def main() -> int:
             pass
     except Exception as exc:
         out["error"] = str(exc)
+    try:
+        out["files"] = [str(p.relative_to(pcl)) for p in pcl.rglob("*") if p.is_file()][:80]
+    except Exception:
+        pass
     log.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         proc.terminate()
