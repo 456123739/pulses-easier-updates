@@ -105,7 +105,7 @@ def _fp_worker(job):
     return path, compute(path, curseforge=cf, sha512=cf)
 
 
-CF_FINGERPRINT_LIMIT = 8 << 20   # 超过 16MB 的 mod 直接本地打包；CF 指纹很贵
+CF_FINGERPRINT_LIMIT = 4 << 20   # 超过 16MB 的 mod 直接本地打包；CF 指纹很贵
 
 
 def _fingerprints_for(items, root, cache, stopped, progress, total_steps):
