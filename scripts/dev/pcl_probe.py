@@ -25,11 +25,10 @@ def setup() -> tuple[Path, Path]:
     (inst / "mods").mkdir(parents=True)
     (inst / "config").mkdir()
     (inst / "saves" / "World").mkdir(parents=True)
-    (inst / "BenchPack.json").write_text(json.dumps({
-        "id": "BenchPack", "type": "release",
-        "mainClass": "net.minecraft.client.main.Main",
-        "libraries": [], "arguments": {"game": [], "jvm": []},
-    }), encoding="utf-8")
+    here = Path(__file__).resolve().parents[2]
+    shutil.copy2(here / "bench" / "pcl" / "BenchPack.json", inst / "BenchPack.json")
+    (inst / "version.json").write_text((inst / "BenchPack.json").read_text(encoding="utf-8"), encoding="utf-8")
+    (inst / "BenchPack.jar").write_bytes(b"")
     for i in range(8):
         (inst / "mods" / f"m{i}.jar").write_bytes(b"x" * 1024)
     (inst / "config" / "a.toml").write_text("a=1\n", encoding="utf-8")
