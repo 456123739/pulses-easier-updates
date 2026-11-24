@@ -59,7 +59,7 @@ export default function PlayerView() {
   const setHint = usePlayer((s) => s.setHint)
   const [showTree, setShowTree] = useState(true)
   const setState = useApp((s) => s.setState)
-  const strategyCommit = useRef<() => Promise<void>>(async () => {})
+  const strategyCommit = useRef<() => Promise<boolean>>(async () => true)
 
   const onLocatePack = async () => {
     if (!connected) return
@@ -143,6 +143,7 @@ export default function PlayerView() {
             height={104}
             onPick={onLocatePack}
             ariaLabel="玩家端定位整合包"
+            dropTarget="pack"
           />
           <DropZone
             step="STEP 2"
@@ -151,6 +152,7 @@ export default function PlayerView() {
             hint={updatePack ? undefined : '或点击选择'}
             height={112}
             highlight={!updatePack}
+            dropTarget="update"
             onPick={onPickUpdate}
           />
           <div className={styles.clearRow}>

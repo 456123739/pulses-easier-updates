@@ -929,7 +929,8 @@ def _dir_missing(src: Path, dst: Path, max_files: int = 20000
 
 
 def _hash_file(path: Path, algo: str) -> str:
-    h = hashlib.new(algo)
+    h = (hashlib.blake2b(digest_size=16)
+         if algo.lower() == "blake2b" else hashlib.new(algo))
     with open(transfer.sys_path(path), "rb") as f:
         while True:
             buf = f.read(1024 * 1024)

@@ -30,6 +30,8 @@ from ..core import config_exclude
 from ..core import recover as recover_mod
 from ..core import database as db
 from ..core import eapack as eapack_mod
+from ..core import checkpoint as checkpoint_mod
+from ..core import downloader as downloader_mod
 from ..core import pack_lock, pack_watch
 from ..core.apply_rules import is_checked as _rule_is_checked
 from ..core.apply_rules import resolve_strategy, will_skip
@@ -144,6 +146,9 @@ class Flow:
         self._last_poll = 0.0
         self._resume_pending = False
         self._done_paths: set[str] = set()
+        # 用户在失败提示中选择「放弃」的路径：本次应用跳过，不能再次自动下载。
+        self._given_up: set[str] = set()
+        self._expected_hashes: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # 状态
@@ -151,16 +156,57 @@ class Flow:
     def busy(self) -> bool:
         return self.phase in (PHASE_SCAN, PHASE_DOWNLOAD, PHASE_APPLY)
 
+    def _transition_busy(self) -> bool:
+        if self.busy():
+            return True
+        thread = self._thread
+        return bool(thread and thread.is_alive()
+                    and thread is not threading.current_thread())
+
+    def _reset_update_state_locked(self) -> None:
+        self.update_zip = None
+        self.pack_kind = None
+        self.update_info = {}
+        self.changelog = ""
+        self.phase = PHASE_IDLE
+        self.diff = None
+        self.compare_root = None
+        self.strategies = {}
+        self.checked = {}
+        self.tops = []
+        self.root_files = []
+        self.tasks = []
+        self.results = []
+        self.pending = []
+        self.report = {}
+        self.error = None
+        self.paused = None
+        self._done_paths.clear()
+        self._given_up.clear()
+        self._resume_pending = False
+        self._rescan_pending = False
+        self._snapshot = None
+        self._index_tops = set()
+        self._index_root_files = set()
+        self._expected_hashes = {}
+        self._abort.clear()
+        self._pause_done.clear()
+        self._pause_choice = "continue"
+
+    def _finish_update_reset(self) -> None:
+        self._release_lock()
+        self._discard_temp()
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
                 "phase": self.phase,
                 "update": dict(self.update_info) if self.update_info else None,
                 "strategies": self.strategy_rows(),
-                "groups": group_changes(self.diff, self.strategies,
+                "groups": group_changes(self._effective_diff(), self.strategies,
                                         self.checked),
-                "counts": counts_of(self.diff),
-                "changeCounts": change_counts(self.diff),
+                "counts": counts_of(self._effective_diff()),
+                "changeCounts": change_counts(self._effective_diff()),
                 "tasks": len(self.tasks),
                 "done": sum(1 for r in self.results if getattr(r, "ok", False)),
                 "pending": list(self.pending),
@@ -193,7 +239,7 @@ class Flow:
     # 导入
     # ------------------------------------------------------------------
     def import_update(self, raw: str) -> dict:
-        if self.busy():
+        if self._transition_busy():
             raise FlowError("更新流程进行中，暂时不能更换更新包")
         path = Path(raw).expanduser()
         if not path.is_file():
@@ -203,31 +249,29 @@ class Flow:
         kind, err = detect_pack_kind(path)
         if kind == PackKind.UNKNOWN:
             raise FlowError(f"无法识别：{err}")
+        signature = "unsigned"
+        if kind == PackKind.UPDATE:
+            try:
+                ok, reason = eapack_mod.verify_signature(path)
+            except Exception as exc:  # noqa: BLE001
+                raise FlowError(f"无法校验更新包完整性：{exc}") from exc
+            if not ok:
+                raise FlowError(f"更新包完整性校验未通过：{reason}")
+            signature = "ok" if not reason else reason
 
-        self._discard_temp()
         with self._lock:
-            self.diff = None
-            self.compare_root = None
-            self.strategies = {}
-            self.checked = {}
-            self.tops = []
-            self.root_files = []
-            self.tasks = []
-            self.results = []
-            self.pending = []
-            self.report = {}
-            self.error = None
+            if self._transition_busy():
+                raise FlowError("更新流程进行中，暂时不能更换更新包")
+            owner = self.pack_root
+            self._reset_update_state_locked()
             self.update_zip = path
             self.pack_kind = kind
-            self.changelog = ""
+        self._clear_resume(owner=owner)
+        self._finish_update_reset()
 
         info = {"path": str(path), "name": path.name,
-                "size": path.stat().st_size, "kind": kind.value}
-        try:
-            ok, reason = eapack_mod.verify_signature(path)
-            info["signature"] = "ok" if ok and not reason else (reason or "unsigned")
-        except Exception:                                   # noqa: BLE001
-            info["signature"] = "unsigned"
+                "size": path.stat().st_size, "kind": kind.value,
+                "signature": signature}
         try:
             md = eapack_mod.read_changelog(path)
             self.changelog = md or ""
@@ -245,6 +289,8 @@ class Flow:
     def set_strategies(self, values: dict[str, str],
                        checked: dict[str, bool] | None = None) -> dict:
         """玩家端批量确认策略：所有选择一次写入，只重算一次快照。"""
+        if self.busy():
+            raise FlowError("正在处理中，暂时不能修改更新策略")
         with self._lock:
             for name, value in (values or {}).items():
                 value = str(value or "")
@@ -261,27 +307,36 @@ class Flow:
         return self.snapshot()
 
     def clear(self) -> dict:
-        self._release_lock()
-        if self.busy():
-            raise FlowError("更新流程进行中")
-        self._discard_temp()
         with self._lock:
-            self.update_zip = None
-            self.pack_kind = None
-            self.update_info = {}
-            self.changelog = ""
-            self.diff = None
-            self.compare_root = None
-            self.strategies = {}
-            self.checked = {}
-            self.tops = []
-            self.root_files = []
-            self.tasks = []
-            self.results = []
-            self.pending = []
-            self.report = {}
-            self.error = None
+            if self._transition_busy():
+                raise FlowError("更新流程进行中")
+            self._reset_update_state_locked()
+        self._finish_update_reset()
+        self._clear_resume()
         return self.snapshot()
+
+    def set_pack_root(self, root: Path | None) -> None:
+        """Bind this flow to a pack and atomically discard the prior plan."""
+        new_root = Path(root) if root is not None else None
+        with self._lock:
+            if self._transition_busy():
+                raise FlowError("更新流程进行中，暂时不能切换或清空整合包")
+            old_root = self.pack_root
+            if old_root is not None and new_root is not None:
+                try:
+                    same = old_root.resolve() == new_root.resolve()
+                except OSError:
+                    same = old_root == new_root
+            else:
+                same = old_root is new_root
+            if same:
+                return
+            self.pack_root = new_root
+            self._reset_update_state_locked()
+        self._finish_update_reset()
+        # Keep Pack A's interruption record when selecting Pack B. The resume
+        # file is global, so deleting it here would destroy the only recovery
+        # record for the user's previous instance.
 
     # ------------------------------------------------------------------
     # 比对
@@ -380,6 +435,21 @@ class Flow:
                 index_root_files = set()
             self._index_tops = set(index_tops)
             self._index_root_files = set(index_root_files)
+            expected: dict[str, str] = {}
+            for rel, spec in {**manifest, **index_hashes}.items():
+                if not isinstance(spec, dict):
+                    continue
+                algo = str(spec.get("algo") or "")
+                value = str(spec.get("value") or "")
+                if not algo or not value:
+                    for candidate in ("sha256", "sha512", "sha1"):
+                        candidate_value = str(spec.get(candidate) or "")
+                        if candidate_value:
+                            algo, value = candidate, candidate_value
+                            break
+                if algo and value:
+                    expected[str(rel).replace("\\", "/")] = f"{algo}:{value}"
+            self._expected_hashes = expected
 
             def _prog(done: int, total: int, phase: str = "") -> None:
                 total = max(1, total)
@@ -394,7 +464,8 @@ class Flow:
                 pass
             self.compare_root = content_root
             if bad:
-                self.bus.log(f"有 {len(bad)} 个文件与清单不一致（以解压内容为准）", "WARNING")
+                raise FlowError(
+                    f"更新包内容校验失败：{len(bad)} 个文件与清单不一致")
 
             whitelist = db.get_whitelist()
             if index_tops:
@@ -498,6 +569,20 @@ class Flow:
     def _is_checked(self, top: str) -> bool:
         return _rule_is_checked(self.checked, top, default=True)
 
+    def _effective_diff(self) -> DiffResult | None:
+        diff = self.diff
+        if diff is None or not self._given_up:
+            return diff
+        omitted = self._given_up
+        def keep(change) -> bool:
+            key = change.rel_path.as_posix()
+            return key not in omitted
+        return DiffResult(
+            added=[c for c in diff.added if keep(c)],
+            modified=[c for c in diff.modified if keep(c)],
+            deleted=[c for c in diff.deleted if keep(c)],
+        )
+
     def _strategy(self, top: str) -> str:
         return resolve_strategy(self.strategies, top)
 
@@ -508,7 +593,7 @@ class Flow:
 
     def collect_tasks(self) -> list[DownloadTask]:
         """按 diff + 策略算出"要下载哪些文件"。已在包内的不下载。"""
-        diff = self.diff
+        diff = self._effective_diff()
         src = self.compare_root
         if diff is None or src is None:
             self.tasks = []
@@ -538,8 +623,9 @@ class Flow:
             if will_skip(ch, self.checked, self.strategies,
                          checked_default=True):
                 continue
-            if rel.as_posix() in self._done_paths and (cache / rel).is_file():
-                continue                                    # 上次已经下好了
+            rel_key = rel.as_posix()
+            if rel_key in self._given_up:
+                continue                                    # 用户明确选择放弃
             local = src / rel
             if local.is_file():                             # 包里自带 → 不用下载
                 continue
@@ -547,16 +633,30 @@ class Flow:
             urls = list(item.get("downloads") or [])
             if not urls:
                 continue
-            # DownloadTask 的字段是 sha1/sha256/sha512 + file_size：
-            # 以前这里按 dest/size/hashes 构造，一行就 TypeError，
-            # 于是"要下载的文件"直接让开始更新报错。
-            tasks.append(DownloadTask(
-                rel_path=rel.as_posix(),
+            # DownloadTask 的字段是 sha1/sha256/sha512 + file_size。
+            task = DownloadTask(
+                rel_path=rel_key,
                 urls=urls,
                 sha1=str(item.get("sha1") or ""),
                 sha256=str(item.get("sha256") or ""),
                 sha512=str(item.get("sha512") or ""),
-                file_size=int(item.get("file_size") or 0)))
+                file_size=int(item.get("file_size") or 0))
+            if not (task.sha1 or task.sha256 or task.sha512):
+                spec = self._expected_hashes.get(rel_key, "")
+                algo, _, value = spec.partition(":")
+                if algo == "sha1":
+                    task.sha1 = value
+                elif algo == "sha256":
+                    task.sha256 = value
+                elif algo == "sha512":
+                    task.sha512 = value
+            if rel_key in self._done_paths and (cache / rel).is_file():
+                ok, _reason = downloader_mod._verify(cache / rel, task)
+                if ok:
+                    continue                                # 缓存内容复核通过
+                self._done_paths.discard(rel_key)
+                self.bus.log(f"续传缓存校验失败，将重新下载：{rel_key}", "WARNING")
+            tasks.append(task)
         self.tasks = tasks
         return tasks
 
@@ -633,8 +733,14 @@ class Flow:
             self.bus.progress("apply", "正在应用更新…", 0.0)
             src_layers = [SourceLayer(cache), SourceLayer(self.compare_root, consume=False)]
             source = PlanSource(src_layers)
-            plan = build_plan(self.diff, self.checked, self.strategies,
-                              old_root=self.pack_root, source=source)
+            plan = build_plan(self._effective_diff(), self.checked,
+                              self.strategies, old_root=self.pack_root,
+                              source=source)
+            # Carry the package/index content hashes into the execution plan.
+            # This makes copy and post-apply verification reject same-size
+            # tampered bytes instead of trusting file size alone.
+            for rel, spec in self._expected_hashes.items():
+                plan.expect_hash.setdefault(rel, spec)
             watch = pack_watch.watch_for_plan(self.pack_root, plan)
             self._last_poll = time.monotonic()
 
@@ -658,10 +764,28 @@ class Flow:
                 self.bus.log("更新已中止", "WARNING")
                 self.controller.push_state()
                 return
-            failed = verify_after_update(plan, self.pack_root)
+            deep_verify = bool(db.get_ui_options().get("apply_deep_verify", 1))
+            failed = verify_after_update(plan, self.pack_root,
+                                         deep=deep_verify)
+            execution_failed = list(report.get("failed") or [])
+            all_failed = execution_failed + failed
             self.report = {"applied": report.get("applied", 0),
                            "deleted": report.get("deleted", 0),
-                           "failed": len(failed)}
+                           "failed": len(all_failed)}
+            if all_failed:
+                # A partial write is recoverable state, never a successful update.
+                # Keep the checkpoint/resume record so the next run can retry.
+                self.phase = PHASE_IDLE
+                self.error = f"有 {len(all_failed)} 项未完成，已保留恢复记录"
+                self.bus.log(self.error, "ERROR")
+                for item in all_failed[:10]:
+                    self.bus.log(f"未完成：{item.get('rel', '')}："
+                                 f"{item.get('error', '')}", "ERROR")
+                self._write_resume()
+                self.controller.push_state()
+                return
+            if root is not None:
+                checkpoint_mod.mark_applied(root)
             self.phase = PHASE_DONE
             self._done_paths.clear()
             self._clear_resume()
@@ -669,8 +793,6 @@ class Flow:
             self.bus.log(
                 f"更新完成：新增 {self.report['applied']}，"
                 f"删除 {self.report['deleted']}", "INFO")
-            if failed:
-                self.bus.log(f"有 {len(failed)} 项未通过复核", "WARNING")
             self.controller.refresh_pack()
             if root is not None:
                 self._snapshot = pack_lock.snapshot(root)
@@ -692,21 +814,39 @@ class Flow:
     def _resume_file(self) -> Path:
         return self.controller.cache_root() / "resume.json"
 
-    def resume_info(self) -> dict | None:
+    def _same_root(self, left: Path | None, right: Path | None) -> bool:
+        if left is None or right is None:
+            return left is right
+        try:
+            return Path(left).resolve() == Path(right).resolve()
+        except OSError:
+            return Path(left) == Path(right)
+
+    def _read_resume(self) -> dict | None:
         try:
             path = self._resume_file()
             if not path.is_file():
                 return None
             data = json.loads(path.read_text(encoding="utf-8"))
-            if not Path(data.get("update", "")).is_file():
+            if not isinstance(data, dict):
                 return None
-            if not Path(data.get("pack", "")).is_dir():
+            pack = Path(str(data.get("pack") or ""))
+            update = Path(str(data.get("update") or ""))
+            if not update.is_file() or not pack.is_dir():
                 return None
-            return {"update": Path(data["update"]).name,
-                    "completed": len(data.get("completed") or []),
-                    "total": int(data.get("total", 0) or 0)}
+            if self.pack_root is not None and not self._same_root(self.pack_root, pack):
+                return None
+            return data
         except Exception:                                  # noqa: BLE001
             return None
+
+    def resume_info(self) -> dict | None:
+        data = self._read_resume()
+        if data is None:
+            return None
+        return {"update": Path(data["update"]).name,
+                "completed": len(data.get("completed") or []),
+                "total": int(data.get("total", 0) or 0)}
 
     def _write_resume(self) -> None:
         try:
@@ -716,6 +856,7 @@ class Flow:
                 "strategies": dict(self.strategies),
                 "checked": dict(self.checked),
                 "completed": sorted(self._done_paths),
+                "given_up": sorted(self._given_up),
                 "total": len(self.tasks),
             }
             self._resume_file().write_text(
@@ -723,9 +864,16 @@ class Flow:
         except Exception as exc:                           # noqa: BLE001
             self.bus.log(f"续传记录写入失败：{exc}", "WARNING")
 
-    def _clear_resume(self) -> None:
+    def _clear_resume(self, owner: Path | None = None) -> None:
         try:
-            self._resume_file().unlink(missing_ok=True)
+            path = self._resume_file()
+            if not path.is_file():
+                return
+            data = json.loads(path.read_text(encoding="utf-8"))
+            recorded = Path(str(data.get("pack") or ""))
+            target = owner if owner is not None else self.pack_root
+            if target is None or self._same_root(recorded, target):
+                path.unlink(missing_ok=True)
         except Exception:                                  # noqa: BLE001, S110
             pass
 
@@ -733,18 +881,20 @@ class Flow:
         """继续上次没做完的更新：恢复策略/勾选，重新比对后自动应用。"""
         if self.busy():
             raise FlowError("正在处理中")
-        info = self.resume_info()
-        if info is None:
-            raise FlowError("没有可继续的更新")
-        try:
-            data = json.loads(self._resume_file().read_text(encoding="utf-8"))
-        except Exception as exc:                           # noqa: BLE001
-            raise FlowError(f"续传记录损坏：{exc}") from exc
-        self.pack_root = Path(data.get("pack") or "")
+        data = self._read_resume()
+        if data is None:
+            raise FlowError("没有可继续的更新，或记录不属于当前整合包")
+        resume_root = Path(str(data.get("pack") or ""))
+        if self.pack_root is None:
+            self.pack_root = resume_root
+        elif not self._same_root(self.pack_root, resume_root):
+            raise FlowError("续传记录属于另一个整合包")
         self.import_update(data.get("update") or "")
         self.strategies.update(data.get("strategies") or {})
         self.checked.update(data.get("checked") or {})
         self._done_paths = set(data.get("completed") or [])
+        self._given_up = {str(p).replace("\\", "/")
+                          for p in (data.get("given_up") or [])}
         self._resume_pending = True
         self.bus.log("继续上次未完成的更新", "INFO")
         self.start_scan()
@@ -755,6 +905,8 @@ class Flow:
     # ------------------------------------------------------------------
     def set_strategy(self, name: str, value: str = "",
                      checked: bool | None = None) -> dict:
+        if self.busy():
+            raise FlowError("正在处理中，暂时不能修改更新策略")
         if not name:
             raise FlowError("缺少条目名")
         with self._lock:
@@ -810,13 +962,18 @@ class Flow:
             self._write_resume()
 
     def give_up(self) -> dict:
-        """放弃补入：清掉待补列表，让流程可以继续（缺失文件会记进日志）。"""
+        """放弃补入，并把这些路径从本次更新计划中永久排除。"""
         if not self.pending:
             return {"ok": True, "pending": []}
-        missed = [p.get("path", "") for p in self.pending]
+        missed = {str(p.get("path") or "").replace("\\", "/")
+                  for p in self.pending if p.get("path")}
+        self._given_up.update(missed)
+        self.tasks = [t for t in self.tasks
+                      if str(t.rel_path).replace("\\", "/") not in missed]
         self.pending = []
         self.bus.log(f"已放弃 {len(missed)} 个未能下载的文件："
-                     + "、".join(missed[:3]), "WARNING")
+                     + "、".join(sorted(missed)[:3]), "WARNING")
+        self._write_resume()
         self.controller.push_state()
         return {"ok": True, "pending": []}
 

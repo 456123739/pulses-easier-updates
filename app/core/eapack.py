@@ -145,8 +145,12 @@ def export_eapack(
     wopts = resolve_export_options(opts)
     whitelist = get_whitelist()
 
-    if not opts.get("min_size"):
-        excluded = set()
+    # `excluded_folders` is the explicit STEP 1 scope. It must be honored
+    # for every source mode; `min_size` only controls the optional automatic
+    # exclusions from older callers, never a user's explicit selection.
+    #
+    # The ZIP developer flow passes scope exclusions directly. Clearing them
+    # when min_size is false leaked excluded local content into exports.
 
     # 根目录散文件里的"玩家本地设置"永远不进包（与 min_size 无关）：
     # options.txt 里是键位/画质/音量，随包分发只会覆盖玩家自己的设置。

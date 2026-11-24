@@ -29,6 +29,9 @@ export default function App() {
   const sheet = useUi((s) => s.sheet)
   const [editorReady, setEditorReady] = useState(false)
   const [expanding, setExpanding] = useState(false)
+  const [bridgeError, setBridgeError] = useState(false)
+  const [bootAttempt, setBootAttempt] = useState(0)
+  const desktop = isDesktop()
 
   // 第一次点开才加载编辑器；之后保活，关闭动画不丢
   useEffect(() => {
@@ -39,15 +42,21 @@ export default function App() {
     const off = subscribe((events) => applyEvents(events))
     let cancelled = false
     ;(async () => {
-      const ready = await whenReady(700)
+      const ready = await whenReady(desktop ? 15000 : 700)
       if (cancelled) return
       setConnected(ready)
       if (!ready) {
-        // 浏览器里打开（设计稿预览）：用假数据，方便截图与联调
-        setState(mockState())
-        setBooting(false)
+        if (desktop) {
+          setBridgeError(true)
+          setBooting(false)
+        } else {
+          // 浏览器里打开（设计稿预览）：用假数据，方便截图与联调
+          setState(mockState())
+          setBooting(false)
+        }
         return
       }
+      setBridgeError(false)
       try {
         const state = await invoke<AppState>('app.bootstrap')
         if (cancelled) return
@@ -70,12 +79,21 @@ export default function App() {
       cancelled = true
       off()
     }
-  }, [applyEvents, pushToast, setBooting, setConnected, setState])
+  }, [applyEvents, bootAttempt, desktop, pushToast, setBooting, setConnected, setState])
 
   return (
     <>
       <AnimatePresence>{booting && <Splash key="splash" expanding={expanding} />}</AnimatePresence>
-      {!booting && <Shell />}
+      {!booting && !bridgeError && <Shell />}
+      {!booting && bridgeError && (
+        <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 32, background: '#111214', color: '#f2f3f4' }}>
+          <div style={{ maxWidth: 440, textAlign: 'center' }}>
+            <h1 style={{ margin: '0 0 12px', fontSize: 20 }}>桌面桥接未就绪</h1>
+            <p style={{ margin: '0 0 20px', color: '#a9adb3', lineHeight: 1.6 }}>应用界面已打开，但后台服务没有响应。可以重试连接，不会进入演示数据模式。</p>
+            <button className="btn" onClick={() => { setBridgeError(false); setBooting(true); setBootAttempt((n) => n + 1) }}>重试连接</button>
+          </div>
+        </div>
+      )}
       <Cover />
       <PreferencesSheet />
       <PendingSheet />

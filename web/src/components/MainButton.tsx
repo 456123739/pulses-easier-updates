@@ -7,7 +7,7 @@ import styles from './MainButton.module.css'
 
 interface Props {
   onScanToggle?: () => void
-  beforeConfirm?: () => Promise<void>
+  beforeConfirm?: () => Promise<boolean>
 }
 
 /** 主按钮：六态（含下载覆盖态），配色与文案按 Tk 版逐条对齐。 */
@@ -89,9 +89,15 @@ export default function MainButton({ onScanToggle, beforeConfirm }: Props) {
       if (btn === 'confirm') {
         setHint('正在应用策略并写入…')
         try {
-          await beforeConfirm?.()
+          const committed = await (beforeConfirm?.() ?? true)
+          if (!committed) {
+            setHint('策略保存失败，未开始写入', 'error')
+            return
+          }
         } catch (err) {
           pushToast(err instanceof Error ? err.message : '策略提交失败', 'error')
+          setHint('策略保存失败，未开始写入', 'error')
+          return
         }
         await call('update.apply')
         return

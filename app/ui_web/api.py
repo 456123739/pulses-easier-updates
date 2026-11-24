@@ -479,8 +479,8 @@ class Api:
             return _err("DIALOG_ERROR", str(exc))
 
     # ------------------------------------------------------------------
-    def handle_drop(self, paths) -> dict:
-        """由 Python 侧 DOM drop 处理器调用（路径来自 pywebviewFullPath）。"""
+    def handle_drop(self, paths, *, target: str = "pack") -> dict:
+        """处理 DOM drop；target=update 时导入玩家更新包。"""
         if isinstance(paths, str):
             paths = [paths]
         clean: list[str] = []
@@ -494,9 +494,28 @@ class Api:
         if not clean:
             self._bus.dnd("error", "没能拿到拖入文件的路径，请用点击选择")
             return _err("NO_PATH", "没能拿到拖入文件的路径")
-        self._bus.emit("dnd", {"kind": "ok", "paths": clean})
+        target = str(target or "pack")
+        if target not in {"pack", "update"}:
+            target = "pack"
+        # CI/自动化专用：只写一个状态文件，不改变正常拖拽行为
+        import os as _os
+        _state = _os.environ.get("PULSES_E2E_STATE")
+        if _state:
+            try:
+                Path(_state).write_text(
+                    __import__("json").dumps({"paths": clean}, ensure_ascii=False),
+                    encoding="utf-8")
+            except OSError:
+                pass
+        self._bus.emit("dnd", {"kind": "ok", "paths": clean,
+                                 "target": target})
         try:
-            self._controller.open_path(clean[0])
+            if target == "update":
+                # 玩家 STEP 2：路径本身就是更新包，不要再走实例定位。
+                snap = self._controller.flow.import_update(clean[0])
+                self._controller.attach_update(snap)
+            else:
+                self._controller.open_path(clean[0])
         except ApiError as exc:
             self._bus.dnd("error", exc.message)
             return _err(exc.code, exc.message)

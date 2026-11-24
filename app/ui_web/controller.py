@@ -78,6 +78,10 @@ class AppController:
     def set_role(self, role: str) -> dict:
         role = "developer" if role == "developer" else "player"
         with self._lock:
+            current = self._role
+        if role != current and (self.flow._transition_busy() or self.dev.busy()):
+            raise ApiError("BUSY", "当前流程正在进行，暂时不能切换角色")
+        with self._lock:
             self._role = role
         self._push_state()
         return {"role": role}
@@ -143,14 +147,18 @@ class AppController:
 
     def _load_pack(self, root: Path) -> dict:
         info = pack_info.read_modpack_info(root)
-        self.flow.pack_root = Path(root)
+        try:
+            self.flow.set_pack_root(root)
+        except RuntimeError as exc:
+            raise ApiError("BUSY", str(exc)) from exc
         with self._lock:
             self._pack = {
                 "path": str(root),
                 "name": info.name,
                 "version": info.version,
                 "fileCount": info.mod_count,
-                "updatePack": None,
+                "updatePack": (dict(self.flow.update_info)
+                               if self.flow.update_info else None),
             }
         try:
             recent.add_recent(root)
@@ -163,10 +171,9 @@ class AppController:
 
     def clear_pack(self) -> dict:
         try:
-            self.flow.clear()
-        except Exception:                              # noqa: BLE001, S110
-            pass
-        self.flow.pack_root = None
+            self.flow.set_pack_root(None)
+        except RuntimeError as exc:
+            raise ApiError("BUSY", str(exc)) from exc
         with self._lock:
             self._pack = None
         self.bus.log("已清除整合包", "INFO")
@@ -309,7 +316,7 @@ class AppController:
     def threads(self) -> int:
         try:
             return max(1, min(32, int(
-                database.get_download_options().get("multi_workers", 8) or 8)))
+                database.get_download_options().get("multi_slots", 8) or 8)))
         except Exception:                              # noqa: BLE001
             return 8
 

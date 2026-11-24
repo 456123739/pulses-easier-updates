@@ -14,6 +14,7 @@ export default function RoleSwitch() {
   const role = useApp((s) => s.state?.role ?? 'player')
   const connected = useApp((s) => s.connected)
   const patchState = useApp((s) => s.patchState)
+  const pushToast = useApp((s) => s.pushToast)
   const setCovering = useUi((s) => s.setCovering)
 
   const pick = async (next: Role) => {
@@ -21,14 +22,16 @@ export default function RoleSwitch() {
     // 换页时先盖一层：内容在遮罩后面换，视觉上是一次"刷新"而不是跳变
     setCovering(true)
     window.setTimeout(() => setCovering(false), 260)
-    patchState({ role: next })
     if (connected) {
       try {
         await invoke('app.role.set', { role: next })
-      } catch {
-        /* 失败由 Python 推回真实状态 */
+      } catch (err) {
+        setCovering(false)
+        pushToast(err instanceof Error ? err.message : '暂时不能切换角色', 'error')
+        return
       }
     }
+    patchState({ role: next })
   }
 
   return (

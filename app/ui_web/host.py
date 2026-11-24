@@ -139,8 +139,11 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
             path = item.get("pywebviewFullPath") if isinstance(item, dict) else None
             if path:
                 paths.append(path)
+        target = event.get("target") or {}
+        attributes = target.get("attributes") or {}
+        drop_target = attributes.get("data-drop-target", "pack")
         # 没拿到路径也要回调，否则前端遮罩会一直挂着
-        api.handle_drop(paths)
+        api.handle_drop(paths, target=drop_target)
 
     def swallow(event):
         return None
