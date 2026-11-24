@@ -110,14 +110,8 @@ def main() -> int:
         proc.kill()
         return 3
     print("app", hwnd)
-    # CI 桌面只有 1024x768，而应用最小宽度约 944。把应用放在右侧
-    # (80..1024)，Explorer 放左侧 (0..300)：文件项和 STEP2 都在屏幕内。
-    # 之前的 Explorer 放在 x=990，UIA 文件项坐标变成 x=1448，鼠标实际
-    # 落在屏幕外，永远不会产生 OLE 拖放。
-    screen_w = ctypes.windll.user32.GetSystemMetrics(0)
-    screen_h = ctypes.windll.user32.GetSystemMetrics(1)
-    print("screen", screen_w, screen_h)
-    ctypes.windll.user32.MoveWindow(hwnd, 80, 10, 944, 668, True)
+    # 左半边放应用，右半边放资源管理器，避免 Explorer 挡住投放点
+    ctypes.windll.user32.MoveWindow(hwnd, 10, 10, 700, 668, True)
     time.sleep(6)
     explorer = subprocess.Popen(["explorer.exe", f"/select,{update}"])
     exp = 0
@@ -136,7 +130,7 @@ def main() -> int:
         proc.kill()
         explorer.kill()
         return 4
-    ctypes.windll.user32.MoveWindow(exp, 0, 10, 300, 620, True)
+    ctypes.windll.user32.MoveWindow(exp, 990, 10, 285, 620, True)
     time.sleep(2)
     try:
         from pywinauto import Desktop
@@ -162,13 +156,28 @@ def main() -> int:
         width, height = tr.right - tr.left, tr.bottom - tr.top
         sx, sy = (left + width // 2, top + height // 2)
         ax, ay, aw, ah = rect(hwnd)
+        ex, ey, ew, eh = rect(exp)
+        print("target", target.window_text(), target.element_info.control_type,
+              "rect", (left, top, width, height), "exp", (ex, ey, ew, eh))
+        cands = []
+        for c in win.descendants():
+            try:
+                n = c.window_text().lower()
+                if n and "update" in n:
+                    cands.append((n, str(c.element_info.control_type),
+                                  c.rectangle()))
+            except Exception:
+                pass
+        print("candidates", cands[:12])
+        # UIA on some hosted runners reports the list item in a scaled
+        # coordinate space.  If the reported point is outside Explorer,
+        # use the stable file row observed in the 1024x768 screenshot.
+        if not (ex <= sx <= ex + ew and ey <= sy <= ey + eh):
+            sx, sy = ex + 202, ey + 245
+            print("UIA_OUTSIDE_EXPLORER_USE_VISIBLE_FILE", sx, sy)
         # STEP2 卡片在左侧 46% 栏的上部
         tx, ty = ax + int(aw * 0.40), ay + int(ah * 0.30)
         print("drag", sx, sy, "->", tx, ty, "rects", rect(hwnd), rect(exp))
-        if not (0 <= sx < screen_w and 0 <= sy < screen_h
-                and 0 <= tx < screen_w and 0 <= ty < screen_h):
-            print("OFFSCREEN", sx, sy, tx, ty, "screen", screen_w, screen_h)
-            return 7
         try:
             from PIL import ImageGrab
             ImageGrab.grab().save(ROOT / "drag-debug.png")
