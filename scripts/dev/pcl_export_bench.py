@@ -101,6 +101,7 @@ def toggle_checkbox(win, text: str) -> bool:
 
 
 def main() -> int:
+    import zipfile, io
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -217,8 +218,6 @@ def main() -> int:
             cache=FingerprintCache(pcl / "fp.json"),
         )
         our_time = time.time() - t0
-        import zipfile, io
-
         def _consume(z, names):
             for n in z.namelist():
                 n = n.replace("\\", "/")
