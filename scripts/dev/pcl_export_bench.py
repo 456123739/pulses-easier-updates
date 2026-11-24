@@ -149,12 +149,39 @@ def main() -> int:
     except Exception as exc:
         print("dialog", exc)
     start = time.time()
-    for _ in range(120):
+    # PCL writes the ZIP incrementally.  The old probe read at the first
+    # byte (17.5 MB of a ~161 MB export) and produced pcl_files=0.
+    # Wait until the central directory is readable and size is stable.
+    last_size = -1
+    stable = 0
+    complete = False
+    for _ in range(240):
         time.sleep(1)
-        if out.exists() and out.stat().st_size > 0:
-            pcl_time = time.time() - start
-            pcl_size = out.stat().st_size
-            print("done", pcl_time, pcl_size)
+        if not out.exists():
+            if proc.poll() is not None:
+                print("PCL exited", proc.returncode)
+                return 4
+            continue
+        size = out.stat().st_size
+        if size > 0 and size == last_size:
+            try:
+                with zipfile.ZipFile(out) as zf:
+                    zf.namelist()
+                stable += 1
+            except Exception:
+                stable = 0
+        else:
+            stable = 0
+        last_size = size
+        if stable >= 2:
+            complete = True
+            break
+    if not complete:
+        print("timeout waiting for complete PCL zip", last_size)
+        return 5
+    pcl_time = time.time() - start
+    pcl_size = out.stat().st_size
+    print("done", pcl_time, pcl_size)
             # 同一实例跑我们的引擎（冷缓存），并做完整性对比
             try:
                 from app.core.instance_scan import scan_instance
@@ -173,25 +200,34 @@ def main() -> int:
                 )
                 our_time = time.time() - t0
                 import zipfile, io
+
+                def _consume(z, names):
+                    for n in z.namelist():
+                        n = n.replace("\\", "/")
+                        if n.endswith("modrinth.index.json"):
+                            try:
+                                idx = json.loads(z.read(n))
+                                names |= {str(f.get("path", "")) for f in idx.get("files", [])}
+                            except Exception:
+                                pass
+                        if "/overrides/" in n:
+                            names.add(n.split("/overrides/", 1)[1])
+                        elif n.startswith("overrides/"):
+                            names.add(n[len("overrides/"):])
+                        elif n.endswith(".mrpack"):
+                            try:
+                                _consume(zipfile.ZipFile(io.BytesIO(z.read(n))), names)
+                            except Exception:
+                                pass
+
                 pcl_names = set()
                 with zipfile.ZipFile(out) as outer:
-                    for n in outer.namelist():
-                        if n.endswith(".mrpack"):
-                            inner = zipfile.ZipFile(io.BytesIO(outer.read(n)))
-                            pcl_names |= {x[len("overrides/"):] for x in inner.namelist()
-                                          if x.startswith("overrides/") and not x.endswith("/")}
-                            pcl_names |= {f["path"] for f in json.loads(
-                                inner.read("modrinth.index.json"))["files"]}
-                        elif n.startswith("overrides/") and not n.endswith("/"):
-                            pcl_names.add(n[len("overrides/"):])
+                    _consume(outer, pcl_names)
+                    print("pcl-outer", [n for n in outer.namelist()[:20]])
                 our_names = set()
                 if r:
-                    z = zipfile.ZipFile(r)
-                    our_names = {n[len("overrides/"):] for n in z.namelist()
-                                 if n.startswith("overrides/")}
-                    import json as _json
-                    idx = _json.loads(z.read("modrinth.index.json"))
-                    our_names |= {f["path"] for f in idx.get("files", [])}
+                    with zipfile.ZipFile(r) as z:
+                        _consume(z, our_names)
                 missing = sorted(pcl_names - our_names)
                 report = {"pcl_time": pcl_time, "pcl_size": pcl_size,
                           "our_time": our_time, "our_size": r.stat().st_size if r else 0,
