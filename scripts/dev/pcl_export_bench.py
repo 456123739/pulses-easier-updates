@@ -86,6 +86,20 @@ def click_name(win, name: str, timeout: float = 8) -> bool:
     return False
 
 
+def toggle_checkbox(win, text: str) -> bool:
+    for c in win.descendants():
+        try:
+            if c.is_visible() and text in c.window_text():
+                c.click_input()
+                print("toggle", text, "->", c.element_info.control_type)
+                time.sleep(0.4)
+                return True
+        except Exception:
+            pass
+    print("toggle-missing", text)
+    return False
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -120,6 +134,11 @@ def main() -> int:
     print("settings click", click_name(win, "版本设置"))
     time.sleep(2)
     dump(win, pcl / "instance.json")
+    # Keep the baseline deterministic: no Java copy, no nested PCL wrapper.
+    # Both are optional export content; leaving them on makes PCL wait for a
+    # Java/runtime copy and produces a nested modpack layout.
+    toggle_checkbox(win, "版本文件夹中的 Java")
+    toggle_checkbox(win, "PCL 启动器程序")
     print("export click", click_name(win, "导出"))
     time.sleep(2)
     dump(win, pcl / "export.json")
