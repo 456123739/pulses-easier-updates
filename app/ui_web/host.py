@@ -135,9 +135,12 @@ def _enable_external_drop(window, bus: EventBus) -> None:
         webview2 = getattr(browser, "webview", None)
         controller = getattr(webview2, "CoreWebView2Controller", None)
         if controller is None:
+            _note("external-drop controller unavailable")
             return
         controller.AllowExternalDrop = True
+        _note(f"external-drop allow={getattr(controller, 'AllowExternalDrop', '?')}")
     except Exception as exc:                        # noqa: BLE001
+        _note(f"external-drop setup error: {exc}")
         bus.log(f"无法启用 WebView2 外部拖放：{exc}", "WARNING")
 
 
@@ -161,6 +164,7 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
         target = event.get("target") or {}
         attributes = target.get("attributes") or {}
         drop_target = attributes.get("data-drop-target", "pack")
+        _note(f"drop event paths={len(paths)} target={drop_target!r}")
         # 没拿到路径也要回调，否则前端遮罩会一直挂着
         api.handle_drop(paths, target=drop_target)
 
@@ -175,7 +179,9 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
             swallow, prevent_default=True)
         window.dom.document.events.dragover += DOMEventHandler(
             swallow, prevent_default=True)
+        _note("drop handlers bound")
     except Exception as exc:                        # noqa: BLE001
+        _note(f"drop bind error: {exc}")
         bus.log(f"拖放绑定失败：{exc}", "WARNING")
 
 
