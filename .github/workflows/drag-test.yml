@@ -16,7 +16,12 @@ jobs:
         run: |
           $p = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\*" -ErrorAction SilentlyContinue
           if (-not $p) { choco install webview2-runtime -y --no-progress }
-      - run: python scripts/dev/win_drag_probe.py --source
+      - name: 原生 Explorer 拖放探针
+        continue-on-error: true
+        run: python scripts/dev/win_drag_probe.py --source
+        env: { PYTHONIOENCODING: "utf-8" }
+      - name: 真实 OLE FileDrop 拖放探针
+        run: python scripts/dev/win_ole_probe.py
         env: { PYTHONIOENCODING: "utf-8" }
       - uses: actions/upload-artifact@v4
         if: always()
@@ -28,4 +33,8 @@ jobs:
             app.log
             drop-state.json
             drag-debug.png
+            ole-debug.png
+            web-start.log
+            app.log
+            drop-state.json
           if-no-files-found: warn
