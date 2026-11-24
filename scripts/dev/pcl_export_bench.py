@@ -149,100 +149,92 @@ def main() -> int:
     except Exception as exc:
         print("dialog", exc)
     start = time.time()
-    # PCL writes the ZIP incrementally.  The old probe read at the first
-    # byte (17.5 MB of a ~161 MB export) and produced pcl_files=0.
-    # Wait until the central directory is readable and size is stable.
     last_size = -1
     stable = 0
     complete = False
-    for _ in range(240):
+    while time.time() - start < 300:
         time.sleep(1)
         if not out.exists():
-            if proc.poll() is not None:
-                print("PCL exited", proc.returncode)
-                return 4
             continue
         size = out.stat().st_size
+        valid = False
         if size > 0 and size == last_size:
             try:
                 with zipfile.ZipFile(out) as zf:
                     zf.namelist()
-                stable += 1
+                valid = True
             except Exception:
-                stable = 0
+                valid = False
+        if valid:
+            stable += 1
+            if stable >= 2:
+                complete = True
+                break
         else:
             stable = 0
         last_size = size
-        if stable >= 2:
-            complete = True
-            break
     if not complete:
         print("timeout waiting for complete PCL zip", last_size)
         return 5
     pcl_time = time.time() - start
     pcl_size = out.stat().st_size
     print("done", pcl_time, pcl_size)
-            # 同一实例跑我们的引擎（冷缓存），并做完整性对比
-            try:
-                from app.core.instance_scan import scan_instance
-                from app.core.export_rules import expand_rules
-                from app.core.instance_export import export_from_instance
-                from app.core.fingerprint import FingerprintCache
-                src = inst
-                rules = expand_rules()
-                sc = scan_instance(src, rules)
-                our = pcl / "our.zip"
-                t0 = time.time()
-                r = export_from_instance(
-                    src, our, rules=rules, scan=sc,
-                    pack_name="Minerizon beta", pack_version="1.0.0",
-                    cache=FingerprintCache(pcl / "fp.json"),
-                )
-                our_time = time.time() - t0
-                import zipfile, io
+    # 同一实例跑我们的引擎（冷缓存），并做完整性对比
+    try:
+        from app.core.instance_scan import scan_instance
+        from app.core.export_rules import expand_rules
+        from app.core.instance_export import export_from_instance
+        from app.core.fingerprint import FingerprintCache
+        src = inst
+        rules = expand_rules()
+        sc = scan_instance(src, rules)
+        our = pcl / "our.zip"
+        t0 = time.time()
+        r = export_from_instance(
+            src, our, rules=rules, scan=sc,
+            pack_name="Minerizon beta", pack_version="1.0.0",
+            cache=FingerprintCache(pcl / "fp.json"),
+        )
+        our_time = time.time() - t0
+        import zipfile, io
 
-                def _consume(z, names):
-                    for n in z.namelist():
-                        n = n.replace("\\", "/")
-                        if n.endswith("modrinth.index.json"):
-                            try:
-                                idx = json.loads(z.read(n))
-                                names |= {str(f.get("path", "")) for f in idx.get("files", [])}
-                            except Exception:
-                                pass
-                        if "/overrides/" in n:
-                            names.add(n.split("/overrides/", 1)[1])
-                        elif n.startswith("overrides/"):
-                            names.add(n[len("overrides/"):])
-                        elif n.endswith(".mrpack"):
-                            try:
-                                _consume(zipfile.ZipFile(io.BytesIO(z.read(n))), names)
-                            except Exception:
-                                pass
+        def _consume(z, names):
+            for n in z.namelist():
+                n = n.replace("\\", "/")
+                if n.endswith("modrinth.index.json"):
+                    try:
+                        idx = json.loads(z.read(n))
+                        names |= {str(f.get("path", "")) for f in idx.get("files", [])}
+                    except Exception:
+                        pass
+                if "/overrides/" in n:
+                    names.add(n.split("/overrides/", 1)[1])
+                elif n.startswith("overrides/"):
+                    names.add(n[len("overrides/"):])
+                elif n.endswith(".mrpack"):
+                    try:
+                        _consume(zipfile.ZipFile(io.BytesIO(z.read(n))), names)
+                    except Exception:
+                        pass
 
-                pcl_names = set()
-                with zipfile.ZipFile(out) as outer:
-                    _consume(outer, pcl_names)
-                    print("pcl-outer", [n for n in outer.namelist()[:20]])
-                our_names = set()
-                if r:
-                    with zipfile.ZipFile(r) as z:
-                        _consume(z, our_names)
-                missing = sorted(pcl_names - our_names)
-                report = {"pcl_time": pcl_time, "pcl_size": pcl_size,
-                          "our_time": our_time, "our_size": r.stat().st_size if r else 0,
-                          "pcl_files": len(pcl_names), "our_files": len(our_names),
-                          "missing": missing[:50], "missing_count": len(missing)}
-                (pcl / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-                print("report", json.dumps(report, ensure_ascii=False)[:1000])
-            except Exception as exc:
-                print("our-export-error", repr(exc))
-            return 0
-        if proc.poll() is not None:
-            print("PCL exited", proc.returncode)
-            return 4
-    print("timeout")
-    return 5
+        pcl_names = set()
+        with zipfile.ZipFile(out) as outer:
+            _consume(outer, pcl_names)
+            print("pcl-outer", [n for n in outer.namelist()[:20]])
+        our_names = set()
+        if r:
+            with zipfile.ZipFile(r) as z:
+                _consume(z, our_names)
+        missing = sorted(pcl_names - our_names)
+        report = {"pcl_time": pcl_time, "pcl_size": pcl_size,
+                  "our_time": our_time, "our_size": r.stat().st_size if r else 0,
+                  "pcl_files": len(pcl_names), "our_files": len(our_names),
+                  "missing": missing[:50], "missing_count": len(missing)}
+        (pcl / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("report", json.dumps(report, ensure_ascii=False)[:1000])
+    except Exception as exc:
+        print("our-export-error", repr(exc))
+    return 0
 
 
 if __name__ == "__main__":
