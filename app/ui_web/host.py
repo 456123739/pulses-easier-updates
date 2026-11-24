@@ -133,6 +133,16 @@ def _enable_external_drop(window, bus: EventBus) -> None:
         native = getattr(window, "native", None)
         browser = getattr(native, "browser", None)
         webview2 = getattr(browser, "webview", None)
+        if webview2 is None:
+            _note("external-drop webview unavailable")
+            return
+        # WinForms WebView2 exposes this on the control itself.  Older
+        # pywebview/.NET combinations may only expose the controller, so keep
+        # that as a fallback.
+        if hasattr(webview2, "AllowExternalDrop"):
+            webview2.AllowExternalDrop = True
+            _note("external-drop allow=True (control)")
+            return
         controller = getattr(webview2, "CoreWebView2Controller", None)
         if controller is None:
             _note("external-drop controller unavailable")
