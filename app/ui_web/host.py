@@ -124,6 +124,23 @@ def with_e2e_flag(url: str) -> str:
     return f"{url}#e2e=1"
 
 
+def _enable_external_drop(window, bus: EventBus) -> None:
+    """WebView2 默认允许外部 drop，但某些运行时/嵌入方式会关掉。
+
+    这里只做幂等增强；拿不到原生 controller 就保持默认，不阻断启动。
+    """
+    try:
+        native = getattr(window, "native", None)
+        browser = getattr(native, "browser", None)
+        webview2 = getattr(browser, "webview", None)
+        controller = getattr(webview2, "CoreWebView2Controller", None)
+        if controller is None:
+            return
+        controller.AllowExternalDrop = True
+    except Exception as exc:                        # noqa: BLE001
+        bus.log(f"无法启用 WebView2 外部拖放：{exc}", "WARNING")
+
+
 def bind_drop(window, api: Api, bus: EventBus) -> None:
     """把 DOM 的 drop 事件接到 Python（pywebview ≥5.0.1 提供文件全路径）。"""
     try:
@@ -131,6 +148,8 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
     except Exception as exc:                        # noqa: BLE001
         bus.log(f"当前环境不支持 DOM 拖放：{exc}", "WARNING")
         return
+
+    _enable_external_drop(window, bus)
 
     def on_drop(event):
         files = (event.get("dataTransfer") or {}).get("files") or []
