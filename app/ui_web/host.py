@@ -136,13 +136,23 @@ def _enable_external_drop(window, bus: EventBus) -> None:
         if webview2 is None:
             _note("external-drop webview unavailable")
             return
-        # WinForms WebView2 exposes this on the control itself.  Older
-        # pywebview/.NET combinations may only expose the controller, so keep
-        # that as a fallback.
-        if hasattr(webview2, "AllowExternalDrop"):
-            webview2.AllowExternalDrop = True
-            _note("external-drop allow=True (control)")
+        # WinForms WebView2 exposes AllowExternalDrop on the control, but the
+        # getter/setter must run on its UI thread.  Calling it from the Python
+        # setup thread raises E_NOINTERFACE (seen in CI).
+        def _apply():
+            try:
+                webview2.AllowExternalDrop = True
+                _note("external-drop allow=True (control/UI)")
+            except Exception as exc:                 # noqa: BLE001
+                _note(f"external-drop property error: {exc}")
+
+        try:
+            from System import Action
+            webview2.Invoke(Action(_apply))
             return
+        except Exception as exc:                     # noqa: BLE001
+            _note(f"external-drop UI invoke failed: {exc}")
+        # Compatibility fallback for builds that expose only the controller.
         controller = getattr(webview2, "CoreWebView2Controller", None)
         if controller is None:
             _note("external-drop controller unavailable")
