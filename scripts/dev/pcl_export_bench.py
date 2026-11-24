@@ -152,7 +152,7 @@ def main() -> int:
     last_size = -1
     stable = 0
     complete = False
-    while time.time() - start < 300:
+    while time.time() - start < 900:
         time.sleep(1)
         if not out.exists():
             continue
@@ -163,7 +163,9 @@ def main() -> int:
                 with zipfile.ZipFile(out) as zf:
                     zf.namelist()
                 valid = True
-            except Exception:
+            except Exception as exc:
+                if stable == 0:
+                    print("zip-not-ready", repr(exc), flush=True)
                 valid = False
         if valid:
             stable += 1
