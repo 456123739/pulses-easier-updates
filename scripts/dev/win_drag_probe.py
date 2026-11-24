@@ -110,8 +110,14 @@ def main() -> int:
         proc.kill()
         return 3
     print("app", hwnd)
-    # 左半边放应用，右半边放资源管理器，避免 Explorer 挡住投放点
-    ctypes.windll.user32.MoveWindow(hwnd, 10, 10, 700, 668, True)
+    # CI 桌面只有 1024x768，而应用最小宽度约 944。把应用放在右侧
+    # (80..1024)，Explorer 放左侧 (0..300)：文件项和 STEP2 都在屏幕内。
+    # 之前的 Explorer 放在 x=990，UIA 文件项坐标变成 x=1448，鼠标实际
+    # 落在屏幕外，永远不会产生 OLE 拖放。
+    screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+    screen_h = ctypes.windll.user32.GetSystemMetrics(1)
+    print("screen", screen_w, screen_h)
+    ctypes.windll.user32.MoveWindow(hwnd, 80, 10, 944, 668, True)
     time.sleep(6)
     explorer = subprocess.Popen(["explorer.exe", f"/select,{update}"])
     exp = 0
@@ -130,7 +136,7 @@ def main() -> int:
         proc.kill()
         explorer.kill()
         return 4
-    ctypes.windll.user32.MoveWindow(exp, 990, 10, 285, 620, True)
+    ctypes.windll.user32.MoveWindow(exp, 0, 10, 300, 620, True)
     time.sleep(2)
     try:
         from pywinauto import Desktop
@@ -159,6 +165,10 @@ def main() -> int:
         # STEP2 卡片在左侧 46% 栏的上部
         tx, ty = ax + int(aw * 0.40), ay + int(ah * 0.30)
         print("drag", sx, sy, "->", tx, ty, "rects", rect(hwnd), rect(exp))
+        if not (0 <= sx < screen_w and 0 <= sy < screen_h
+                and 0 <= tx < screen_w and 0 <= ty < screen_h):
+            print("OFFSCREEN", sx, sy, tx, ty, "screen", screen_w, screen_h)
+            return 7
         try:
             from PIL import ImageGrab
             ImageGrab.grab().save(ROOT / "drag-debug.png")
