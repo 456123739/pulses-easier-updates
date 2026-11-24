@@ -24,7 +24,8 @@ jobs:
           name: drag-evidence
           path: |
             ${{ runner.temp }}/pe-drag-*/drag.png
-            ${{ runner.temp }}/pe-drag-*/web-start.log
-            ${{ runner.temp }}/pe-drag-*/app.log
+            web-start.log
+            app.log
+            drop-state.json
             drag-debug.png
           if-no-files-found: warn

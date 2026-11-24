@@ -229,6 +229,21 @@ def main() -> int:
                 print("DROPFILES_ERR", exc)
         print("RESULT", "PASS" if ok else "FAIL")
         print("APPTAIL", (tmp / "app.log").read_text(encoding="utf-8", errors="replace")[-1000:])
+        try:
+            applog.flush()
+            applog.close()
+        except Exception:
+            pass
+        for name in ("web-start.log", "app.log", "drop-state.json"):
+            src = tmp / name
+            if src.is_file():
+                try:
+                    shutil.copy2(src, ROOT / name)
+                    print("COPIED", name)
+                except Exception as exc:
+                    print("COPY_ERR", name, exc)
+            else:
+                print("MISSING", name)
         return 0 if ok else 6
     finally:
         try: proc.terminate()
