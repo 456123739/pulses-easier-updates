@@ -130,7 +130,7 @@ class BridgeContract(unittest.TestCase):
         (second / "config").mkdir()
         result = self.api.invoke("app.pick_pack", {"path": str(second)})
         self.assertTrue(result["ok"], result)
-        self.assertEqual(self.ctl.flow.pack_root, second)
+        self.assertTrue(self.ctl.flow.pack_root.samefile(second))
         self.assertIsNone(self.ctl.flow.update_zip)
         self.assertIsNone(self.ctl.flow.diff)
         self.assertIsNone(result["data"]["state"]["pack"]["updatePack"])
