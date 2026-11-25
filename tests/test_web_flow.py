@@ -84,7 +84,14 @@ class WebFlowCase(unittest.TestCase):
 
     def tearDown(self):
         try:
-            self.ctl.flow.clear()
+            flow = self.ctl.flow
+            if flow.paused:
+                flow.abort()
+                flow._pause_done.set()
+            thread = flow._thread
+            if thread is not None:
+                thread.join(120)
+            flow.clear()
         except Exception:                                  # noqa: BLE001, S110
             pass
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -169,9 +176,13 @@ class WebFlowCase(unittest.TestCase):
         target.write_text('tampered = true\n', encoding="utf-8")
         self.api.invoke("update.apply", {})
         self._wait_paused()
-        self.api.invoke("update.pause.rescan", {})
         flow = self.ctl.flow
+        worker = flow._thread
+        self.api.invoke("update.pause.rescan", {})
         self.assertTrue(self._wait(lambda: not flow.busy()))
+        worker.join(60)
+        self.assertFalse(worker.is_alive(), "重扫应由原 worker 串行完成")
+        self.assertIs(flow._thread, worker, "重扫不得覆盖正在收尾的 worker 句柄")
         snap = flow.snapshot()
         self.assertIsNone(snap["paused"])
         self.assertIsNone(snap["error"])

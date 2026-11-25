@@ -36,8 +36,8 @@
 
 | 层 | 位置 | 现状 |
 |---|---|---|
-| 单元（Python） | `tests/` | `pytest tests -q` → **603 项**全过（2026-11-08，约 85s） |
-| 界面交互（Playwright，桩桥） | `web/scripts/ui_test.mjs` | **19 项检查**全过：渲染/胶囊/折叠/换身份/首选项/受阻条/下载态/无控制台错误 |
+| 单元（Python） | `tests/` | `pytest tests -q` → **757 passed, 1 skipped**（2026-11-25，约 83s） |
+| 界面交互（Playwright，桩桥） | `web/scripts/ui_test.mjs` | **21 项检查**全过：渲染/胶囊/折叠/换身份/首选项/受阻条/下载态/传输统计清理/无控制台错误 |
 | 截图 | `web/scripts/shot.mjs` + `ui_test.mjs --shots` | `web/shots/*.png` |
 | 端到端（Tk 真窗口） | `tests/e2e_flow.py`（Windows） | 未改，仍覆盖完整流程 |
 | 端到端（新界面，真前端 + 真 Api） | `scripts/dev/run_ui_e2e.py` | A–H 全覆盖：定位 → 导入 → 策略/折叠/日志/首选项/白名单/数据库 → 应用 → 磁盘核对 → 开发者导出 → 真下载/中止/续传；断言写在 `scripts/dev/e2e_ui.mjs`（105 处 `check()`） |
@@ -81,7 +81,7 @@
 
 - 源码运行与打包运行都一样：`webview.start()` 后窗口报 `Main window failed to start`，
   页面从未 loaded（`tests/web_e2e_windows.py` 与打包冒烟都能复现）。
-- 因此 CI 里能自动验证的是：类型检查、构建、**603 项单元测试**、**浏览器里的真前端 + 真 Api 端到端**
+- 因此 CI 里能自动验证的是：类型检查、构建、**757 passed / 1 skipped 的单元测试**、**浏览器里的真前端 + 真 Api 端到端**
  （`scripts/dev/run_ui_e2e.py`，含真下载/中止/续传）、Tk GUI 冒烟、PyInstaller 打包、**打包后 exe 起窗**。
 - 真正的 WebView2 渲染只能在用户 Windows 机器上验证。
 - 程序侧兜底：`runtime_available()` 找不到 `msedgewebview2.exe` 就直接用 Tk；

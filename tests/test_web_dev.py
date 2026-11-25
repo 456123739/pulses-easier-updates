@@ -51,6 +51,10 @@ class DevExportCase(unittest.TestCase):
         self.api = Api(self.ctl, self.bus)
 
     def tearDown(self):
+        thread = self.ctl.dev._thread
+        if thread is not None:
+            thread.join(120)
+        self.ctl.flow.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_import_reports_dirs_and_files(self):
@@ -108,6 +112,10 @@ class SettingsAndResumeCase(unittest.TestCase):
         self.api = Api(self.ctl, self.bus)
 
     def tearDown(self):
+        thread = self.ctl.flow._thread
+        if thread is not None:
+            thread.join(120)
+        self.ctl.flow.clear()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_whitelist_roundtrip_cleans_input(self):
@@ -145,8 +153,11 @@ class SettingsAndResumeCase(unittest.TestCase):
 
         res = self.api.invoke("update.resume", {})
         self.assertTrue(res["ok"], res)
-        self.ctl.flow._thread.join(120)
+        thread = self.ctl.flow._thread
+        thread.join(120)
+        self.assertFalse(thread.is_alive(), "续传线程应包含扫描和自动应用全流程")
         self.assertIsNone(self.ctl.flow.error)
+        self.assertEqual((pack / "mods" / "a.jar").read_text(), "A2")
 
     # ------------------------------------------------------------------
     def _build(self):

@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 def setup() -> tuple[Path, Path]:
-    root = Path(os.environ.get("TEMP", ".")) / "pe-pcl-probe"
+    root = Path.cwd() / "bench-run" / "pcl"
     shutil.rmtree(root, ignore_errors=True)
     pcl = root / "PCL"
     pcl.mkdir(parents=True)
@@ -25,11 +25,10 @@ def setup() -> tuple[Path, Path]:
     (inst / "mods").mkdir(parents=True)
     (inst / "config").mkdir()
     (inst / "saves" / "World").mkdir(parents=True)
-    (inst / "BenchPack.json").write_text(json.dumps({
-        "id": "BenchPack", "type": "release",
-        "mainClass": "net.minecraft.client.main.Main",
-        "libraries": [], "arguments": {"game": [], "jvm": []},
-    }), encoding="utf-8")
+    here = Path(__file__).resolve().parents[2]
+    shutil.copy2(here / "bench" / "pcl" / "BenchPack.json", inst / "BenchPack.json")
+    (inst / "version.json").write_text((inst / "BenchPack.json").read_text(encoding="utf-8"), encoding="utf-8")
+    (inst / "BenchPack.jar").write_bytes(b"")
     for i in range(8):
         (inst / "mods" / f"m{i}.jar").write_bytes(b"x" * 1024)
     (inst / "config" / "a.toml").write_text("a=1\n", encoding="utf-8")
@@ -45,16 +44,39 @@ def set_registry(mc: Path) -> None:
 
 
 def main() -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     if sys.platform != "win32":
         print("Windows only")
         return 2
     pcl, mc = setup()
     set_registry(mc)
     log = pcl / "probe.log"
+    err = open(pcl / "stderr.txt", "w", encoding="utf-8")
     proc = subprocess.Popen([str(pcl / "PCL.exe")], cwd=str(pcl),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(10)
-    out = {"pid": proc.pid, "windows": [], "controls": []}
+                            stdout=err, stderr=subprocess.STDOUT)
+    time.sleep(20)
+    out = {"pid": proc.pid, "exit": proc.poll(), "windows": [], "controls": [], "win32": []}
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        titles = []
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def cb(hwnd, _):
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(hwnd, buf, n + 1)
+                titles.append({"hwnd": int(hwnd), "title": buf.value,
+                               "visible": bool(user32.IsWindowVisible(hwnd))})
+            return True
+        user32.EnumWindows(cb, 0)
+        out["win32"] = titles
+    except Exception as exc:
+        out["win32_error"] = str(exc)
     try:
         from pywinauto import Desktop
         desk = Desktop(backend="uia")
@@ -85,6 +107,15 @@ def main() -> int:
             pass
     except Exception as exc:
         out["error"] = str(exc)
+    try:
+        out["files"] = [str(p.relative_to(pcl)) for p in pcl.rglob("*") if p.is_file()][:80]
+    except Exception:
+        pass
+    for lg in pcl.rglob("Log*.txt"):
+        try:
+            out.setdefault("pcl_log", []).extend(lg.read_text(encoding="utf-8", errors="replace").splitlines()[-80:])
+        except Exception:
+            pass
     log.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         proc.terminate()

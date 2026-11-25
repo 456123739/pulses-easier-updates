@@ -225,6 +225,13 @@ class DevOpenCase(unittest.TestCase):
         done = self.wait_idle()
         self.assertEqual(done["instance"]["name"], "DemoPack")
 
+    def test_player_update_drop_routes_to_update_flow(self):
+        # STEP 2 must not send an update archive through instance detection.
+        self.api.invoke("app.pick_pack", {"path": str(self.pack)})
+        res = self.api.handle_drop([str(self.eapack)], target="update")
+        self.assertFalse(res["ok"])  # fixture is intentionally malformed
+        self.assertIn("无法识别", res["error"]["message"])
+
     def test_drop_wrong_file_reports_reason(self):
         self.api.invoke("app.role.set", {"role": "developer"})
         res = self.api.handle_drop([str(self.eapack)])

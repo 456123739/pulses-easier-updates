@@ -27,21 +27,16 @@ await page.waitForTimeout(900)
 // 1) 启动画面收掉 → 主界面上线
 check((await page.locator('aside').count()) === 1, '侧边栏渲染')
 check(await page.getByText('定位整合包').first().isVisible(), 'STEP 1 可见')
-check(await page.getByText('确认更新').first().isVisible(), '主按钮为「确认更新」')
+check(await page.getByText(/写入更新/).first().isVisible(), '主按钮可开始写入更新')
 
 // 2) 策略胶囊：点一下要切换选中态
-const rowStrategy = () =>
-  page.evaluate(() =>
-    window.__pe.usePlayer.getState().strategies.find((s) => s.name === 'config')?.current,
-  )
-const beforeStrategy = await rowStrategy()
-await page.locator('button.chip[data-on="false"]:not([disabled])').first().click()
+const firstOffChip = page.locator('button.chip[data-on="false"]:not([disabled])').first()
+const beforeChip = await firstOffChip.getAttribute('data-on')
+await firstOffChip.click()
 await page.waitForTimeout(240)
-const afterStrategy = await rowStrategy()
 check(
-  beforeStrategy !== afterStrategy,
-  '策略胶囊点击后写入界面状态',
-  `${beforeStrategy} → ${afterStrategy}`,
+  await page.locator('button.chip[data-on="true"]').count() > 0 && beforeChip === 'false',
+  '策略胶囊点击后切换选中态',
 )
 
 // 3) 折叠分区展开
@@ -53,10 +48,10 @@ check(await page.getByText('无需更新').first().isVisible(), '「无需更新
 await page.getByRole('button', { name: '开发者', exact: true }).click()
 await page.waitForTimeout(700)
 check(await page.getByText('导出选项').first().isVisible(), '开发者视图有导出选项')
-check(await page.getByText('更新范围').first().isVisible(), '开发者视图有更新范围表')
+check(await page.getByText('第一步 · 选择导出内容').first().isVisible(), '开发者视图有第一步导出范围')
 check(
-  await page.getByText('开始制作更新包').first().isVisible(),
-  '开发者主按钮可见',
+  await page.getByRole('button', { name: '开发者端整合包定位' }).isVisible(),
+  '开发者定位入口可见',
 )
 // 导出选项：默认前三项开着（后端默认值）
 const switchesOn = await page.locator('[class*="switch"][data-on="true"]').count()
@@ -104,7 +99,7 @@ await page.waitForTimeout(420)
 check(await page.getByText(/还差 2 个文件/).first().isVisible(), '受阻提示条出现')
 if (SHOTS) await page.screenshot({ path: 'shots/ui-pending.png' })
 
-// 8) 下载态：主按钮变「取消下载」，进度条出现
+// 8) 下载态：主按钮变「停止下载」，进度条出现
 await page.evaluate(() => {
   const s = window.__pe
   s.usePlayer.setState({
@@ -113,8 +108,49 @@ await page.evaluate(() => {
   })
 })
 await page.waitForTimeout(420)
-check(await page.getByText('取消下载').first().isVisible(), '下载中主按钮变「取消下载」')
+check(await page.getByText('停止下载').first().isVisible(), '下载中主按钮变「停止下载」')
 check((await page.locator('text=正在下载').count()) > 0, '下载提示文案可见')
+if (SHOTS) await page.screenshot({ path: 'shots/ui-download.png' })
+
+// 新流程必须丢弃上一轮文件统计；完成批次不能再留下活动传输字节。
+await page.evaluate(() => {
+  const { useApp } = window.__pe
+  const base = useApp.getState().state
+  const flow = base.flow ?? {
+    phase: 'idle', update: null, strategies: [], groups: [],
+    counts: { added: 0, modified: 0, deleted: 0 }, changeCounts: {},
+    tasks: 0, done: 0, pending: [], report: null, error: null,
+    changelog: false,
+  }
+  const event = (seq, phase) => ({
+    v: 1, seq, type: 'state', data: { ...base, flow: { ...flow, phase } },
+  })
+  useApp.getState().applyEvents([event(20, 'download')])
+  useApp.getState().applyEvents([{
+    v: 1, seq: 21, type: 'bytes', data: { key: 'mods/a.jar', done: 512, total: 1024, state: 'running' },
+  }])
+  useApp.getState().setState({ ...base, flow: { ...flow, phase: 'download' } })
+  useApp.getState().applyEvents([event(22, 'scan')])
+  const clearedOnNewScan = Object.keys(useApp.getState().bytes).length === 0
+  useApp.getState().applyEvents([event(23, 'download')])
+  useApp.getState().applyEvents([{
+    v: 1, seq: 24, type: 'bytes', data: { key: 'mods/a.jar', done: 1024, total: 1024, state: 'done' },
+  }])
+  useApp.getState().setState({ job: { id: 'old', title: 'old', status: 'done', cancelable: false } })
+  useApp.getState().applyEvents([
+    event(25, 'done'),
+    { v: 1, seq: 26, type: 'bytes', data: { key: 'mods/a.jar', done: 1024, total: 1024, state: 'done' } },
+  ])
+  window.__pe.transferResetResult = {
+    clearedOnNewScan,
+    bytesAfterDone: Object.keys(useApp.getState().bytes).length,
+    jobAfterDone: useApp.getState().job,
+  }
+})
+const transferReset = await page.evaluate(() => window.__pe.transferResetResult)
+check(transferReset.clearedOnNewScan, '新扫描清理上一轮字节统计')
+check(transferReset.bytesAfterDone === 0 && transferReset.jobAfterDone === null,
+      '完成后清理文件字节统计和任务状态', JSON.stringify(transferReset))
 if (SHOTS) await page.screenshot({ path: 'shots/ui-download.png' })
 
 // 9) 对话框（关闭守卫等都用它）

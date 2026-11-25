@@ -21,7 +21,7 @@ interface Props {
   onStrategy?: (name: string, value: string) => void
   compact?: boolean
   /** 把「提交草稿」交给父级，让底部唯一主按钮一次性提交+应用 */
-  registerCommit?: (fn: () => Promise<void>) => void
+  registerCommit?: (fn: () => Promise<boolean>) => void
 }
 
 export default function StrategyCard({ rows, onToggle, onStrategy, compact, registerCommit }: Props) {
@@ -88,13 +88,16 @@ export default function StrategyCard({ rows, onToggle, onStrategy, compact, regi
     const row = data.find((r) => r.name === name)
     return row ? row.current !== draft[name] : false
   })
-  const commit = async () => {
-    if (!connected || dirtyNames.length === 0) return
+  const commit = async (): Promise<boolean> => {
+    if (!connected) return false
+    if (dirtyNames.length === 0) return true
     try {
       await invoke('update.strategies.set', { values: draft })
       setDraft({})
+      return true
     } catch (err) {
       pushToast(err instanceof Error ? err.message : '保存策略失败', 'error')
+      return false
     }
   }
 

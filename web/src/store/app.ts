@@ -48,6 +48,7 @@ interface Store {
 
   pushLogs: (lines: Omit<LogLine, 'id'>[]) => void
   clearLogs: () => void
+  resetTransfers: () => void
   applyEvents: (events: ServerEvent[]) => void
   pushToast: (message: string, level?: Toast['level']) => void
   dismissToast: (id: number) => void
@@ -85,6 +86,8 @@ export const useApp = create<Store>((set, get) => ({
 
   clearLogs: () => set({ logs: [] }),
 
+  resetTransfers: () => set({ progress: null, bytes: {}, job: null }),
+
   pushToast: (message, level = 'info') =>
     set((s) => ({ toasts: s.toasts.concat({ id: ++seq, message, level }).slice(-3) })),
 
@@ -102,12 +105,35 @@ export const useApp = create<Store>((set, get) => ({
     const toasts: Toast[] = []
     let dialog: DialogSpec | null = null
     let dirtyProgress = false
+    let resetTransferSession = false
+    let terminalPhase: 'idle' | 'done' | null = null
+    const currentState = get().state
 
     for (const ev of events) {
       switch (ev.type) {
-        case 'state':
+        case 'state': {
+          const nextPhase = ev.data.flow?.phase
+          const previousPhase = currentState?.flow?.phase
           state = ev.data
+          const previousPack = currentState?.pack?.path
+          const nextPack = ev.data.pack?.path
+          const previousUpdate = currentState?.flow?.update?.path
+          const nextUpdate = ev.data.flow?.update?.path
+          const identityChanged = Boolean(currentState &&
+            (previousPack !== nextPack || previousUpdate !== nextUpdate))
+          if ((nextPhase !== previousPhase && (nextPhase === 'scan' || nextPhase === 'download')) ||
+              identityChanged) {
+            resetTransferSession = true
+          }
+          if (nextPhase === 'idle' || nextPhase === 'done') {
+            terminalPhase = nextPhase
+          } else if (nextPhase) {
+            // A later active-state event in the same batch starts a new session;
+            // do not let an earlier idle/done event clear its bytes/job.
+            terminalPhase = null
+          }
           break
+        }
         case 'progress':
           progress = ev.data
           dirtyProgress = true
@@ -155,9 +181,24 @@ export const useApp = create<Store>((set, get) => ({
 
     const patch: Partial<Store> = {}
     if (state) patch.state = state
-    if (dirtyProgress) patch.progress = progress
-    if (Object.keys(byteUpdates).length) patch.bytes = { ...get().bytes, ...byteUpdates }
-    if (job) patch.job = job
+    if (resetTransferSession) {
+      patch.progress = null
+      patch.bytes = {}
+      patch.job = null
+    }
+    if (dirtyProgress) {
+      patch.progress = progress
+      if (progress && get().progress?.phase !== progress.phase) patch.bytes = {}
+    }
+    if (terminalPhase) {
+      patch.bytes = {}
+      patch.job = null
+      if (!dirtyProgress) patch.progress = null
+    }
+    if (Object.keys(byteUpdates).length && !terminalPhase) {
+      patch.bytes = { ...(patch.bytes ?? get().bytes), ...byteUpdates }
+    }
+    if (job && !terminalPhase) patch.job = job
     if (dialog) patch.dialog = dialog
     if (toasts.length) patch.toasts = get().toasts.concat(toasts).slice(-3)
     if (Object.keys(patch).length) set(patch as never)

@@ -238,6 +238,8 @@ def _aborted(should_abort) -> bool:
 
 def _digest_for(algo: str):
     try:
+        if algo.lower() == "blake2b":
+            return hashlib.blake2b(digest_size=16)
         return hashlib.new(algo)
     except Exception:  # noqa: BLE001
         return hashlib.sha1()

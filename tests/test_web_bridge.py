@@ -103,6 +103,55 @@ class BridgeContract(unittest.TestCase):
         self.ctl.flow._thread.join(120)
         self.assertEqual((self.pack / "mods" / "a.jar").read_text(), "NEW")
 
+    def test_pack_clear_is_rejected_while_update_is_busy(self):
+        self.api.invoke("app.pick_pack", {"path": str(self.pack)})
+        old_root = self.ctl.flow.pack_root
+        self.ctl.flow.phase = "download"
+        released = []
+
+        class Lock:
+            def release(self):
+                released.append(True)
+
+        self.ctl.flow._pack_lock = Lock()
+        result = self.api.invoke("app.pack.clear", {})
+        self.assertFalse(result["ok"])
+        self.assertEqual(self.ctl.flow.pack_root, old_root)
+        self.assertIsNotNone(self.ctl.snapshot()["pack"])
+        self.assertEqual(self.ctl.flow.phase, "download")
+        self.assertIsNotNone(self.ctl.flow._pack_lock)
+        self.assertEqual(released, [])
+
+    def test_switching_pack_clears_old_update_session(self):
+        self.api.invoke("app.pick_pack", {"path": str(self.pack)})
+        self.api.invoke("update.pick", {"path": str(self.update)})
+        second = self.tmp / "Second"
+        (second / "mods").mkdir(parents=True)
+        (second / "config").mkdir()
+        result = self.api.invoke("app.pick_pack", {"path": str(second)})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.ctl.flow.pack_root, second)
+        self.assertIsNone(self.ctl.flow.update_zip)
+        self.assertIsNone(self.ctl.flow.diff)
+        self.assertIsNone(result["data"]["state"]["pack"]["updatePack"])
+
+    def test_switching_pack_is_rejected_while_update_is_busy(self):
+        self.api.invoke("app.pick_pack", {"path": str(self.pack)})
+        old_root = self.ctl.flow.pack_root
+        self.ctl.flow.phase = "apply"
+        result = self.api.invoke("app.pick_pack", {"path": str(self.pack)})
+        self.assertFalse(result["ok"])
+        self.assertEqual(self.ctl.flow.pack_root, old_root)
+        self.assertEqual(self.ctl.flow.phase, "apply")
+
+    def test_strategy_changes_are_rejected_while_update_is_busy(self):
+        self.ctl.flow.phase = "apply"
+        result = self.api.invoke("update.strategy.set", {
+            "name": "mods", "value": "跳过重名"})
+        self.assertFalse(result["ok"])
+        self.assertNotIn("mods", self.ctl.flow.strategies)
+        self.assertEqual(self.ctl.flow.phase, "apply")
+
     def test_strategy_rows_keep_smart_and_keybind_options(self):
         flow = self.ctl.flow
         flow.tops = ["config"]

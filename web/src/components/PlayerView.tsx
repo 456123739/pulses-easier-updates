@@ -26,11 +26,16 @@ export default function PlayerView() {
   const progress = useApp((s) => s.progress)
   const setProgress = usePlayer((s) => s.setProgress)
   const bytes = useApp((s) => s.bytes)
+  const resetTransfers = useApp((s) => s.resetTransfers)
 
   // 后端快照是唯一事实来源：连上桥就覆盖本地演示态
   useEffect(() => {
     if (flow) applyFlow(flow)
   }, [flow, applyFlow])
+
+  useEffect(() => {
+    if (connected && flow?.phase === 'idle' && !progress) resetTransfers()
+  }, [connected, flow?.phase, progress, resetTransfers])
 
   // 进度条只认后端推来的 progress：以前这里没人接，条一直停在演示态的 100%
   useEffect(() => {
@@ -59,7 +64,7 @@ export default function PlayerView() {
   const setHint = usePlayer((s) => s.setHint)
   const [showTree, setShowTree] = useState(true)
   const setState = useApp((s) => s.setState)
-  const strategyCommit = useRef<() => Promise<void>>(async () => {})
+  const strategyCommit = useRef<() => Promise<boolean>>(async () => true)
 
   const onLocatePack = async () => {
     if (!connected) return
@@ -143,6 +148,7 @@ export default function PlayerView() {
             height={104}
             onPick={onLocatePack}
             ariaLabel="玩家端定位整合包"
+            dropTarget="pack"
           />
           <DropZone
             step="STEP 2"
@@ -151,6 +157,7 @@ export default function PlayerView() {
             hint={updatePack ? undefined : '或点击选择'}
             height={112}
             highlight={!updatePack}
+            dropTarget="update"
             onPick={onPickUpdate}
           />
           <div className={styles.clearRow}>

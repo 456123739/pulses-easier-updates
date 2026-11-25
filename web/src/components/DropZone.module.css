@@ -27,10 +27,12 @@
 
 .glow {
   display: none;
+  pointer-events: none;
 }
 
 .body {
   position: relative;
+  pointer-events: none;
   display: flex;
   flex-direction: column;
   align-items: center;

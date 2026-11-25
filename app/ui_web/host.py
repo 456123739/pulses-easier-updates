@@ -124,6 +124,46 @@ def with_e2e_flag(url: str) -> str:
     return f"{url}#e2e=1"
 
 
+def _enable_external_drop(window, bus: EventBus) -> None:
+    """WebView2 默认允许外部 drop，但某些运行时/嵌入方式会关掉。
+
+    这里只做幂等增强；拿不到原生 controller 就保持默认，不阻断启动。
+    """
+    try:
+        native = getattr(window, "native", None)
+        browser = getattr(native, "browser", None)
+        webview2 = getattr(browser, "webview", None)
+        if webview2 is None:
+            _note("external-drop webview unavailable")
+            return
+        # WinForms WebView2 exposes AllowExternalDrop on the control, but the
+        # getter/setter must run on its UI thread.  Calling it from the Python
+        # setup thread raises E_NOINTERFACE (seen in CI).
+        def _apply():
+            try:
+                webview2.AllowExternalDrop = True
+                _note("external-drop allow=True (control/UI)")
+            except Exception as exc:                 # noqa: BLE001
+                _note(f"external-drop property error: {exc}")
+
+        try:
+            from System import Action
+            webview2.Invoke(Action(_apply))
+            return
+        except Exception as exc:                     # noqa: BLE001
+            _note(f"external-drop UI invoke failed: {exc}")
+        # Compatibility fallback for builds that expose only the controller.
+        controller = getattr(webview2, "CoreWebView2Controller", None)
+        if controller is None:
+            _note("external-drop controller unavailable")
+            return
+        controller.AllowExternalDrop = True
+        _note(f"external-drop allow={getattr(controller, 'AllowExternalDrop', '?')}")
+    except Exception as exc:                        # noqa: BLE001
+        _note(f"external-drop setup error: {exc}")
+        bus.log(f"无法启用 WebView2 外部拖放：{exc}", "WARNING")
+
+
 def bind_drop(window, api: Api, bus: EventBus) -> None:
     """把 DOM 的 drop 事件接到 Python（pywebview ≥5.0.1 提供文件全路径）。"""
     try:
@@ -132,6 +172,8 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
         bus.log(f"当前环境不支持 DOM 拖放：{exc}", "WARNING")
         return
 
+    _enable_external_drop(window, bus)
+
     def on_drop(event):
         files = (event.get("dataTransfer") or {}).get("files") or []
         paths = []
@@ -139,8 +181,12 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
             path = item.get("pywebviewFullPath") if isinstance(item, dict) else None
             if path:
                 paths.append(path)
+        target = event.get("target") or {}
+        attributes = target.get("attributes") or {}
+        drop_target = attributes.get("data-drop-target", "pack")
+        _note(f"drop event paths={len(paths)} target={drop_target!r}")
         # 没拿到路径也要回调，否则前端遮罩会一直挂着
-        api.handle_drop(paths)
+        api.handle_drop(paths, target=drop_target)
 
     def swallow(event):
         return None
@@ -153,7 +199,9 @@ def bind_drop(window, api: Api, bus: EventBus) -> None:
             swallow, prevent_default=True)
         window.dom.document.events.dragover += DOMEventHandler(
             swallow, prevent_default=True)
+        _note("drop handlers bound")
     except Exception as exc:                        # noqa: BLE001
+        _note(f"drop bind error: {exc}")
         bus.log(f"拖放绑定失败：{exc}", "WARNING")
 
 

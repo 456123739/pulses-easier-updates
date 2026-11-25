@@ -1,0 +1,40 @@
+name: drag-test
+on:
+  workflow_dispatch:
+jobs:
+  drag:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: cd web && npm ci && npm run build
+      - run: pip install -r requirements.txt pywinauto pillow
+      - name: 安装 WebView2 运行时
+        run: |
+          $p = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\*" -ErrorAction SilentlyContinue
+          if (-not $p) { choco install webview2-runtime -y --no-progress }
+      - name: 原生 Explorer 拖放探针
+        continue-on-error: true
+        run: python scripts/dev/win_drag_probe.py --source
+        env: { PYTHONIOENCODING: "utf-8" }
+      - name: 真实 OLE FileDrop 拖放探针
+        run: python scripts/dev/win_ole_probe.py
+        env: { PYTHONIOENCODING: "utf-8" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: drag-evidence
+          path: |
+            ${{ runner.temp }}/pe-drag-*/drag.png
+            web-start.log
+            app.log
+            drop-state.json
+            drag-debug.png
+            ole-debug.png
+            web-start.log
+            app.log
+            drop-state.json
+          if-no-files-found: warn

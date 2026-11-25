@@ -376,6 +376,7 @@ export default function DeveloperView() {
           height={96}
           locked={exporting || loading}
           ariaLabel="开发者端整合包定位"
+          dropTarget="pack"
           onPick={() => void openSource()}
         />
 

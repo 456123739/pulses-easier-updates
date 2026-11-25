@@ -17,7 +17,7 @@
 - 默认导出范围：838 文件 / 352 MB（saves 默认不选，符合 PCL 默认）
 - 旧版 ZIP：159,019,122 B
 - Osmium EAPK2（super）：141,069,693 B（−11.3%），本机约 61 s，属于 beta 慢速档
-- 默认导出（CF 指纹限制 8 MB）：约 14.9 s；PCL 15.0 s（同机 Windows CI）
+- 默认导出（CF 指纹限制 4 MB）：Windows CI 7.48 s；PCL 9.00 s（同机同夹具）
 - 完整性：PCL 内层 mrpack 840 个路径，我方 838 个；仅缺 PCL 自身的
   `PCL/Setup.ini`、`PCL/config.json`、`command_history.txt`，多一个
   `CustomSkinLoader/CustomSkinLoader.json`（我方智能配置）。

@@ -426,7 +426,7 @@ def main() -> int:
     ok_exit = False
     if hw2:
         # 等页面画出主界面（alpha=255 且 >=900x560），再点关闭
-        end_wait = time.time() + 25
+        end_wait = time.time() + 45
         while time.time() < end_wait:
             rr = rect_of(hw2)
             key = wintypes.DWORD(); flags = wintypes.DWORD(); a = ctypes.c_ubyte(0)
@@ -435,9 +435,12 @@ def main() -> int:
             if rr and rr[2] >= 900 and int(a.value) >= 250:
                 break
             time.sleep(0.1)
+        # WebView2 冷启动时窗口已 alpha=255 但页面还是空的；
+        # 等页面真正画出标题栏再点关闭，否则点到空白处会误判。
+        time.sleep(4)
         user32.SetForegroundWindow(hw2)
-        time.sleep(0.3)
-        for off in (25, 16, 34):
+        time.sleep(0.5)
+        for off in (25, 16, 34, 25, 16, 34):
             rr = rect_of(hw2)
             if not rr:
                 break

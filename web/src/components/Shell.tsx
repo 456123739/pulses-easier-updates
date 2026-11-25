@@ -9,10 +9,13 @@ import styles from './Shell.module.css'
 /** 主窗口外壳：玻璃侧边栏 + 工作区（玩家 / 开发者两端切换）。 */
 export default function Shell() {
   const role = useApp((s) => s.state?.role ?? 'player')
+  const resetTransfers = useApp((s) => s.resetTransfers)
+  const clearLogs = useApp((s) => s.clearLogs)
   useEffect(() => {
-    // 切角色时清掉上一个角色的进度/提示，避免开发者导出条留在玩家界面
-    useApp.setState({ progress: null, logs: [] })
-  }, [role])
+    // 切角色时清掉上一个角色的进度/传输统计，避免导出条留在玩家界面。
+    resetTransfers()
+    clearLogs()
+  }, [role, resetTransfers, clearLogs])
 
   return (
     <motion.div

@@ -238,14 +238,14 @@ python3 tests/realworld_test.py    # 真实网络实战：Modrinth 10 + CurseFor
 一条命令跑完全部单元测试（不需要显示器）：
 
 ```bash
-python -m pytest tests -q          # 603 项（2026-11-08 核对），约 85s
+python -m pytest tests -q          # 当前全量回归：757 passed, 1 skipped（约 83s）
 ```
 
 界面相关的两层（需要 Node + Playwright 内核）：
 
 ```bash
 cd web && npm ci && npm run build
-node scripts/ui_test.mjs                     # 界面交互（桩桥）：19 项检查
+node scripts/ui_test.mjs                     # 界面交互（桩桥）：21 项检查
 cd .. && python scripts/dev/run_ui_e2e.py    # 真前端 + 真 Api + 真磁盘
 ```
 
