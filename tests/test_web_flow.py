@@ -249,6 +249,41 @@ class WebFlowCase(unittest.TestCase):
         finally:
             flow_mod.execute_plan = real
 
+    def test_rescan_ignores_local_extra_kubejs(self):
+        # 复现：更新包带 kubejs/same.js，玩家本地另有 local-only.js。
+        # 默认「替换重名」保留本地文件，但复扫不能把整个 kubejs 判成差异。
+        from app.core.mrpack import merge_files, parse_mrpack
+        (self.inst / "kubejs").mkdir()
+        (self.inst / "kubejs" / "same.js").write_text("same")
+        (self.inst / "kubejs" / "local-only.js").write_text("local")
+        src = self.tmp / "kubejs-src"
+        _write(src / "modrinth.index.json", json.dumps({
+            "formatVersion": 1, "game": "minecraft",
+            "versionId": "2.0.0", "name": "KubejsPack", "files": [],
+            "dependencies": {"minecraft": "1.20.1"},
+        }))
+        _write(src / "overrides" / "kubejs" / "same.js", "same")
+        src_zip = self.tmp / "kubejs-src.zip"
+        with zipfile.ZipFile(src_zip, "w") as zf:
+            for p in src.rglob("*"):
+                if p.is_file():
+                    zf.write(p, p.relative_to(src).as_posix())
+        parsed, err = parse_mrpack(src_zip)
+        assert parsed is not None and not err
+        update = self.tmp / "kubejs.eapack"
+        assert eapack_mod.export_eapack(
+            source_dir=src, source_zip=src_zip, out_path=update,
+            pack=parsed, merged_files=merge_files(parsed),
+            strategies={}, changelog_md="# 2.0.0\n")
+        self.api.invoke("update.pick", {"path": str(update)})
+        self.api.invoke("pack.scan", {})
+        self.ctl.flow._thread.join(60)
+        self.assertIsNone(self.ctl.flow.error)
+        diff = self.ctl.flow.diff
+        assert diff is not None
+        self.assertFalse(any(c.rel_path == Path("kubejs")
+                             for c in diff.added + diff.modified + diff.deleted))
+
     def test_apply_updates_files_and_keeps_player_data(self):
         self._scan()
         self.api.invoke("update.apply", {})
