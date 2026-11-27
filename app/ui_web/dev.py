@@ -24,7 +24,7 @@ from ..core import pack_source
 from ..core import recent as recent_mod
 from ..config import (NEVER_PACK_FILES, STRATEGY_LIST,
                       default_strategy_for_dir, default_strategy_for_file,
-                      strategy_list_for)
+                      is_instance_version_file, strategy_list_for)
 from ..core.mrpack import (MRPack, is_reserved_root_name, merge_files,
                            parse_mrpack)
 
@@ -400,18 +400,20 @@ class DevFlow:
         rows = [r for r in self.scan.get("rows", []) if r["files"]]
         scanned = {r["name"] for r in rows}
         tops = [r["name"] for r in rows if not r["isFile"]]
-        # 永远不进包的文件（options.txt 等）不该出现在"更新范围"里
-        files = [r["name"] for r in rows
-                 if r["isFile"] and r["name"] not in NEVER_PACK_FILES]
         # PCL 的导出范围应完整：即使某个目录/根文件不在默认规则里，
         # 也要出现在第一步供用户勾选，而不是悄悄消失。
         root = Path(self.scan["root"])
+        # 永远不进包的文件（options.txt、PCL 版本元数据等）不该出现在范围里
+        files = [r["name"] for r in rows
+                 if r["isFile"] and r["name"] not in NEVER_PACK_FILES
+                 and not is_instance_version_file(root, r["name"])]
         try:
             all_dirs = [e.name for e in root.iterdir()
                         if e.is_dir() and e.name not in instance_scan.ROOT_SKIP
                         and e.name not in instance_scan.ANY_SKIP]
             all_files = [e.name for e in root.iterdir()
-                         if e.is_file() and e.name not in NEVER_PACK_FILES]
+                         if e.is_file() and e.name not in NEVER_PACK_FILES
+                         and not is_instance_version_file(root, e.name)]
         except OSError:
             all_dirs, all_files = [], []
         tops = sorted(set(tops) | set(all_dirs))

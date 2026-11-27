@@ -6,6 +6,7 @@ config.py — 全局配置与运行时常量
 """
 
 from enum import Enum
+from pathlib import Path
 
 
 # ----------------------------------------------------------------------
@@ -167,6 +168,25 @@ def is_local_only_name(name: str) -> bool:
 
 def is_local_only_dir(name: str) -> bool:
     return str(name) in LOCAL_ONLY_DIRS
+
+
+def is_instance_version_file(root, name: str) -> bool:
+    """PCL 实例根目录的版本元数据（<实例名>.json / <实例名>.jar）。
+
+    这些文件属于启动器/版本的自身元数据，不是整合包 overlays 内容。
+    特别是 `kubejs` 等目录之外，如果开发者误把根目录全选，更新包会
+    覆盖玩家的版本 JSON，PCL 随后可能报“初始化版本 JSON 时失败”。
+    它们永远不参与导出、比对和更新；`versions/` 目录仍由扫描器跳过。
+    """
+    if root is None:
+        return False
+    try:
+        stem = Path(root).name.casefold()
+    except (TypeError, ValueError):
+        return False
+    if not stem:
+        return False
+    return str(name).casefold() in {stem + ".json", stem + ".jar"}
 
 
 # 变更类型

@@ -108,6 +108,14 @@ class InstanceModeCase(unittest.TestCase):
         with self.assertRaises(dev_mod.DevError):
             self.flow.set_rule("nope", True)
 
+    def test_pcl_version_metadata_not_in_scope(self):
+        (self.root / f"{self.root.name}.json").write_text("{}", encoding="utf-8")
+        (self.root / f"{self.root.name}.jar").write_bytes(b"PCL")
+        self.flow._rescan()
+        names = set(self.flow.tops) | set(self.flow.root_files)
+        self.assertNotIn(f"{self.root.name}.json", names)
+        self.assertNotIn(f"{self.root.name}.jar", names)
+
     def test_import_requires_modpack_dir(self):
         empty = self.tmp / "empty"
         empty.mkdir()

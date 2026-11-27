@@ -25,7 +25,8 @@ import zipfile
 from pathlib import Path
 
 from ..config import (Strategy, default_strategy_for_dir,
-                      default_strategy_for_file, strategy_list_for)
+                      default_strategy_for_file, is_instance_version_file,
+                      strategy_list_for)
 from ..core import config_exclude
 from ..core import recover as recover_mod
 from ..core import database as db
@@ -503,6 +504,19 @@ class Flow:
                 # 那些要下载的文件就沉进目录级变更里了
                 whitelist = sorted(set(whitelist) | index_tops)
             threads = int(db.get_compare_options().get("hash_threads", 16) or 16)
+            # 非白名单目录默认「替换重名」会保留玩家本地额外文件；只有
+            # 明确选择「完全匹配」的目录才应把这些额外文件算作待删除。
+            full_tops: set[str] = set()
+            try:
+                recommended = eapack_mod.read_recommended_strategies(zpath) or {}
+            except Exception:                               # noqa: BLE001
+                recommended = {}
+            for top in folders:
+                value = (self.strategies.get(top)
+                         or recommended.get(top)
+                         or default_strategy_for_dir(top).value)
+                if str(value) == Strategy.FULL_MATCH.value:
+                    full_tops.add(str(top))
             self.bus.progress("scan", "正在比对…", 0.55)
             diff = None
             # 只有 index 声明、包里没有任何同名文件的更新包（模组全部走直链）
@@ -514,6 +528,7 @@ class Flow:
                         folder_hashes=folders, saves_worlds=saves_worlds,
                         whitelist=whitelist, compare_root=content_root,
                         pack_tops=set(zip_tops),
+                        folder_full_tops=full_tops,
                         threads=max(1, min(64, threads)), progress=_prog)
                 except Exception as exc:                     # noqa: BLE001
                     self.bus.log(f"清单比对失败，改用逐文件比对：{exc}", "WARNING")
@@ -522,6 +537,7 @@ class Flow:
                 diff = diff_packs_parallel(
                     root, content_root, whitelist=whitelist,
                     folder_hashes=folders, saves_worlds=saves_worlds,
+                    folder_full_tops=full_tops,
                     threads=max(1, min(64, threads)), progress=_prog)
                 # 兜底比对只看磁盘上解压出来的内容，index 声明的文件它不知道；
                 # 这里把"包内没有、只在 index 里"的文件补进去（不判删除）。
@@ -552,7 +568,8 @@ class Flow:
 
         files: set[str] = set()
         for entry in content_root.iterdir() if content_root.is_dir() else []:
-            if entry.is_file() and not is_reserved_root_name(entry.name):
+            if (entry.is_file() and not is_reserved_root_name(entry.name)
+                    and not is_instance_version_file(root, entry.name)):
                 files.add(entry.name)
         folders: list[str] = []
         if content_root.is_dir():

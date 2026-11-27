@@ -37,7 +37,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import ChangeKind, is_local_only_dir, is_local_only_name
+from ..config import (ChangeKind, is_instance_version_file,
+                      is_local_only_dir, is_local_only_name)
 from ..utils.files import iter_files
 
 DEFAULT_WHITELIST = ["mods"]
@@ -383,14 +384,17 @@ def _top_dirs(root: Path) -> dict[str, Path]:
     return result
 
 
-def _root_files(root: Path) -> list[Path]:
+def _root_files(root: Path, instance_root: Path | None = None) -> list[Path]:
+    """根目录散文件；instance_root 用于识别 PCL 的 <实例名>.json/.jar。"""
     if not root.is_dir():
         return []
+    version_root = instance_root or root
     result: list[Path] = []
     try:
         for entry in root.iterdir():
-            # 本地专属文件（更新未完成凭证等）永不参与比对
-            if entry.is_file() and not is_local_only_name(entry.name):
+            # 本地专属文件与 PCL 版本元数据永不参与比对
+            if entry.is_file() and not is_local_only_name(entry.name) \
+                    and not is_instance_version_file(version_root, entry.name):
                 result.append(Path(entry.name))
     except OSError:
         pass
@@ -489,6 +493,7 @@ def diff_packs_parallel(
     progress: Callable[[int, int, str], None] | None = None,
     folder_hashes: dict[str, str] | None = None,
     saves_worlds: dict[str, str] | None = None,
+    folder_full_tops: set[str] | None = None,
 ) -> DiffResult:
     """
     folder_hashes：更新包 `ea_hashes.json` 里记录的**顶层文件夹内容哈希**
@@ -599,13 +604,34 @@ def diff_packs_parallel(
                 # 极少数情况：记录值算的是"新包侧"，直接和本地侧比
                 same = bool(old_dir) and folder_hash(old_dir) == recorded
                 if not same:
+                    # 记录哈希包含整个目录。替换重名/跳过重名会保留
+                    # 本地额外文件；此时只看包内文件，避免更新完成后
+                    # kubejs 等目录永远被判为"有不同"。
+                    if (folder_full_tops is not None and old_dir is not None
+                            and new_dir is not None and new_dir.is_dir()):
+                        changed, extras = _folder_content_diff(old_dir, new_dir)
+                        if changed or (name in folder_full_tops and extras):
+                            result.modified.append(
+                                Change(Path(name), ChangeKind.MODIFIED,
+                                       is_folder_level=True))
+                    else:
+                        result.modified.append(
+                            Change(Path(name), ChangeKind.MODIFIED,
+                                   is_folder_level=True))
+            elif folders_differ(old_dir, new_dir):
+                # 没有 ea_hashes 的老包也按“包内文件”判断；否则默认
+                # 「替换重名」保留下来的本地脚本会让 kubejs 永久有差异。
+                if (folder_full_tops is not None and old_dir is not None
+                        and new_dir is not None and new_dir.is_dir()):
+                    changed, extras = _folder_content_diff(old_dir, new_dir)
+                    if changed or (name in folder_full_tops and extras):
+                        result.modified.append(
+                            Change(Path(name), ChangeKind.MODIFIED,
+                                   is_folder_level=True))
+                else:
                     result.modified.append(
                         Change(Path(name), ChangeKind.MODIFIED,
                                is_folder_level=True))
-            elif folders_differ(old_dir, new_dir):
-                result.modified.append(
-                    Change(Path(name), ChangeKind.MODIFIED,
-                           is_folder_level=True))
 
         _p(i + 1, max(1, total_dirs), "merge")
 
@@ -617,7 +643,7 @@ def diff_packs_parallel(
     # 于是每次都会重写 options.txt 之类的文件。现在按内容比对：
     # index 里声明过哈希就用它，否则两侧各算一次 sha1。
     old_files = set(_root_files(old_root))
-    new_files = set(_root_files(new_root))
+    new_files = set(_root_files(new_root, old_root))
     for rel in sorted(new_files - old_files):
         result.added.append(Change(rel, ChangeKind.ADDED,
                                    is_folder_level=False))
@@ -669,6 +695,47 @@ def _walk_rel_files(root: Path) -> dict[str, Path]:
     return out
 
 
+def _rel_key(rel: str) -> str:
+    """Windows 文件系统大小写不敏感；内容比对用规范化 key。"""
+    text = str(rel).replace("\\", "/")
+    return text.casefold() if os.name == "nt" else text
+
+
+def _folder_content_diff(old_dir: Path | None,
+                         new_dir: Path | None) -> tuple[bool, bool]:
+    """比较包内文件与本地文件，分别返回 (包内文件有差异, 本地有额外文件)。
+
+    与 folder_hash 不同：本地多出来的玩家文件不算“包内文件不一致”。
+    `替换重名`/`跳过重名` 本来就会保留这些文件；只有包内文件缺失或内容
+    不同才需要重新应用。`完全匹配` 是否删除额外文件由调用方决定。
+    """
+    old_map = {_rel_key(rel): path
+               for rel, path in _walk_rel_files(Path(old_dir)).items()} \
+        if old_dir is not None and Path(old_dir).is_dir() else {}
+    new_map = {_rel_key(rel): path
+               for rel, path in _walk_rel_files(Path(new_dir)).items()} \
+        if new_dir is not None and Path(new_dir).is_dir() else {}
+    if not new_map:
+        return False, bool(old_map)
+    changed = False
+    for key, src in new_map.items():
+        local = old_map.get(key)
+        if local is None:
+            changed = True
+            break
+        try:
+            if src.stat().st_size != local.stat().st_size:
+                changed = True
+                break
+            if _hash_file(src, "sha1") != _hash_file(local, "sha1"):
+                changed = True
+                break
+        except OSError:
+            changed = True
+            break
+    return changed, bool(set(old_map) - set(new_map))
+
+
 def diff_from_manifest(
     old_root: Path,
     manifest_files: dict[str, dict],
@@ -682,6 +749,7 @@ def diff_from_manifest(
     pack_files: set[str] | None = None,
     threads: int = 16,
     progress: Callable[[int, int, str], None] | None = None,
+    folder_full_tops: set[str] | None = None,
 ) -> DiffResult | None:
     """
     只用**更新包自带的哈希清单**比对，不必等解压完成。
@@ -800,10 +868,22 @@ def diff_from_manifest(
                 result.added.append(Change(Path(top), ChangeKind.ADDED,
                                            is_folder_level=True))
             elif recorded:
-                if folder_hash(local_top) != recorded:
-                    result.modified.append(
-                        Change(Path(top), ChangeKind.MODIFIED,
-                               is_folder_level=True))
+                same = folder_hash(local_top) == recorded
+                if not same:
+                    src_top = (Path(compare_root) / top
+                               if compare_root is not None else None)
+                    if (folder_full_tops is not None
+                            and src_top is not None and src_top.is_dir()):
+                        changed, extras = _folder_content_diff(
+                            local_top, src_top)
+                        if changed or (top in folder_full_tops and extras):
+                            result.modified.append(
+                                Change(Path(top), ChangeKind.MODIFIED,
+                                       is_folder_level=True))
+                    else:
+                        result.modified.append(
+                            Change(Path(top), ChangeKind.MODIFIED,
+                                   is_folder_level=True))
             else:
                 return None
             _p(i + 1)
@@ -894,7 +974,7 @@ def diff_from_manifest(
     if compare_root is not None:
         root_old = old_root
         old_files = {rel.name for rel in _root_files(root_old)}
-        for rel in _root_files(Path(compare_root)):
+        for rel in _root_files(Path(compare_root), root_old):
             name = rel.name
             target_h: str | None = None
             algo = "sha1"
@@ -929,10 +1009,12 @@ def diff_packs(old_root: Path, new_root: Path,
                whitelist: list[str] | None = None,
                index_hashes: dict[str, dict] | None = None,
                progress: Callable[[int, int, str], None] | None = None,
-               folder_hashes: dict[str, str] | None = None
+               folder_hashes: dict[str, str] | None = None,
+               folder_full_tops: set[str] | None = None
                ) -> DiffResult:
     return diff_packs_parallel(old_root, new_root,
                                whitelist=whitelist,
                                index_hashes=index_hashes,
                                threads=1, progress=progress,
-                               folder_hashes=folder_hashes)
+                               folder_hashes=folder_hashes,
+                               folder_full_tops=folder_full_tops)

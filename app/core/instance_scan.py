@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import pack_locator
+from ..config import is_instance_version_file
 from .export_rules import should_keep
 
 # 仅实例根目录跳过的目录（PCL `PageInstanceExport.xaml.vb:499-501`）
@@ -138,6 +139,9 @@ def _walk(root: Path, rules: list[str], unsafe: list[str] | None = None,
                         continue
                 size = entry.stat(follow_symlinks=True).st_size
             except OSError:
+                continue
+            if not rel_dir and is_instance_version_file(root, name):
+                # PCL 版本元数据不是 overlays 内容，不能被“全选”带进更新包
                 continue
             if not should_keep(rel, rules):
                 yield rel, 0, False, False

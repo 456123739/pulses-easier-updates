@@ -171,6 +171,16 @@ class ScanCase(unittest.TestCase):
         self.assertEqual(info["minecraft"], "1.12.2")
         self.assertEqual(info["loaderVersion"], "14.23.5.2859")
 
+    def test_pcl_version_metadata_is_never_exported(self):
+        name = self.tmp.name
+        (self.tmp / f"{name}.json").write_text('{"id": "Demo"}',
+                                               encoding="utf-8")
+        (self.tmp / f"{name}.jar").write_bytes(b"PCL")
+        res = S.scan_instance(self.tmp, ["*"])
+        paths = {i["path"] for i in res["items"]}
+        self.assertNotIn(f"{name}.json", paths)
+        self.assertNotIn(f"{name}.jar", paths)
+
     def test_locate_requires_mods_and_config(self):
         import os
         bare = Path(tempfile.mkdtemp(prefix="pe-bare-"))

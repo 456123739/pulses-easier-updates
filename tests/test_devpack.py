@@ -406,6 +406,51 @@ class TestRecordedHashes(_Base):
                                  folder_hashes={"kubejs": "f" * 64})
         self.assertEqual(len(d2.modified), 1)
 
+    def test_pcl_version_metadata_is_ignored_by_diff(self):
+        from app.core.differ import diff_packs_parallel
+        old = self.tmp / "old-version"
+        new = self.tmp / "new-version"
+        _write(old / "mods" / "a.jar", "same")
+        _write(new / "mods" / "a.jar", "same")
+        _write(old / f"{old.name}.json", '{"id":"old"}')
+        _write(new / f"{old.name}.json", '{"id":"new"}')
+        diff = diff_packs_parallel(old, new, whitelist=["mods"])
+        self.assertFalse(any(c.rel_path.name == f"{old.name}.json"
+                             for c in diff.modified))
+        from app.core.differ import diff_from_manifest
+        fast = diff_from_manifest(old, {}, compare_root=new,
+                                  whitelist=["mods"], pack_tops=set())
+        self.assertFalse(any(c.rel_path.name == f"{old.name}.json"
+                             for c in fast.modified))
+
+    def test_local_only_files_do_not_make_folder_pending(self):
+        """替换重名保留本地脚本后，复扫不能一直把 kubejs 判为有不同。"""
+        from app.core.differ import (diff_from_manifest, diff_packs_parallel,
+                                     folder_hash)
+        old = self.tmp / "old-extra"
+        new = self.tmp / "new-extra"
+        _write(old / "kubejs" / "same.js", "same")
+        _write(old / "kubejs" / "local-only.js", "local")
+        _write(new / "kubejs" / "same.js", "same")
+        recorded = folder_hash(new / "kubejs", content=True)
+        args = dict(whitelist=["mods"], folder_hashes={"kubejs": recorded},
+                    folder_full_tops=set())
+        fast = diff_from_manifest(old, {}, compare_root=new,
+                                  pack_tops={"kubejs"}, **args)
+        self.assertIsNotNone(fast)
+        self.assertEqual(fast.modified, [])
+        slow = diff_packs_parallel(old, new, **args)
+        self.assertEqual(slow.modified, [])
+        legacy = diff_packs_parallel(old, new, whitelist=["mods"],
+                                     folder_full_tops=set())
+        self.assertEqual(legacy.modified, [])
+        full = diff_from_manifest(old, {}, compare_root=new,
+                                  pack_tops={"kubejs"},
+                                  whitelist=["mods"],
+                                  folder_hashes={"kubejs": recorded},
+                                  folder_full_tops={"kubejs"})
+        self.assertEqual(len(full.modified), 1)
+
 
 # ======================================================================
 # 校验 / 检查点
