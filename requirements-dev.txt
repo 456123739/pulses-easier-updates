@@ -1,0 +1,5 @@
+# 开发/测试用的额外依赖（运行软件本身不需要）
+-r requirements.txt
+pytest>=8.0
+pytest-timeout>=2.2
+pyflakes>=3.0
