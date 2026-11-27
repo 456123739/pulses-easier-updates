@@ -249,6 +249,53 @@ class WebFlowCase(unittest.TestCase):
         finally:
             flow_mod.execute_plan = real
 
+    def test_kubejs_apply_then_rescan_has_no_pending_and_keeps_pcl_json(self):
+        # 完整流程：包内 kubejs 文件更新，本地额外脚本保留；版本 JSON 不允许被覆盖。
+        from app.core.mrpack import merge_files, parse_mrpack
+        (self.inst / "kubejs").mkdir()
+        (self.inst / "kubejs" / "same.js").write_text("old")
+        (self.inst / "kubejs" / "local-only.js").write_text("local")
+        version = self.inst / f"{self.inst.name}.json"
+        version.write_text('{"id":"DemoPack","type":"release"}')
+        src = self.tmp / "kubejs-apply-src"
+        _write(src / "modrinth.index.json", json.dumps({
+            "formatVersion": 1, "game": "minecraft",
+            "versionId": "2.0.0", "name": "DemoPack", "files": [],
+            "dependencies": {"minecraft": "1.20.1"},
+        }))
+        _write(src / "overrides" / "kubejs" / "same.js", "new")
+        _write(src / "overrides" / f"{self.inst.name}.json",
+               '{"id":"BROKEN","type":"release"}')
+        src_zip = self.tmp / "kubejs-apply-src.zip"
+        with zipfile.ZipFile(src_zip, "w") as zf:
+            for p in src.rglob("*"):
+                if p.is_file():
+                    zf.write(p, p.relative_to(src).as_posix())
+        parsed, err = parse_mrpack(src_zip)
+        assert parsed is not None and not err
+        update = self.tmp / "kubejs-apply.eapack"
+        assert eapack_mod.export_eapack(
+            source_dir=src, source_zip=src_zip, out_path=update,
+            pack=parsed, merged_files=merge_files(parsed),
+            strategies={}, changelog_md="# 2.0.0\n")
+        self.api.invoke("update.pick", {"path": str(update)})
+        self.api.invoke("pack.scan", {})
+        self.ctl.flow._thread.join(60)
+        self.assertIsNone(self.ctl.flow.error)
+        self.api.invoke("update.apply", {})
+        self.ctl.flow._thread.join(120)
+        self.assertIsNone(self.ctl.flow.error)
+        self.assertEqual((self.inst / "kubejs" / "same.js").read_text(), "new")
+        self.assertEqual((self.inst / "kubejs" / "local-only.js").read_text(), "local")
+        self.assertEqual(version.read_text(), '{"id":"DemoPack","type":"release"}',
+                         "PCL 版本 JSON 不能被更新包覆盖")
+        self.api.invoke("pack.scan", {})
+        self.ctl.flow._thread.join(60)
+        diff = self.ctl.flow.diff
+        assert diff is not None
+        self.assertFalse(any(c.rel_path == Path("kubejs")
+                             for c in diff.added + diff.modified + diff.deleted))
+
     def test_rescan_ignores_local_extra_kubejs(self):
         # 复现：更新包带 kubejs/same.js，玩家本地另有 local-only.js。
         # 默认「替换重名」保留本地文件，但复扫不能把整个 kubejs 判成差异。
