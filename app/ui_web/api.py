@@ -204,8 +204,13 @@ class Api:
                 return {"expanding": False}
             self.expanded = True
             target = getattr(self, "window_target", (1440, 860))
+            note = getattr(self, "_startup_note", lambda text: None)
+            note(f"window-expand request animate={animate} target={target}")
+            started = time.perf_counter()
             from .window_shell import expand
             actual = expand(win, target, **({} if animate else {"duration": 0}))
+            note(f"window-expand complete animate={animate} target={actual} "
+                 f"elapsed_ms={(time.perf_counter() - started) * 1000:.1f}")
             return {"expanding": False, "target": list(actual)}
 
     def window_minimize(self) -> dict:

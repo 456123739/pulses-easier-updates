@@ -14,11 +14,13 @@ win_native_probe.py — Windows 真机窗口验收（不依赖浏览器模拟）
 from __future__ import annotations
 
 import argparse
+import atexit
 import ctypes
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from ctypes import wintypes
 from pathlib import Path
@@ -66,6 +68,9 @@ def _win32():
     user32.GetWindowRgn.restype = ctypes.c_int
     user32.GetDpiForWindow.argtypes = (ctypes.c_void_p,)
     user32.GetDpiForWindow.restype = wintypes.UINT
+    user32.SystemParametersInfoW.argtypes = (wintypes.UINT, wintypes.UINT,
+                                            ctypes.c_void_p, wintypes.UINT)
+    user32.SystemParametersInfoW.restype = wintypes.BOOL
 
     gdi32.CreateRectRgn.argtypes = (ctypes.c_int,) * 4
     gdi32.CreateRectRgn.restype = ctypes.c_void_p
@@ -77,6 +82,42 @@ def _win32():
     gdi32.DeleteObject.restype = wintypes.BOOL
 
     return user32, gdi32, dwm
+
+
+class ClientAreaAnimation:
+    """只给验收进程设置可重复的系统动画条件，退出时还原，不写用户配置文件。"""
+    GET = 0x1042
+    SET = 0x1043
+
+    def __init__(self, user32):
+        self.user32 = user32
+        self.original = self.read()
+        self.restored = False
+        atexit.register(self.restore)
+
+    def read(self) -> bool:
+        value = wintypes.BOOL()
+        if not self.user32.SystemParametersInfoW(self.GET, 0, ctypes.byref(value), 0):
+            raise OSError("SPI_GETCLIENTAREAANIMATION failed")
+        return bool(value.value)
+
+    def set(self, enabled: bool) -> bool:
+        # SPI_SETCLIENTAREAANIMATION takes the BOOL in pvParam, not uiParam.
+        # SENDCHANGE makes freshly started Chromium/WebView2 observe this setting.
+        if not self.user32.SystemParametersInfoW(self.SET, 0,
+                                                ctypes.c_void_p(int(enabled)), 2):
+            raise OSError("SPI_SETCLIENTAREAANIMATION failed")
+        actual = self.read()
+        if actual != enabled:
+            raise OSError(f"client-area animation stayed {actual}, requested {enabled}")
+        return actual
+
+    def restore(self) -> None:
+        if self.restored:
+            return
+        self.set(self.original)
+        self.restored = True
+        atexit.unregister(self.restore)
 
 
 def find_hwnd(timeout: float = 30.0) -> int:
@@ -197,8 +238,31 @@ def main() -> int:
 
     probe = Probe(Path(args.out))
     user32, gdi32, _dwm = _win32()
+    motion = None
+    try:
+        motion = ClientAreaAnimation(user32)
+        probe.metrics["motion_preference"] = {"original": motion.original}
+        effective = motion.set(True)
+        probe.metrics["motion_preference"]["animated_test"] = effective
+        probe.check("验收已启用系统窗口动画", effective, f"original={motion.original}")
+        return _run_probe(args, exe, probe, user32, gdi32, motion)
+    except OSError as exc:
+        probe.check("系统窗口动画验收条件可设置", False, str(exc))
+        probe.save()
+        return 1
+    finally:
+        if motion is not None:
+            motion.restore()
+            probe.metrics["motion_preference"]["restored"] = motion.read()
+            probe.save()
+
+
+def _run_probe(args, exe, probe, user32, gdi32, motion) -> int:
     log = probe.out / "app.log"
-    env = {**os.environ, "PULSES_WEB_LOG": str(log)}
+    # 不继承 runner 前面测试留下的应用首选项；程序仍走真实默认配置。
+    home = Path(tempfile.mkdtemp(prefix="pe-native-home-"))
+    env = {**os.environ, "PULSES_WEB_LOG": str(log), "HOME": str(home),
+           "USERPROFILE": str(home), "LOCALAPPDATA": str(home / "AppData" / "Local")}
     env.pop("PULSES_UI", None)
     env.pop("PULSES_SPLASH", None)
     proc = subprocess.Popen([str(exe)], env=env)
@@ -434,6 +498,12 @@ def main() -> int:
     time.sleep(0.9)
     activate()
 
+    startup_log = log.read_text(encoding="utf-8", errors="ignore") if log.is_file() else ""
+    probe.metrics["expand_requests"] = [line for line in startup_log.splitlines()
+                                       if "window-expand" in line]
+    probe.check("应用实际请求了启动动画", "window-expand request animate=True" in startup_log,
+                " | ".join(probe.metrics["expand_requests"]))
+
     # ---- 关闭：换一个新实例测（最小化/还原后窗口的前台状态不可靠，
     # 容易把"第一次点击只是激活"误判成按钮失效）----
     try:
@@ -441,7 +511,9 @@ def main() -> int:
         proc.wait(timeout=8)
     except Exception:                            # noqa: BLE001, S110
         pass
-    proc2 = subprocess.Popen([str(exe)], env=env)
+    probe.metrics["motion_preference"]["reduced_test"] = motion.set(False)
+    reduced_env = {**env, "PULSES_WEB_LOG": str(probe.out / "app-reduced.log")}
+    proc2 = subprocess.Popen([str(exe)], env=reduced_env)
     hw2 = find_hwnd(30)
     ok_exit = False
     if hw2:
@@ -477,6 +549,13 @@ def main() -> int:
     probe.check("新实例点关闭按钮进程退出", ok_exit, f"exit={proc2.poll()}")
     if not ok_exit:
         proc2.kill()
+    reduced_log = probe.out / "app-reduced.log"
+    reduced_text = reduced_log.read_text(encoding="utf-8", errors="ignore") if reduced_log.is_file() else ""
+    probe.metrics["reduced_expand_requests"] = [line for line in reduced_text.splitlines()
+                                               if "window-expand" in line]
+    probe.check("减少动态时应用直接设为主窗口尺寸",
+                "window-expand complete animate=False" in reduced_text,
+                " | ".join(probe.metrics["reduced_expand_requests"]))
 
     # 页面就绪只记录
     probe.metrics["page_ready"] = log.is_file() and "page-ready" in log.read_text(

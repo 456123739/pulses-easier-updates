@@ -249,6 +249,7 @@ def run(argv: list[str] | None = None) -> int:
     bus = EventBus()
     controller = AppController(bus)
     api = Api(controller, bus, e2e=True if e2e_on else None)
+    api._startup_note = _note
 
     size, min_size = fit_to_screen()
     # 启动先给一个圆角 logo 小窗，页面加载完由前端调 window.expand 长成主窗口。
