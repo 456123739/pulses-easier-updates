@@ -3,6 +3,7 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from 'tiptap-markdown'
 import { invoke } from '@/bridge'
+import type { DevSnapshot } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { useUi } from '@/store/ui'
 import MarkdownPreview from './MarkdownPreview'
@@ -69,35 +70,69 @@ export default function MarkdownEditorSheet() {
   const connected = useApp((s) => s.connected)
   const stored = useApp((s) => s.state?.dev?.changelog ?? '')
 
+  const patchState = useApp((s) => s.patchState)
   const [view, setView] = useState<'edit' | 'preview' | 'source'>('edit')
   const [text, setText] = useState('')
   const [linkOpen, setLinkOpen] = useState(false)
   const [href, setHref] = useState('https://')
-  const seq = useRef(0)
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
+  const [saveError, setSaveError] = useState('')
+  const [closing, setClosing] = useState(false)
   const loaded = useRef(false)
+  const draft = useRef('')
+  const saved = useRef('')
+  const timer = useRef<number | null>(null)
+  const queue = useRef<Promise<void>>(Promise.resolve())
+
+  const clearTimer = () => {
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    timer.current = null
+  }
+
+  // 串行写入：旧请求不能晚于新请求落地。完成/关闭也走同一条队列。
+  const save = (value: string): Promise<void> => {
+    const write = queue.current.catch(() => {}).then(async () => {
+      if (saved.current === value) return
+      if (!useApp.getState().connected) throw new Error('未连接后端，请连接后重试保存')
+      setSaveStatus('saving')
+      const snap = await invoke<DevSnapshot>('dev.changelog.set', { text: value })
+      saved.current = snap.changelog
+      patchState({ dev: snap })
+      setSaveError('')
+      setSaveStatus(draft.current === saved.current ? 'saved' : 'dirty')
+    })
+    queue.current = write
+    return write.catch((err: unknown) => {
+      setSaveStatus('error')
+      setSaveError(err instanceof Error ? err.message : '保存失败，请重试')
+      throw err
+    })
+  }
+
+  const updateDraft = (value: string) => {
+    draft.current = value
+    setText(value)
+    setSaveError('')
+    setSaveStatus(value === saved.current ? 'saved' : 'dirty')
+    clearTimer()
+    if (connected) {
+      timer.current = window.setTimeout(() => {
+        timer.current = null
+        void save(value).catch(() => {})
+      }, 400)
+    }
+  }
 
   const editor = useEditor({
     extensions: EXTENSIONS,
-    // 由 effect 里按需灌内容；immediatelyRender=false 走"挂载后创建"，
-    // 避免 React 19 下「创建 → 1ms 后判定未挂载 → destroy」留下已销毁实例
+    // 挂载后再建编辑器，避开 React 19 的首次挂载/销毁竞态。
     immediatelyRender: false,
     content: '',
     editorProps: { attributes: { class: styles.prose ?? '', spellcheck: 'false' } },
-    onUpdate: ({ editor: ed }) => {
-      const md = markdownOf(ed)
-      setText(md)
-      if (!connected) return
-      const mine = ++seq.current
-      window.setTimeout(() => {
-        if (mine !== seq.current) return
-        invoke('dev.changelog.set', { text: md }).catch(() => {
-          /* 忽略：离线/未连接时不打扰 */
-        })
-      }, 400)
-    },
+    onUpdate: ({ editor: ed }) => updateDraft(markdownOf(ed)),
   })
 
-  // 打开时把后端的旧内容灌进去（只灌一次，避免打字过程中被回写覆盖）
+  // 每次打开仅加载一次；不能让自动保存的状态推送覆盖正在输入的内容。
   useEffect(() => {
     if (!open) {
       loaded.current = false
@@ -105,19 +140,38 @@ export default function MarkdownEditorSheet() {
     }
     if (!editor || editor.isDestroyed || loaded.current) return
     loaded.current = true
+    draft.current = stored
+    saved.current = stored
     setText(stored)
+    setSaveStatus('saved')
+    setSaveError('')
     editor.commands.setContent(stored || '', { emitUpdate: false })
     setView('edit')
   }, [open, editor, stored])
 
-  // 源码视图改动 → 回写并同步进富文本
+  useEffect(() => () => clearTimer(), [])
+
+  useEffect(() => {
+    editor?.setEditable(!closing, false)
+  }, [editor, closing])
+
+  const finish = async () => {
+    if (closing) return
+    clearTimer()
+    setClosing(true)
+    try {
+      await save(draft.current)
+      close()
+    } catch {
+      // 保存失败时保留编辑器和草稿，允许重试。
+    } finally {
+      setClosing(false)
+    }
+  }
+
   const onSource = (value: string) => {
-    setText(value)
     editor?.commands.setContent(value || '', { emitUpdate: false })
-    if (!connected) return
-    invoke('dev.changelog.set', { text: value }).catch(() => {
-      /* 忽略 */
-    })
+    updateDraft(value)
   }
 
   const applyLink = () => {
@@ -140,7 +194,7 @@ export default function MarkdownEditorSheet() {
       title="更新日志"
       subtitle="所见即所得；写的内容会一起打进更新包，玩家在「更新日志」里看到的就是它"
       width={860}
-      onClose={close}
+      onClose={() => void finish()}
       footer={
         <div className={styles.foot}>
           <span className="t-small">
@@ -155,12 +209,12 @@ export default function MarkdownEditorSheet() {
                 onSource('')
                 editor?.commands.clearContent(true)
               }}
-              disabled={!text}
+              disabled={!text || closing}
             >
               清空
             </button>
-            <button type="button" className="btn btn-primary" onClick={close}>
-              完成
+            <button type="button" className="btn btn-primary" disabled={closing} onClick={() => void finish()}>
+              {closing ? '保存中…' : '保存并关闭'}
             </button>
           </div>
         </div>
@@ -332,15 +386,16 @@ export default function MarkdownEditorSheet() {
             className={`${styles.source} scroll`}
             value={text}
             spellCheck={false}
+            disabled={closing}
             onChange={(e) => onSource(e.target.value)}
             placeholder={'# 1.2.0\n\n- 新增 …\n- 修复 …'}
           />
         )}
 
         {!connected && <div className="t-small">没连上后端，这次改动不会保存。</div>}
-        {connected && text.trim() && (
-          <div className="t-small">
-            已自动保存；关掉窗口也不会丢。
+        {connected && (
+          <div className="t-small" role="status" aria-live="polite">
+            {saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '正在保存…' : saveStatus === 'error' ? `保存失败：${saveError}` : '有未保存的改动'}
           </div>
         )}
       </div>

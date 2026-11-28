@@ -18,5 +18,5 @@
   transform: translate(-50%, -50%);
   object-fit: contain;
   object-position: center;
-  will-change: opacity, filter;
+  will-change: opacity;
 }

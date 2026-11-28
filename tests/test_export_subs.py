@@ -22,10 +22,13 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
+import packread
+
 from app.config import Strategy
 from app.core import database as db
-from app.core import export_rules
+from app.core import export_rules, instance_export
 from app.core.apply_rules import resolve_strategy_for
+from app.core.eapack import read_changelog
 from app.ui_web.api import Api
 from app.ui_web.controller import AppController
 from app.ui_web.events import EventBus
@@ -170,17 +173,100 @@ class DevSubScopeCase(unittest.TestCase):
             "path": "resourcepacks/p1.zip", "strategy": "乱写"})
         self.assertFalse(res["ok"])
 
-    def test_saves_row_is_visible_but_excluded_by_default(self):
+    def test_saves_and_worlds_are_scanned_and_selected_by_default(self):
         snap = self.open(self.pack)
         saves = self.row(snap, "saves")
-        self.assertTrue(saves["excluded"])
-        self.assertEqual(saves.get("subs"), [])
-        # 点一下目录名（纳入）→ 重扫后子项出现
-        snap = self.api.invoke("dev.strategy.set",
-                               {"name": "saves", "excluded": False})["data"]
+        self.assertFalse(saves["excluded"])
+        self.assertEqual([x["name"] for x in saves["subs"]], ["WorldA", "WorldB"])
+        self.assertTrue(all(x["checked"] for x in saves["subs"]))
+        option = next(r for r in snap["ruleOptions"] if r["key"] == "saves")
+        self.assertTrue(option["checked"])
+        scan_row = next(r for r in snap["instance"]["rows"]
+                        if r["name"] == "saves")
+        self.assertEqual(scan_row["files"], 2)
+        self.assertEqual([r["path"] for r in scan_row["children"]],
+                         ["saves/WorldA", "saves/WorldB"])
+        self.assertTrue(export_rules.should_keep(
+            "saves/WorldA/level.dat", self.ctl.dev._current_rules()))
+
+    def test_scope_keeps_child_exclusions_and_estimate_matches_export_rules(self):
+        self.open(self.pack)
+        _write(self.pack / "saves" / "WorldB" / "level.dat_old", "old")
+        _write(self.pack / "screenshots" / "photo.png", "photo")
+        self.ctl.dev._rescan()
+        self.api.invoke("dev.sub.set", {"path": "saves/WorldA", "checked": False})
+        res = self.api.invoke("dev.scope.set", {
+            "included": ["mods", "saves", "screenshots"]})
+        self.assertTrue(res["ok"], res)
+        snap = res["data"]
+        self.assertFalse(self.row(snap, "screenshots")["excluded"])
+        self.assertFalse(self.sub(snap, "saves", "WorldA")["checked"])
+        rules = self.ctl.dev._current_rules()
+        self.assertTrue(export_rules.should_keep("screenshots/photo.png", rules))
+        self.assertTrue(export_rules.should_keep("saves/WorldB/level.dat", rules))
+        self.assertFalse(export_rules.should_keep("saves/WorldA/level.dat", rules))
+        self.assertFalse(export_rules.should_keep("saves/WorldB/level.dat_old", rules))
+        estimate = self.api.invoke("dev.estimate")["data"]
+        self.assertEqual(estimate["files"], 3)
+        self.assertEqual(estimate["bytes"], len("A") + len("WB") + len("photo"))
+        self.assertEqual(estimate["files"], snap["instance"]["totals"]["files"])
+
+    def test_new_instance_does_not_inherit_previous_scope_or_world_choices(self):
+        self.open(self.pack)
+        self.api.invoke("dev.strategy.set", {"name": "saves", "excluded": False})
+        self.api.invoke("dev.sub.set", {"path": "saves/WorldA", "checked": False})
+        self.api.invoke("dev.rule.set", {"key": "saves", "value": False})
+        self.api.invoke("dev.scope.set", {"included": ["mods"]})
+        snap = self.open(self.pack)
+        self.assertFalse(self.row(snap, "config")["excluded"])
         self.assertFalse(self.row(snap, "saves")["excluded"])
         self.assertEqual([x["name"] for x in self.row(snap, "saves")["subs"]],
                          ["WorldA", "WorldB"])
+        self.assertTrue(all(x["checked"] for x in self.row(snap, "saves")["subs"]))
+
+    def test_default_export_contains_worlds_and_saved_changelog(self):
+        _write(self.pack / "saves" / "WorldA" / "region" / "r.0.0.mca", "region")
+        _write(self.pack / "texturepacks" / "legacy.zip", "legacy")
+        self.open(self.pack)
+        text = "# 更新\n\n- 默认存档导出\n"
+        res = self.api.invoke("dev.changelog.set", {"text": text})
+        self.assertTrue(res["ok"], res)
+        out = self.tmp / "default-worlds.eapack"
+        with mock.patch.object(instance_export.lookup, "resolve", return_value={}):
+            res = self.api.invoke("dev.export", {"path": str(out)})
+            self.assertTrue(res["ok"], res)
+            self.ctl.dev._thread.join(10)
+        self.assertFalse(self.ctl.dev._thread.is_alive())
+        self.assertEqual(self.ctl.dev.phase, "done", self.ctl.dev.error)
+        names = set(packread.names(out))
+        self.assertIn("overrides/saves/WorldA/level.dat", names)
+        self.assertIn("overrides/saves/WorldA/region/r.0.0.mca", names)
+        self.assertIn("overrides/saves/WorldB/level.dat", names)
+        self.assertIn("overrides/texturepacks/legacy.zip", names)
+        self.assertEqual(read_changelog(out), text)
+
+    def test_export_respects_world_selection_after_scope_submission(self):
+        self.open(self.pack)
+        self.api.invoke("dev.sub.set", {
+            "path": "saves/WorldA", "checked": False})
+        self.api.invoke("dev.sub.set", {
+            "path": "saves/WorldB", "strategy": "替换重名"})
+        res = self.api.invoke("dev.scope.set", {"included": ["saves"]})
+        self.assertTrue(res["ok"], res)
+        out = self.tmp / "selected-world.eapack"
+        with mock.patch.object(instance_export.lookup, "resolve", return_value={}):
+            res = self.api.invoke("dev.export", {"path": str(out)})
+            self.assertTrue(res["ok"], res)
+            self.ctl.dev._thread.join(10)
+        self.assertFalse(self.ctl.dev._thread.is_alive())
+        self.assertEqual(self.ctl.dev.phase, "done", self.ctl.dev.error)
+        names = set(packread.names(out))
+        self.assertNotIn("overrides/saves/WorldA/level.dat", names)
+        self.assertIn("overrides/saves/WorldB/level.dat", names)
+        self.assertNotIn("overrides/mods/a.jar", names)
+        settings = json.loads(packread.read(out, "ea_settings.json"))
+        self.assertEqual(settings["recommended_strategies"], {
+            "saves": "跳过重名", "saves/WorldB": "替换重名"})
 
     def test_sub_all_toggles_folder(self):
         self.open(self.pack)

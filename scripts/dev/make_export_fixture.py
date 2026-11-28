@@ -54,6 +54,17 @@ def main(raw: str) -> int:
     (pack / "mods" / "local-only.jar").write_bytes(b"LOCAL" * 512)
     (pack / "config" / "demo.toml").write_text("k = 1\n", encoding="utf-8")
     (pack / "options.txt").write_text("fov:90\n", encoding="utf-8")
+    # 三类动态子项：验证首次展开、默认勾选与逐项筛选确实影响产物。
+    for rel, data in {
+        "saves/WorldA/level.dat": b"WORLD-A",
+        "saves/WorldB/level.dat": b"WORLD-B",
+        "saves/WorldB/region/r.0.0.mca": b"REGION-B",
+        "resourcepacks/fixture.zip": b"PK-RESOURCE",
+        "shaderpacks/fixture.zip": b"PK-SHADER",
+    }.items():
+        target = pack / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
     (pack / f"{pack.name}.json").write_text(json.dumps({
         "id": "1.20.1-fabric-0.15.11",
         "inheritsFrom": "fabric-loader-0.15.11-1.20.1",

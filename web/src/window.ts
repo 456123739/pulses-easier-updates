@@ -29,6 +29,7 @@ export async function win<T>(method: string, params?: Record<string, unknown>): 
   }
 }
 
-export const expandWindow = async (): Promise<void> => {
-  await win('window.expand')
+/** 回包表示原生尺寸已经到位，页面无需另设定时器猜测动画何时结束。 */
+export const expandWindow = async (animate = true): Promise<void> => {
+  await win('window.expand', { animate })
 }

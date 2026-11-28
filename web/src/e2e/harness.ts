@@ -251,6 +251,40 @@ const dialogs = () => Array.from(document.querySelectorAll<HTMLElement>('[role="
 const dialogCount = () => dialogs().length
 const lastDialogText = () => dialogs().at(-1)?.innerText ?? ''
 
+function namedDialog(name: string): HTMLElement | null {
+  return dialogs().find((dialog) => {
+    if (!isShown(dialog)) return false
+    const labelledBy = (dialog.getAttribute('aria-labelledby') ?? '').split(/\s+/)
+    const title = labelledBy.map((id) => document.getElementById(id)?.textContent ?? '').join(' ')
+    return squeeze(dialog.getAttribute('aria-label') || title) === name
+  }) ?? null
+}
+
+/** 确认/续传成功会自动打开更新日志；先验证正文并关闭，才能操作下载控件。 */
+async function closeStartedChangelog(version: string, label: string): Promise<void> {
+  mark(`${label}：等自动更新日志`)
+  const dialog = await waitFor(() => namedDialog('更新日志'), 15000)
+  need(!!dialog, `${label}自动打开更新日志`)
+  const text = await waitFor(() => {
+    const current = namedDialog('更新日志')?.innerText ?? ''
+    return current.includes(version) ? current : null
+  }, 15000)
+  need(!!text, `${label}更新日志显示版本 ${version}`, dialog?.innerText ?? '')
+  check((text ?? '').includes('关闭此窗口后，更新会继续进行'),
+    `${label}更新日志说明后台继续更新`, text ?? '')
+  const close = dialog?.querySelector<HTMLButtonElement>('footer button')
+  need(!!close && squeeze(close.innerText) === '关闭', `${label}更新日志有关闭按钮`)
+  close?.click()
+  need(!!(await waitFor(() => !namedDialog('更新日志'), 10000)), `${label}更新日志已关闭`)
+}
+
+const scopeRow = (name: string) =>
+  Array.from(document.querySelectorAll<HTMLElement>('[data-scope-row]'))
+    .find((row) => row.getAttribute('data-scope-row') === name) ?? null
+const scopeChild = (path: string) =>
+  Array.from(document.querySelectorAll<HTMLElement>('[data-scope-child]'))
+    .find((row) => row.getAttribute('data-scope-child') === path) ?? null
+
 async function pressEsc(): Promise<void> {
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
   await sleep(250)
@@ -524,6 +558,7 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
   // ---- A. 策略交互：完全匹配 → 跳过重名 → 重新扫描 → 改回 ----
   await waitRow('mods')
   await clickRowChip('mods', '跳过重名')
+  await call('update.strategies.set', { values: { mods: '跳过重名' } }, '提交策略草稿')
   snap = await flowSnap()
   const modsRow = (s: FlowSnapshot | null) => (s?.strategies ?? []).find((r) => r.name === 'mods')
   const modsGroup = (s: FlowSnapshot | null) => (s?.groups ?? []).find((g) => g.top === 'mods')
@@ -550,6 +585,7 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
 
   // 改回「完全匹配」：跳过应归零
   await clickRowChip('mods', '完全匹配')
+  await call('update.strategies.set', { values: { mods: '完全匹配' } }, '提交策略草稿')
   snap = await flowSnap()
   check(modsRow(snap)?.current === '完全匹配', '策略已改回「完全匹配」',
     JSON.stringify(modsRow(snap)))
@@ -661,6 +697,7 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
 
   // ---- 应用 + 磁盘为准（界面说完成不算）----
   await clickText('写入更新', { exact: false })
+  await closeStartedChangelog('3.0.0', '基本流程确认更新后')
   need(await waitText(/更新完成|已应用/, 240000), '更新应用完成')
   await sleep(400)
   const report = (await flowSnap())?.report
@@ -698,6 +735,68 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
     '开发者定位本地实例', JSON.stringify(dev?.mode))
   check((dev?.strategies ?? []).length >= 2, '开发者列出更新范围',
     JSON.stringify((dev?.strategies ?? []).map((r) => r.name)))
+  // 子项默认直接展开；名称按钮只能折叠，不能顺手改变父/子项的选择。
+  const dynamicRows = (dev?.strategies ?? []).filter((row) => row.subs !== undefined)
+  need(dynamicRows.some((row) => row.name === 'resourcepacks'
+    && row.subs?.some((sub) => sub.name === 'keep.zip')), '实例资源包子项夹具存在')
+  for (const row of dynamicRows) {
+    const rendered = await waitFor(() => {
+      const element = scopeRow(row.name)
+      const name = element?.querySelector<HTMLButtonElement>(`button[aria-label="${row.name}"]`)
+      return name?.getAttribute('aria-expanded') === 'true' ? element : null
+    }, 10000)
+    need(!!rendered, `${row.name} 子项默认展开`)
+    check(!row.excluded && (row.subs ?? []).every((sub) => sub.checked),
+      `${row.name} 及子项默认勾选`, JSON.stringify(row))
+    check(rendered?.querySelector('[role="checkbox"]')?.getAttribute('aria-checked') === 'true',
+      `${row.name} 父级导出复选框默认勾选`)
+    for (const sub of row.subs ?? []) {
+      const child = scopeChild(sub.path)
+      check(!!child && isShown(child), `${sub.path} 子项默认可见`)
+      check(child?.querySelector('[role="switch"]')?.getAttribute('aria-checked') === 'true',
+        `${sub.path} 子项导出开关默认勾选`)
+    }
+  }
+  const childPath = 'resourcepacks/keep.zip'
+  const childToggle = await waitFor(() =>
+    scopeChild(childPath)?.querySelector<HTMLButtonElement>('button[role="switch"]'), 10000)
+  need(!!childToggle && !childToggle.disabled, '资源包子项可独立选择')
+  childToggle?.click()
+  const deselected = await waitFor(async () => {
+    const row = (await devSnap())?.strategies.find((item) => item.name === 'resourcepacks')
+    return row?.subs?.find((sub) => sub.path === childPath)?.checked === false ? row : null
+  }, 10000)
+  need(!!deselected, '资源包子项取消选择已保存')
+  const selectionBeforeCollapse = JSON.stringify({
+    excluded: deselected?.excluded,
+    subs: deselected?.subs?.map((sub) => ({ path: sub.path, checked: sub.checked })),
+  })
+  await clickText('resourcepacks', { exact: true })
+  need(!!(await waitFor(() => !scopeChild(childPath), 10000)), '名称按钮收起内联子项')
+  check(scopeRow('resourcepacks')?.querySelector('button[aria-label="resourcepacks"]')
+    ?.getAttribute('aria-expanded') === 'false', '收起时 aria-expanded 为 false')
+  await clickText('resourcepacks', { exact: true })
+  need(!!(await waitFor(() => scopeChild(childPath), 10000)), '名称按钮重新展开内联子项')
+  const afterExpand = (await devSnap())?.strategies.find((row) => row.name === 'resourcepacks')
+  check(JSON.stringify({
+    excluded: afterExpand?.excluded,
+    subs: afterExpand?.subs?.map((sub) => ({ path: sub.path, checked: sub.checked })),
+  }) === selectionBeforeCollapse, '折叠/展开保留父级和子项勾选')
+  check(scopeChild(childPath)?.querySelector('[role="switch"]')
+    ?.getAttribute('aria-checked') === 'false', '重新展开后取消选择仍可见')
+  check(scopeRow('resourcepacks')?.querySelector('[role="checkbox"]')
+    ?.getAttribute('aria-checked') === 'true', '折叠/展开后父级导出仍被勾选')
+  const reselect = await waitFor(() => {
+    const button = scopeChild(childPath)?.querySelector<HTMLButtonElement>('button[role="switch"]')
+    return button && !button.disabled ? button : null
+  }, 10000)
+  need(!!reselect, '资源包子项开关恢复可用')
+  reselect?.click()
+  need(!!(await waitFor(async () =>
+    (await devSnap())?.strategies.find((row) => row.name === 'resourcepacks')
+      ?.subs?.find((sub) => sub.path === childPath)?.checked === true, 10000)),
+    '资源包子项重新勾选已保存')
+
   setPicks([fx.zip])
   await clickText('开发者端整合包定位', { exact: true })
   dev = await waitDevIdle()
@@ -706,12 +805,24 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
   const rejected = await bridgeInvoke('dev.open', { path: fx.update })
   const rejectedCode = rejected && rejected.ok === false ? rejected.error.code : ''
   check(rejectedCode === 'IS_UPDATE_PACK', '更新包被明确拒绝', rejectedCode)
-  // 排除 config（点目录名）—— 快照到了不代表行已经画出来
-  await waitRow('config')
-  await clickRowName('config')
+  // 第一步只选范围；策略、输出位置必须在提交范围后的第二步出现。
+  need(await waitText(new RegExp(`导出包：${escapeRe(baseName(fx.zip))}`)), '导出包来源已显示')
+  const configToggle = await waitFor(() => {
+    const button = scopeRow('config')?.querySelector<HTMLButtonElement>('button[role="checkbox"]')
+    return button && !button.disabled ? button : null
+  }, 10000)
+  need(configToggle?.getAttribute('aria-checked') === 'true', 'config 初始在导出范围')
+  configToggle?.click()
+  need(!!(await waitFor(() => scopeRow('config')?.querySelector('[role="checkbox"]')
+    ?.getAttribute('aria-checked') === 'false', 10000)), '第一步取消 config 导出')
+  check(!findButton('位置…', true), '第一步尚不显示输出位置')
+  check(!scopeRow('mods')?.querySelector('button.chip'), '第一步尚不显示顶层策略胶囊')
+  await clickText('下一步：设置策略', { exact: false })
+  need(await waitText(/第二步 · 更新策略与确认/), '提交范围后进入策略确认')
   dev = await devSnap()
   check((dev?.strategies ?? []).find((r) => r.name === 'config')?.excluded === true,
-    '目录可被排除（config）')
+    '目录排除已提交到后端（config）')
+  check(!scopeRow('config'), '策略步骤只显示纳入导出的条目')
   // 改策略
   await waitRow('mods')
   await clickRowChip('mods', '替换重名')
@@ -722,21 +833,50 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
   await clickText('压缩到最小体积')
   dev = await devSnap()
   check(dev?.options?.min_size === true, '导出选项可切换（min_size）')
-  // 导出内容面板已去掉：顶层目录交给「更新范围」
-  check(!(await bodyText()).includes('导出内容'), '「导出内容」面板已移除')
-  // 更新日志：长按钮 → 独立窗口（这里走 Markdown 视图，Windows 上最稳）
-  const changelog = '# 导出夹具\n\n- 开发者端\n'
+  const panelTitles = Array.from(document.querySelectorAll<HTMLElement>('.t-title'))
+    .filter(isShown).map((title) => squeeze(title.innerText))
+  check(!panelTitles.includes('导出内容'), '旧的独立「导出内容」面板已移除',
+    JSON.stringify(panelTitles))
+  // 先验证防抖自动保存，再在防抖前立即关闭，最后验证摘要与重新打开的内容。
+  const autosavedChangelog = '导出夹具自动保存\n\n- 开发者端\n'
+  const changelog = '导出夹具\n\n- 开发者端立即保存关闭\n'
   await clickText('编写更新日志', { exact: true })
-  need(await waitText(/所见即所得/), '更新日志编辑器打开')
+  need(!!(await waitFor(() => namedDialog('更新日志')
+    ?.querySelector('[contenteditable="true"]'), 15000)), '更新日志富文本编辑器已就绪')
   await clickText('Markdown', { exact: true })
-  setInput('textarea', changelog)
-  await sleep(800)
-  await clickText('完成', { exact: true })
-  const changelogBack = await waitFor(async () => {
+  need(!!(await waitFor(() => namedDialog('更新日志')?.querySelector('textarea'), 10000)),
+    'Markdown 源码输入可用')
+  setInput('[role="dialog"] textarea', autosavedChangelog)
+  const autosaved = await waitFor(async () => {
     const d = await devSnap()
-    return d && (d.changelog ?? '').includes('导出夹具') ? d : null
+    return d?.changelog === autosavedChangelog ? d : null
   }, 20000)
-  check(!!changelogBack, '更新日志写回后端', JSON.stringify(changelogBack?.changelog))
+  need(!!autosaved, '防抖自动保存完整 Markdown', JSON.stringify(autosaved?.changelog))
+  check(!!(await waitFor(() => namedDialog('更新日志')?.querySelector('[role="status"]')
+    ?.textContent?.trim() === '已保存', 10000)), '自动保存后显示已保存')
+  setInput('[role="dialog"] textarea', changelog)
+  // 不等 400ms 自动保存；保存并关闭必须自己刷新最新草稿并等候后端成功。
+  await clickText('保存并关闭', { exact: true })
+  need(!!(await waitFor(() => !namedDialog('更新日志'), 20000)), '立即保存成功后关闭编辑器')
+  const changelogBack = await devSnap()
+  check(changelogBack?.changelog === changelog, '立即关闭前最新内容已写回后端',
+    JSON.stringify(changelogBack?.changelog))
+  const summary = await waitFor(() => {
+    const text = findButton('编写更新日志', true)?.innerText ?? ''
+    return text.includes('导出夹具') && /\d+\s*字/.test(text) ? text : null
+  }, 10000)
+  check(!!summary && !summary.includes('还没写'), '关闭后更新日志摘要显示最新内容与字数',
+    summary ?? findButton('编写更新日志', true)?.innerText ?? '')
+  await clickText('编写更新日志', { exact: true })
+  need(!!(await waitFor(() => {
+    const editor = namedDialog('更新日志')?.querySelector('[contenteditable="true"]')
+    return editor?.textContent?.includes('开发者端立即保存关闭') ? editor : null
+  }, 15000)), '重新打开富文本保留最新日志')
+  await clickText('Markdown', { exact: true })
+  check(!!(await waitFor(() => namedDialog('更新日志')?.querySelector<HTMLTextAreaElement>('textarea')
+    ?.value === changelog, 10000)), '重新打开 Markdown 完整内容一致')
+  await clickText('保存并关闭', { exact: true })
+  need(!!(await waitFor(() => !namedDialog('更新日志'), 20000)), '重新打开后可正常保存关闭')
   // 输出位置（走 pick_path 的 save 分支）+ 开始制作
   const outFile = joinPath(work, 'dev-out/E2EExport.eapack')
   setPicks([outFile])
@@ -746,8 +886,6 @@ async function basicSuite(fx: BasicFixture, work: string): Promise<void> {
     return el && el.value === 'E2EExport.eapack' ? el.value : null
   }, 10000)
   check(!!filled, '输出文件名已回填', outFile)
-  await clickText('下一步：设置策略', { exact: false })
-  need(await waitText(/第二步 · 更新策略与确认/), '进入策略确认')
   await clickText('开始制作更新包', { exact: true })
   need(await waitText(/已生成：/, 180000), '开发者导出完成（完成态可见）')
   const exportedProbe = await probe([outFile])
@@ -787,6 +925,7 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   // 同一页里跑过基本流程，"更新完成"可能还挂在提示条上：只认**新增的**完成提示。
   const doneBefore = (bodyText().match(/更新完成/g) ?? []).length
   await clickText('写入更新', { exact: false })
+  await closeStartedChangelog('3.1.0', '真下载确认更新后')
   const seen = {
     barMid: 0,
     slots: new Set<string>(),
@@ -859,6 +998,7 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   // 上一轮的变更树可能还没被替换掉：等这一轮独有的条目出现
   need(await waitText(/e2e-abort-big\.jar/, 30000), '变更列表已换成续传包内容')
   await clickText('写入更新', { exact: false })
+  await closeStartedChangelog('3.1.1', '中止夹具确认更新后')
   // 下载态的唯一可靠信号：主按钮变成「取消下载」（界面必须能取消）
   need(!!(await waitFor(() => buttonLabels().includes('停止下载'), 20000)),
     '进入下载态（主按钮变成「停止下载」）')
@@ -878,9 +1018,19 @@ async function downloadSuite(dl: DownloadFixture): Promise<void> {
   check(guardAborted?.blocked === false, '中止后可以正常关窗（守卫放行）',
     JSON.stringify(guardAborted))
 
-  // 续传：重新比对 → 自动继续下载 → 应用
+  // 模拟重新定位后的续传入口：清除内存中的实例仍保留中断记录，
+  // 用真正的「继续更新」按钮验证成功响应后自动展示日志。
+  await call('app.pack.clear', {}, '重新定位前清除实例（保留续传记录）')
+  setPicks([dl.abortPack])
+  await clickText('定位整合包')
+  need(await waitText(new RegExp(escapeRe(baseName(dl.abortPack)))), '重新定位续传实例')
+  need(!!(await waitFor(() => {
+    const button = findButton('继续更新', true)
+    return button && !button.disabled ? button : null
+  }, 20000)), '重新定位后显示继续更新入口')
   const resumeBefore = (bodyText().match(/更新完成/g) ?? []).length
-  await call('update.resume', {}, '继续上次的更新')
+  await clickText('继续更新', { exact: true })
+  await closeStartedChangelog('3.1.1', '继续更新后')
   need(!!(await waitFor(
     () => (bodyText().match(/更新完成/g) ?? []).length > resumeBefore, 240000, 200)),
     '续传后更新完成')

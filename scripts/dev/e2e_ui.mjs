@@ -194,6 +194,15 @@ async function waitScanDone(timeout = 180000) {
   return last
 }
 
+async function closeAutoChangelog(version) {
+  const dialog = page.getByRole('dialog', { name: '更新日志', exact: true })
+  await dialog.waitFor({ state: 'visible', timeout: 10000 })
+  check(await waitFor(async () => (await dialog.innerText()).includes(version), 10000),
+    '开始更新时自动弹出对应日志', version)
+  await dialog.getByRole('button', { name: '关闭', exact: true }).first().click()
+  await dialog.waitFor({ state: 'hidden' })
+}
+
 async function basicSuite() {
   // ---- 0. 渲染 ----
   await page.waitForSelector('aside', { timeout: 30000 })
@@ -375,7 +384,10 @@ async function basicSuite() {
         '数据库位置已还原', dbBefore)
 
   // ---- 应用 + 磁盘为准（界面说完成不算）----
+  check(await page.getByRole('dialog', { name: '更新日志', exact: true }).count() === 0,
+    '导入和比对阶段不自动弹日志')
   await clickText('写入更新', { exact: false })
+  await closeAutoChangelog('3.0.0')
   check(await waitBody(/更新完成|已应用/, 180000), '更新应用完成')
   await sleep(400)
   const report = (await flowState())?.report
@@ -483,18 +495,16 @@ async function basicSuite() {
   dev = await waitDev((d) => d.options?.min_size === true)
   check(!!dev, '导出选项可切换（min_size）')
 
-  // ---- 子项浮层：资源包（PCL 的动态子项：逐项是否导出 + 更新策略） ----
-  await waitRow('resourcepacks')
-  const packRow = page.locator('button', { hasText: /^resourcepacks$/ }).first()
-  await packRow.hover()
-  check(await waitFor(async () => (await page.locator('[data-kind="sub"]').count()) === 1, 4000),
-        '悬停父条目自动展开子项浮层（不用点）')
-  const layer = page.locator('[data-kind="sub"]').first()
+  // ---- 子项下拉：默认展开，父名称折叠与导出勾选相互独立 ----
+  const group = page.locator('[data-scope-row="resourcepacks"]')
+  const packRow = group.getByRole('button', { name: 'resourcepacks', exact: true })
+  check(await packRow.getAttribute('aria-expanded') === 'true', '资源包子项默认展开')
+  const layer = group.locator('#scope-children-resourcepacks')
   const layerText = await layer.innerText()
   check(layerText.includes('资源包') && layerText.includes('keep.zip'),
-        '浮层列出资源包里的每一项', layerText.slice(0, 120))
+        '下拉列表列出资源包里的每一项', layerText.slice(0, 120))
   check(layerText.includes('全选') && layerText.includes('父级'),
-        '浮层带全选与父级策略提示')
+        '下拉列表带全选与父级策略提示')
 
   // 取消一项：计数回到 0/1，快照里 checked=false
   await layer.locator('button[aria-label="导出 keep.zip"]').click()
@@ -521,12 +531,13 @@ async function basicSuite() {
     const row = (d.strategies ?? []).find((r) => r.name === 'resourcepacks')
     return row?.subs?.every((s) => s.checked) === true
   })
-  check(!!dev, '浮层底部「全选」可用')
+  check(!!dev, '下拉列表「全选」可用')
 
-  // Esc 收起
-  await page.keyboard.press('Escape')
-  check(await waitFor(async () => (await page.locator('[data-kind="sub"]').count()) === 0, 3000),
-        'Esc 收起浮层')
+  await packRow.click()
+  check(await group.locator('[data-scope-child]').count() === 0, '主条目可折叠子项')
+  await packRow.click()
+  check(await group.getByRole('switch', { name: '导出 keep.zip', exact: true }).getAttribute('aria-checked') === 'true',
+    '再次展开保留子项勾选')
 
   // ---- 更新日志：长按钮 → 独立窗口，所见即所得 ----
   await clickText('编写更新日志', { exact: true })
@@ -546,10 +557,18 @@ async function basicSuite() {
   const md = await page.locator('textarea').last().inputValue()
   check(md.includes('导出夹具') && md.includes('开发者端'),
         'Markdown 原文同步（两种视图同一份内容）', md)
-  await clickText('完成', { exact: true })
+  await clickText('保存并关闭', { exact: true })
   const changelog = md
   dev = await waitDev((d) => (d.changelog ?? '').includes('导出夹具'))
   check(!!dev, '更新日志写回后端', JSON.stringify(dev?.changelog))
+  check(await waitFor(async () => (await page.getByRole('button', { name: '编写更新日志', exact: true }).innerText()).includes('导出夹具')),
+    '保存后日志摘要同步')
+  await clickText('编写更新日志', { exact: true })
+  const editDialog = page.getByRole('dialog', { name: '更新日志', exact: true })
+  check(await waitFor(async () => (await editDialog.locator('[contenteditable="true"]').innerText()).includes('开发者端')),
+    '重新打开日志内容保留')
+  await editDialog.getByRole('button', { name: '保存并关闭', exact: true }).click()
+  await editDialog.waitFor({ state: 'hidden' })
   // 输出位置（走 pick_path 的 save 分支）+ 开始制作
   const outFile = join(work, 'dev-out', 'E2EExport.eapack')
   await setPicks([outFile])
@@ -650,8 +669,11 @@ async function downloadSuite() {
   check((snap?.groups ?? []).some((g) => g.items.some((i) => i.path.endsWith('e2e-big.jar'))),
         '要下载的大文件出现在变更列表')
 
-  // ---- H：确认更新 → 边下边采样 ----
+  // ---- H：确认更新 → 日志自动弹出（可关，不中止后台） → 边下边采样 ----
+  check(await page.getByRole('dialog', { name: '更新日志', exact: true }).count() === 0,
+    '比对完成时尚未弹日志')
   await clickText('写入更新', { exact: false })
+  await closeAutoChangelog('3.1.0')
   const seen = { barMid: 0, slots: new Set(), hints: new Set(), guard: null, done: false }
   const t0 = Date.now()
   let opened = false
@@ -719,6 +741,7 @@ async function downloadSuite() {
   // 上一轮的变更树可能还没被替换掉：等这一轮独有的条目出现
   check(await waitBody(/e2e-abort-big\.jar/, 30000), '变更列表已换成续传包内容')
   await clickText('写入更新', { exact: false })
+  await closeAutoChangelog('3.1.1')
   // 下载态的唯一可靠信号：主按钮变成「取消下载」（界面必须能取消）
   const started = await waitFor(async () =>
     (await buttonLabels()).includes('停止下载'), 20000)

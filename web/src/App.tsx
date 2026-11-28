@@ -62,12 +62,16 @@ export default function App() {
         if (cancelled) return
         setState(state)
         if (isDesktop()) {
-          // 先把 logo 模糊淡出成主界面底色（固定 240px，不随窗口拉伸），
-          // 再展开纯色窗口；中间不挂载 Shell，避免每帧重排整个界面。
+          // 先淡出固定尺寸的 logo；只在原生尺寸真正到位后挂载主界面。
+          // 不用固定延迟猜测：慢机器上 resize 可能比动画预算晚完成。
+          const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
+            state.settings.window_anim !== 0
           setExpanding(true)
-          await new Promise((resolve) => setTimeout(resolve, 180))
-          await expandWindow()
-          await new Promise((resolve) => setTimeout(resolve, 620))
+          if (animate) await new Promise((resolve) => setTimeout(resolve, 220))
+          if (cancelled) return
+          await expandWindow(animate)
+          if (cancelled) return
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
         }
       } catch (err) {
         pushToast(err instanceof Error ? err.message : '启动失败', 'error')

@@ -1,4 +1,4 @@
-/* 子项浮层：哑光卡片 + 发丝线，3D 只由外层 Floating3DLayer 负责 */
+/* 导出子项：默认在主列表内展开，也保留浮层模式的复用样式。 */
 .card {
   display: flex;
   flex-direction: column;
@@ -10,6 +10,24 @@
   overflow: hidden;
   /* 一点点内高光，让它像"浮起来"的实体卡 */
   background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 40%);
+}
+
+.card[data-inline='true'] {
+  max-height: none;
+  background: var(--c-card-2);
+  background-image: none;
+  box-shadow: none;
+  border-radius: 10px;
+}
+.card[data-inline='true'] .head {
+  cursor: default;
+  padding: 9px 10px 7px;
+}
+.card[data-inline='true'] .list {
+  max-height: 280px;
+}
+.card[data-inline='true'] .foot {
+  padding: 7px 10px;
 }
 
 .head {

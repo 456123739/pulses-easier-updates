@@ -103,6 +103,58 @@ check(/1\.20\.1/.test(box), 'MC 版本显示')
 check(/Fabric/i.test(box), '加载器显示')
 await shot('dev-instance')
 
+// 动态子项首次默认展开；折叠与父级选择相互独立。
+for (const folder of ['saves', 'resourcepacks', 'shaderpacks']) {
+  const group = page.locator(`[data-scope-row="${folder}"]`)
+  const heading = group.getByRole('button', { name: folder, exact: true })
+  check(await group.getByRole('checkbox', { name: `导出 ${folder}`, exact: true }).getAttribute('aria-checked') === 'true',
+    `${folder} 默认勾选`)
+  check(await heading.getAttribute('aria-expanded') === 'true' && await group.locator('[data-scope-child]').count() > 0,
+    `${folder} 子项默认展开`)
+  await heading.click()
+  check(await group.locator('[data-scope-child]').count() === 0, `${folder} 主条目可折叠`)
+  await heading.click()
+  check(await group.locator('[data-scope-child]').count() > 0 &&
+    await group.getByRole('checkbox', { name: `导出 ${folder}`, exact: true }).getAttribute('aria-checked') === 'true',
+    `${folder} 再展开保留父级勾选`)
+}
+await page.locator('[data-scope-row="saves"]').getByRole('switch', { name: '导出 WorldA', exact: true }).click()
+await page.waitForFunction(() => {
+  const dev = window.__pe.useApp.getState().state?.dev
+  return dev?.strategies.find((r) => r.name === 'saves')?.subs?.find((s) => s.name === 'WorldA')?.checked === false
+})
+
+// 故障回归：最后一次输入后立刻保存，不能依赖 400ms 自动保存定时器。
+await page.getByRole('button', { name: '编写更新日志', exact: true }).click()
+const editorDialog = page.getByRole('dialog', { name: '更新日志', exact: true })
+await editorDialog.locator('[contenteditable="true"]').fill('即时保存回归：导出说明不会丢失')
+await editorDialog.getByRole('button', { name: '保存并关闭', exact: true }).click()
+await editorDialog.waitFor({ state: 'hidden' })
+check((await page.getByRole('button', { name: '编写更新日志', exact: true }).innerText()).includes('即时保存回归'),
+  '立即保存后摘要同步')
+await page.getByRole('button', { name: '编写更新日志', exact: true }).click()
+check((await editorDialog.locator('[contenteditable="true"]').innerText()).includes('即时保存回归'),
+  '重新打开保留日志')
+await editorDialog.getByRole('button', { name: 'Markdown', exact: true }).click()
+const failSave = async (route) => {
+  const request = route.request().postDataJSON()
+  if (request?.method === 'dev.changelog.set') {
+    await route.fulfill({ json: { ok: false, error: { code: 'TEST_SAVE_FAILURE', message: '测试保存失败' } } })
+  } else await route.fallback()
+}
+await page.route('**/api/invoke', failSave)
+await editorDialog.locator('textarea').fill('# 保存失败也保留草稿\n')
+await editorDialog.getByRole('button', { name: '保存并关闭', exact: true }).click()
+await editorDialog.getByRole('status').filter({ hasText: '测试保存失败' }).waitFor()
+check(await editorDialog.isVisible() && (await editorDialog.locator('textarea').inputValue()).includes('保留草稿'),
+  '保存失败明确提示并保留编辑器与草稿')
+await page.unroute('**/api/invoke', failSave)
+await editorDialog.locator('textarea').fill('# 即时保存回归\n\n- 导出说明不会丢失\n')
+await page.keyboard.press('Escape')
+await editorDialog.waitFor({ state: 'hidden' })
+check((await page.evaluate(async () => (await window.pywebview.api.invoke('dev.state', {}))?.data?.changelog)).includes('即时保存回归'),
+  'Markdown 输入后 Esc 关闭也保存')
+
 // 3) 填 CurseForge Key（可选）
 if (CFKEY) {
   const keyInput = page.locator('input').filter({ hasNot: page.locator('[type="checkbox"]') })
@@ -152,6 +204,7 @@ const { spawnSync } = await import('node:child_process')
 const probe = spawnSync(PY, ['-c', `
 import json, sys
 from app.core.container import open_container
+from app.core.eapack import read_changelog
 p = ${JSON.stringify(produced)}
 with open_container(p) as reader:
     names = list(reader.names)
@@ -164,6 +217,7 @@ print(json.dumps({
   'source': man.get('source'),
   'deps': idx['dependencies'],
   'hasManifest': 'ea_manifest.json' in names,
+  'changelog': read_changelog(p),
 }, ensure_ascii=False))
 `], { encoding: 'utf-8' })
 if (probe.status !== 0) {
@@ -177,6 +231,15 @@ if (probe.status !== 0) {
   check(info.overrides.some((n) => n.includes('config/')), '本地文件进了 overrides')
   check(info.overrides.some((n) => n.endsWith('options.txt')), 'options.txt 随包（PCL 默认）')
   check(info.deps.minecraft === '1.20.1', `依赖版本：${JSON.stringify(info.deps)}`)
+  check(info.changelog.includes('即时保存回归') && info.changelog.includes('导出说明不会丢失'),
+    '即时保存的更新日志原样进入导出包')
+  check(!info.overrides.some((n) => n.startsWith('overrides/saves/WorldA/')) &&
+    info.overrides.includes('overrides/saves/WorldB/level.dat') &&
+    info.overrides.includes('overrides/saves/WorldB/region/r.0.0.mca'),
+    '默认存档已导出，取消的 WorldA 未进入包')
+  check(info.overrides.includes('overrides/resourcepacks/fixture.zip') &&
+    info.overrides.includes('overrides/shaderpacks/fixture.zip'),
+    '默认资源包与光影子项进入导出包')
 }
 
 check(errors.length === 0, '无控制台错误', errors.slice(0, 2).join(' | '))

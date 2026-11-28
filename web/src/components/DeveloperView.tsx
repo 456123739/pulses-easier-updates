@@ -70,50 +70,15 @@ export default function DeveloperView() {
   const [peek, setPeek] = useState<{ key: string; anchor: HTMLElement } | null>(null)
   const peekOpen = useRef<number | null>(null)
   const peekClose = useRef<number | null>(null)
-  // 子项浮层：悬停 160ms 展开，移开 200ms 收起；点了箭头就固定住
-  const [layer, setLayer] = useState<{ name: string; anchor: HTMLElement } | null>(null)
-  const rowRefs = useRef(new Map<string, HTMLElement>())
-  const openTimer = useRef<number | null>(null)
-  const closeTimer = useRef<number | null>(null)
-  const draggingRef = useRef(false)
-
-  const clearLayerTimers = () => {
-    if (openTimer.current !== null) {
-      window.clearTimeout(openTimer.current)
-      openTimer.current = null
-    }
-    if (closeTimer.current !== null) {
-      window.clearTimeout(closeTimer.current)
-      closeTimer.current = null
-    }
-  }
-
-  const scheduleOpen = (row: DevStrategy, anchor: HTMLElement) => {
-    if (!row.subs?.length) return
-    clearLayerTimers()
-    openTimer.current = window.setTimeout(() => {
-      setLayer({ name: row.name, anchor })
-    }, 160)
-  }
-
-  const scheduleClose = () => {
-    clearLayerTimers()
-    if (draggingRef.current) return
-    closeTimer.current = window.setTimeout(() => setLayer(null), 200)
-  }
-
-  const keepLayer = () => {
-    clearLayerTimers()
-  }
-
-  const toggleLayer = (row: DevStrategy) => {
-    clearLayerTimers()
-    if (layer?.name === row.name) {
-      setLayer(null)
-      return
-    }
-    const anchor = rowRefs.current.get(row.name)
-    if (anchor) setLayer({ name: row.name, anchor })
+  // 子项是导出范围的一部分，首次识别来源时全部展开，名称按钮只负责折叠。
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleExpanded = (name: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
   }
 
   const clearPeek = () => {
@@ -172,6 +137,7 @@ export default function DeveloperView() {
     const rows = dev?.strategies ?? []
     if (!rows.length) return
     setScope(new Set(rows.filter((r) => !r.excluded).map((r) => r.name)))
+    setExpanded(new Set(rows.filter((r) => r.subs !== undefined).map((r) => r.name)))
     setStage('scope')
     setEstimate(null)
   }, [dev?.instance?.root, dev?.source?.path])
@@ -345,9 +311,6 @@ export default function DeveloperView() {
   const visibleRows = stage === 'strategy'
     ? allRows.filter((row) => !row.excluded)
     : allRows
-  const activeRow = layer
-    ? allRows.find((row) => row.name === layer.name) ?? null
-    : null
 
   return (
     <div className={styles.page} data-mode={mode}>
@@ -493,99 +456,86 @@ export default function DeveloperView() {
                 </p>
               </div>
             )}
-            {visibleRows.map((row) => (
-              <div
-                key={row.name}
-                ref={(el) => {
-                  if (el) rowRefs.current.set(row.name, el)
-                  else rowRefs.current.delete(row.name)
-                }}
-                className={styles.row}
-                data-off={stage === 'scope' ? !scope.has(row.name) : row.excluded}
-                data-layer={layer?.name === row.name ? 'true' : undefined}
-                onPointerEnter={(e) => scheduleOpen(row, e.currentTarget)}
-                onPointerLeave={scheduleClose}
-              >
-                <button
-                  className={styles.rowName}
-                  data-on={stage === 'scope' ? scope.has(row.name) : !row.excluded}
-                  onClick={() => stage === 'scope'
-                    ? toggleScope(row.name)
-                    : void toggleExcluded(row)}
-                >
-                  {stage === 'scope' && (
-                    <span className={styles.checkBox} data-on={scope.has(row.name)}>
-                      {scope.has(row.name) && <Icon name="check" size={12} />}
-                    </span>
-                  )}
-                  <Icon name={row.isFile ? 'file' : 'folder'} size={13} />
-                  <span>{row.name}</span>
-                </button>
-                {stage === 'strategy' && row.subs && row.subs.length > 0 && (
-                  <button
-                    type="button"
-                    className={styles.subBtn}
-                    data-layer-toggle="true"
-                    data-on={layer?.name === row.name}
-                    aria-expanded={layer?.name === row.name}
-                    aria-label={`${row.title || row.name}：${row.subs.length} 项可单独设置`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      toggleLayer(row)
-                    }}
-                  >
-                    <span className={styles.subCount}>
-                      {row.subs.filter((x) => x.checked).length}/{row.subs.length}
-                    </span>
-                    <Icon name="chevron" size={11} />
-                  </button>
-                )}
-                {stage === 'strategy' && (
-                <div className={styles.chips}>
-                  {(row.strategies ?? ['完全匹配', '替换重名', '跳过重名']).map((s) => (
+            {visibleRows.map((row) => {
+              const selected = stage === 'scope' ? scope.has(row.name) : !row.excluded
+              const hasSubs = row.subs !== undefined
+              const isExpanded = expanded.has(row.name)
+              return (
+                <div key={row.name} className={styles.rowGroup} data-scope-row={row.name}>
+                  <div className={styles.row} data-off={!selected}>
                     <button
-                      key={s}
-                      className="chip"
-                      data-on={row.current === s}
-                      disabled={row.excluded || !connected}
-                      onClick={() => void setStrategy(row.name, s)}
+                      type="button"
+                      role="checkbox"
+                      aria-checked={selected}
+                      aria-label={`导出 ${row.name}`}
+                      className={styles.scopeToggle}
+                      disabled={!connected || exporting || loading || scopeBusy}
+                      onClick={() => stage === 'scope' ? toggleScope(row.name) : void toggleExcluded(row)}
                     >
-                      {s}
+                      <span className={styles.checkBox} data-on={selected}>
+                        {selected && <Icon name="check" size={12} />}
+                      </span>
                     </button>
-                  ))}
+                    <button
+                      className={styles.rowName}
+                      data-on={selected}
+                      aria-label={row.name}
+                      aria-expanded={hasSubs ? isExpanded : undefined}
+                      aria-controls={hasSubs ? `scope-children-${row.name}` : undefined}
+                      onClick={() => hasSubs ? toggleExpanded(row.name) : stage === 'scope'
+                        ? toggleScope(row.name) : void toggleExcluded(row)}
+                    >
+                      <Icon name={row.isFile ? 'file' : 'folder'} size={13} />
+                      <span>{row.name}</span>
+                      {hasSubs && (
+                        <>
+                          <span className={styles.subCount}>
+                            {row.subs!.filter((x) => x.checked).length}/{row.subs!.length}
+                          </span>
+                          <span className={styles.disclosure} data-expanded={isExpanded}>
+                            <Icon name="chevron" size={11} />
+                          </span>
+                        </>
+                      )}
+                    </button>
+                    {stage === 'strategy' && (
+                      <div className={styles.chips}>
+                        {(row.strategies ?? ['完全匹配', '替换重名', '跳过重名']).map((s) => (
+                          <button
+                            key={s}
+                            className="chip"
+                            data-on={row.current === s}
+                            disabled={row.excluded || !connected}
+                            onClick={() => void setStrategy(row.name, s)}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {hasSubs && isExpanded && (
+                    <div id={`scope-children-${row.name}`} className={styles.subTree}>
+                      <SubScopeLayer
+                        row={row}
+                        inline
+                        showStrategies={stage === 'strategy'}
+                        busy={!selected || subBusy || !connected || exporting || loading || scopeBusy}
+                        onToggle={(path, checked) => void setSub(path, checked)}
+                        onStrategy={(path, strategy) => void setSub(path, undefined, strategy)}
+                        onAll={(checked) => void setSubAll(row.name, checked)}
+                      />
+                    </div>
+                  )}
                 </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
             {!hasSource && (
               <div className="t-small" style={{ padding: '18px 4px' }}>
                 定好整合包后，这里会列出所有顶层目录与根目录文件。
               </div>
             )}
           </div>
-          <Floating3DLayer
-            open={Boolean(activeRow && layer)}
-            anchor={layer?.anchor ?? null}
-            onRequestClose={() => setLayer(null)}
-            onPointerEnter={keepLayer}
-            onPointerLeave={scheduleClose}
-            onDragChange={(value) => {
-              draggingRef.current = value
-              if (value) clearLayerTimers()
-            }}
-            kind="sub"
-            label={activeRow ? `${activeRow.title || activeRow.name}的子项` : undefined}
-          >
-            {activeRow && (
-              <SubScopeLayer
-                row={activeRow}
-                busy={subBusy}
-                onToggle={(path, checked) => void setSub(path, checked)}
-                onStrategy={(path, strategy) => void setSub(path, undefined, strategy)}
-                onAll={(checked) => void setSubAll(activeRow.name, checked)}
-              />
-            )}
-          </Floating3DLayer>
           <Floating3DLayer
             open={Boolean(peekItem)}
             anchor={peek?.anchor ?? null}

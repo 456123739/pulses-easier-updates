@@ -8,10 +8,11 @@ import styles from './MainButton.module.css'
 interface Props {
   onScanToggle?: () => void
   beforeConfirm?: () => Promise<boolean>
+  onUpdateStarted?: () => void
 }
 
 /** 主按钮：六态（含下载覆盖态），配色与文案按 Tk 版逐条对齐。 */
-export default function MainButton({ onScanToggle, beforeConfirm }: Props) {
+export default function MainButton({ onScanToggle, beforeConfirm, onUpdateStarted }: Props) {
   const btn = usePlayer((s) => s.btn)
   const phase = usePlayer((s) => s.phase)
   const setBtn = usePlayer((s) => s.setBtn)
@@ -83,7 +84,7 @@ export default function MainButton({ onScanToggle, beforeConfirm }: Props) {
       }
       if (btn === 'resume') {
         setHint('正在继续上次的更新…')
-        await call('update.resume')
+        if (await call('update.resume')) onUpdateStarted?.()
         return
       }
       if (btn === 'confirm') {
@@ -99,7 +100,7 @@ export default function MainButton({ onScanToggle, beforeConfirm }: Props) {
           setHint('策略保存失败，未开始写入', 'error')
           return
         }
-        await call('update.apply')
+        if (await call('update.apply')) onUpdateStarted?.()
         return
       }
       return

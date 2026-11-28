@@ -24,8 +24,7 @@ from .api import Api
 from .controller import AppController
 from .events import EventBus, EventPump
 from .window_shell import (SPLASH_H, SPLASH_W, apply_window_rounding,
-                           center_rect, expand as expand_window, find_hwnd,
-                           screen_size)
+                           center_rect, find_hwnd, screen_size)
 
 WINDOW_TITLE = "Pulses Easier"
 WINDOW_W, WINDOW_H = 1440, 860
@@ -47,16 +46,13 @@ def fit_to_screen() -> tuple[tuple[int, int], tuple[int, int]]:
             pass
     return (w, h), (min(WINDOW_MIN[0], w), min(WINDOW_MIN[1], h))
 
-def _later_expand(window, api, target):
-    """兜底：页面若因为脚本错误没调 window.expand，2.5 秒后自己长开，
-    避免玩家永远停在一个 300×300 的小窗上。"""
+def _later_expand(api):
+    """兜底：页面若因为脚本错误没调 window.expand，8 秒后自己长开，
+    避免玩家永远停在一个 240×240 的小窗上。与前端共用锁，只展开一次。"""
     import time as _t
     _t.sleep(8.0)
     try:
-        if getattr(api, "expanded", False):
-            return
-        api.expanded = True
-        expand_window(window, target)
+        api.window_expand()
     except Exception:                                # noqa: BLE001, S110
         pass
 
@@ -285,6 +281,7 @@ def run(argv: list[str] | None = None) -> int:
     )
     api.bind_window(window)
     api.window_target = size
+    api.expanded = not splash_first
     api.window_min_size = min_size
     api.start_frameless = frameless
     def _round_later():
@@ -303,7 +300,7 @@ def run(argv: list[str] | None = None) -> int:
     threading.Thread(target=_round_later, daemon=True).start()
     if splash_first:
         threading.Thread(
-            target=lambda: _later_expand(window, api, size),
+            target=lambda: _later_expand(api),
             daemon=True).start()
     _note("window-created")
 

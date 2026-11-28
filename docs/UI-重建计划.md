@@ -34,6 +34,12 @@ web/        ← Vite + React 19 + TS + Zustand + Framer Motion + CSS Modules
 - `state`（全量/差分快照，低频，变更后推送）
 - `event`（进度、日志、字节流，高频，合批）
 
+2026-11-28 协议补充：
+
+- `dev.changelog.set({text})` 返回完整 `DevSnapshot`，并推送含已保存 Markdown 的 `state`；编辑器等到回包后才显示“已保存”或关闭。
+- `window.expand({animate?: boolean})` 等待原生窗口展开完成后返回 `{expanding: false, target: [width, height]}`；`animate: false` 立即设置最终尺寸。重复调用返回 `{expanding: false}`，不再次缩放。
+- `update.apply` / `update.resume` 接受开始请求后，前端读取 `flow.state`，在下载或应用阶段显示可关闭的更新日志；续传的重新比对阶段先等待，不依赖事件泵与回包的先后顺序。
+
 ## 2. 阶段与验收（每阶段跑测试后才进入下一阶段）
 
 ### P0 基座（构建链 + 宿主 + 桥）

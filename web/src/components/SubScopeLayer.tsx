@@ -13,6 +13,8 @@ import styles from './SubScopeLayer.module.css'
 type Props = {
   row: DevStrategy
   busy?: boolean
+  inline?: boolean
+  showStrategies?: boolean
   onToggle: (path: string, checked: boolean) => void
   onStrategy: (path: string, strategy: string) => void
   onAll?: (checked: boolean) => void
@@ -31,7 +33,7 @@ const fmtBytes = (bytes: number | undefined): string => {
   return `${size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2)} ${units[index] ?? 'TB'}`
 }
 
-export default function SubScopeLayer({ row, busy, onToggle, onStrategy, onAll }: Props) {
+export default function SubScopeLayer({ row, busy, inline = false, showStrategies = true, onToggle, onStrategy, onAll }: Props) {
   const reduce = useReducedMotion()
   const subs = row.subs ?? []
   const picked = subs.filter((s) => s.checked)
@@ -41,7 +43,7 @@ export default function SubScopeLayer({ row, busy, onToggle, onStrategy, onAll }
 
   const item = (sub: DevSubScope, index: number) => {
     const strategy = sub.strategy || ''
-    const motionStyle = reduce
+    const motionStyle = reduce || inline
       ? {}
       : {
           initial: { opacity: 0, x: -8, y: 4 },
@@ -53,6 +55,7 @@ export default function SubScopeLayer({ row, busy, onToggle, onStrategy, onAll }
         key={sub.path}
         className={styles.item}
         data-off={!sub.checked}
+        data-scope-child={sub.path}
         {...motionStyle}
       >
         <div className={styles.itemTop}>
@@ -74,7 +77,7 @@ export default function SubScopeLayer({ row, busy, onToggle, onStrategy, onAll }
             {sub.files} 个 · {fmtBytes(sub.bytes)}
           </span>
         </div>
-        <div className={styles.chips} role="group" aria-label={`${sub.name} 的更新策略`}>
+        {showStrategies && <div className={styles.chips} role="group" aria-label={`${sub.name} 的更新策略`}>
           <button
             type="button"
             className={styles.chip}
@@ -97,17 +100,17 @@ export default function SubScopeLayer({ row, busy, onToggle, onStrategy, onAll }
               {s}
             </button>
           ))}
-        </div>
+        </div>}
       </motion.div>
     )
   }
 
   return (
-    <div className={styles.card}>
-      <header className={styles.head} data-drag-handle="true" title="按住这里可以拖动">
+    <div className={styles.card} data-inline={inline}>
+      <header className={styles.head} data-drag-handle={inline ? undefined : 'true'} title={inline ? undefined : '按住这里可以拖动'}>
         <div className={styles.headText}>
           <span className={styles.title}>
-            <span className={styles.grip} aria-hidden>⠿</span>
+            {!inline && <span className={styles.grip} aria-hidden>⠿</span>}
             {row.title || row.name}
           </span>
           <span className={styles.sub}>
@@ -126,7 +129,7 @@ export default function SubScopeLayer({ row, busy, onToggle, onStrategy, onAll }
             <span className={styles.allBox} aria-hidden />
             全选
           </button>
-          <span className={styles.inherit}>父级：{row.current || '完全匹配'}</span>
+          {showStrategies && <span className={styles.inherit}>父级：{row.current || '完全匹配'}</span>}
         </div>
       </header>
 
@@ -138,7 +141,7 @@ export default function SubScopeLayer({ row, busy, onToggle, onStrategy, onAll }
       </div>
 
       <footer className={styles.foot}>
-        <span className={styles.hint}>移开自动收起 · 按住标题拖动 · Esc 关闭</span>
+        <span className={styles.hint}>{inline ? '勾选要导出的子项' : '移开自动收起 · 按住标题拖动 · Esc 关闭'}</span>
         <span className={styles.bytes}>已选 {fmtBytes(pickedBytes)}</span>
       </footer>
     </div>

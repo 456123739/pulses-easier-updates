@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
     "test:ui": "node scripts/ui_test.mjs",
+    "test:motion": "node scripts/motion_test.mjs",
     "test:e2e": "node scripts/e2e_ui.mjs"
   },
   "dependencies": {

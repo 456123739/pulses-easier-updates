@@ -239,6 +239,7 @@ def main() -> int:
     alpha = 0
     visible = False
     t_start = time.time()
+    sample_rgn = gdi32.CreateRectRgn(0, 0, 0, 0)
     while time.time() - t_start < 20:
         r = rect_of(hwnd)
         key = wintypes.DWORD()
@@ -250,9 +251,14 @@ def main() -> int:
             alpha = int(a.value)
         visible = bool(user32.IsWindowVisible(hwnd))
         if r:
-            samples.append({"t": round(time.time() - t_start, 3),
+            region_box = wintypes.RECT()
+            region_kind = user32.GetWindowRgn(hwnd, sample_rgn)
+            gdi32.GetRgnBox(sample_rgn, ctypes.byref(region_box))
+            samples.append({"t": round(time.time() - t_start, 4),
                             "x": r[0], "y": r[1], "w": r[2], "h": r[3],
-                            "alpha": alpha})
+                            "alpha": alpha, "region_kind": region_kind,
+                            "region_w": int(region_box.right - region_box.left),
+                            "region_h": int(region_box.bottom - region_box.top)})
             if alpha >= 250 and r[2] <= 420 and not splash_saved:
                 time.sleep(0.35)                     # 淡入完成后等首帧 logo 画出来
                 grab(splash_png, (r[0], r[1], r[0] + r[2], r[1] + r[3]))
@@ -263,12 +269,13 @@ def main() -> int:
                 grab(expand_png, (r[0], r[1], r[0] + r[2], r[1] + r[3]))
                 probe.screenshots.append(str(expand_png))
                 expand_saved = True
-        time.sleep(0.04)
+        time.sleep(0.008)  # 采样约 120Hz；40ms 采样无法区分 20 帧/34 帧与剪裁跳变。
         if (r and alpha >= 250 and r[2] >= 900 and r[3] >= 560
-                and len(samples) > 8
-                and len({(q["w"], q["h"]) for q in samples[-6:]}) == 1):
+                and len(samples) > 20
+                and len({(q["w"], q["h"]) for q in samples[-20:]}) == 1):
             break
-    probe.metrics["samples"] = samples[:200]
+    gdi32.DeleteObject(sample_rgn)
+    probe.metrics["samples"] = samples[-200:]
     probe.metrics["alpha_wait_ms"] = int((time.time() - t_start) * 1000)
     widths = [q["w"] for q in samples]
     final_w, final_h = (samples[-1]["w"], samples[-1]["h"]) if samples else (0, 0)
@@ -282,6 +289,19 @@ def main() -> int:
     distinct = len(set(widths))
     probe.check("展开是连续动画（>=6 个不同宽度）", distinct >= 6,
                 f"distinct={distinct}")
+    growing = [q for q in samples if 240 < q["w"] < final_w]
+    changed = [b for a, b in zip(samples, samples[1:]) if a["w"] != b["w"]]
+    gaps = [(b["t"] - a["t"]) * 1000 for a, b in zip(changed, changed[1:])]
+    clip_lags = [max(q["w"] - q["region_w"], q["h"] - q["region_h"])
+                 for q in growing if q["region_kind"] in (2, 3)]
+    probe.metrics["expand_motion"] = {
+        "observed_size_changes": len(changed),
+        "observed_ms": round((changed[-1]["t"] - changed[0]["t"]) * 1000, 1) if changed else None,
+        "max_sampled_gap_ms": round(max(gaps), 1) if gaps else None,
+        "max_clip_lag_px": max(clip_lags) if clip_lags else None,
+    }
+    probe.check("展开中圆角区域跟随每帧尺寸", bool(clip_lags) and max(clip_lags) <= 2,
+                f"max_clip_lag_px={max(clip_lags) if clip_lags else 'none'}")
     probe.cat = "visual"
     if expand_png.is_file():
         try:

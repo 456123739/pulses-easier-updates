@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@/bridge'
 import { AnimatePresence, motion } from 'framer-motion'
 import { pickPath } from '@/bridge'
-import type { AppState } from '@/bridge/protocol'
+import type { AppState, FlowSnapshot } from '@/bridge/protocol'
 import { useApp } from '@/store/app'
 import { usePlayer } from '@/store/player'
 import { useUi } from '@/store/ui'
@@ -65,6 +65,31 @@ export default function PlayerView() {
   const [showTree, setShowTree] = useState(true)
   const setState = useApp((s) => s.setState)
   const strategyCommit = useRef<() => Promise<boolean>>(async () => true)
+  const [pendingChangelog, setPendingChangelog] = useState<string | null>(null)
+  const patchState = useApp((s) => s.patchState)
+
+  // 续传会先重新比对，再进入下载；按阶段展示，不能用接口回包前的旧状态判断。
+  useEffect(() => {
+    if (!pendingChangelog || flow?.update?.path !== pendingChangelog) return
+    if (!flow.changelog || flow.error) {
+      setPendingChangelog(null)
+      return
+    }
+    if (flow.phase === 'download' || flow.phase === 'apply' || flow.phase === 'done') {
+      setPendingChangelog(null)
+      openSheet('changelog')
+    }
+  }, [pendingChangelog, flow?.update?.path, flow?.phase, flow?.changelog, flow?.error, openSheet])
+
+  const onUpdateStarted = () => {
+    // API 回包和事件泵独立，直接读当前后端快照以覆盖刚恢复更新包的情况。
+    void invoke<FlowSnapshot>('flow.state').then((current) => {
+      patchState({ flow: current })
+      if (current.changelog && current.update) setPendingChangelog(current.update.path)
+    }).catch((err: unknown) => {
+      pushToast(err instanceof Error ? err.message : '读取更新日志失败，可点击下方按钮重试', 'error')
+    })
+  }
 
   const onLocatePack = async () => {
     if (!connected) return
@@ -180,6 +205,7 @@ export default function PlayerView() {
         <MainButton
           onScanToggle={() => setShowTree((v) => !v)}
           beforeConfirm={() => strategyCommit.current()}
+          onUpdateStarted={onUpdateStarted}
         />
       </section>
 

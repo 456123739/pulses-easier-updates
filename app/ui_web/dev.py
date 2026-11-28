@@ -53,8 +53,10 @@ class DevFlow:
         self.pending: dict | None = None   # loading 时的目标（kind / path / name / note）
         self._open_seq = 0                 # 连续拖入时只让最后一次生效
         self.scan: dict | None = None
-        # 特殊选项（本机数据）默认一律不导出：从默认勾选里剔掉
-        self.rule_keys: set[str] = rules_mod.default_keys() - export_specials.keys()
+        # Web 导出默认包含存档及各世界；保留核心规则的 PCL 默认值供旧界面使用。
+        # 特殊选项（本机数据）仍默认不导出。
+        self.rule_keys: set[str] = ((rules_mod.default_keys() | {"saves"})
+                                    - export_specials.keys())
         self.specials: list[dict] = []
         self.cf_key = ""
         try:
@@ -376,14 +378,16 @@ class DevFlow:
                 if not item.get("checked", True):
                     extra.append(rules_mod.sub_rule(
                         path, item.get("kind") == "file"))
-        rules = rules_mod.expand_rules(set(self.rule_keys), tuple(extra))
         forced = []
         for name in sorted(self.scope_force):
             if _is_file(name):
                 forced.append(name)
             else:
                 forced.append(name + "/")
-        return rules + forced
+        # 手动选中的额外目录也要归一化；放在默认规则之前，让子项排除、
+        # 已禁用 Mod 等规则与固定排除仍能覆盖整目录包含。
+        return (rules_mod.standardize_lines(forced)
+                + rules_mod.expand_rules(set(self.rule_keys), tuple(extra)))
 
     def _rescan(self) -> None:
         if not self.scan:
@@ -479,8 +483,11 @@ class DevFlow:
                                  "label": str(label)}
             self.controller.push_state()
 
+        # 新来源不能继承上个实例的顶层/子项排除，否则扫描清单已漏文件，
+        # 之后即使重置勾选，复用清单导出时也补不回来。存档在首扫前即启用。
+        rule_keys = set(self.rule_keys) | {"saves"}
         scan = instance_scan.scan_instance(
-            root, self._current_rules(), progress=_scan_progress)
+            root, rules_mod.expand_rules(rule_keys), progress=_scan_progress)
         if not scan["totals"]["files"]:
             raise DevError("导出范围内没有文件（检查导出选项）")
 
@@ -489,8 +496,7 @@ class DevFlow:
         files = [r["name"] for r in scan["rows"]
                  if r["isFile"] and r["files"]
                  and r["name"] not in NEVER_PACK_FILES]
-        # 存档默认不导出（PCL 同款），但要在"更新范围"里留一行让人找得到：
-        # 行显示为灰（已排除），点目录名才把它纳入包；纳入后再展开子项。
+        # 空存档目录也留在更新范围里，与默认选中的有内容存档保持一致。
         has_saves = (Path(root) / "saves").is_dir()
         if has_saves and "saves" not in tops:
             tops.append("saves")
@@ -510,20 +516,17 @@ class DevFlow:
                 **{n: default_strategy_for_dir(n).value for n in tops},
                 **{n: default_strategy_for_file(n).value for n in files},
             }
+            self.rule_keys = rule_keys
             self.excluded = set()
+            self.auto_excluded = set()
+            self.scope_force = set()
             self.subs = {}
-            self._sync_subs(scan)
             self._sync_scope()
-            if has_saves:
-                self.rule_keys.add("saves")          # 有规则才扫得到，导出靠下面的 excluded 挡住
-                self.excluded.add("saves")
-                self.strategies.setdefault("saves", "完全匹配")
             self.phase = "idle"
             self.error = None
             self.progress = {}
             self.out_path = ""
             self.changelog = ""
-            self.scope_force = set()
             if not self.version:
                 mc = scan.get("minecraft") or ""
                 self.version = f"{mc}-1.0.0" if mc else "1.0.0"
@@ -635,6 +638,7 @@ class DevFlow:
             raise DevError("上一步还没完成，稍等一下")
         with self._lock:
             self.changelog = str(text or "")
+        self.controller.push_state()
         return self.snapshot()
 
     def set_strategy(self, name: str, value: str = "", excluded: bool | None = None) -> dict:
@@ -698,7 +702,9 @@ class DevFlow:
                     raw = 0
         else:
             scan = self.scan or {}
-            items = scan.get("items") or []
+            rules = self._current_rules()
+            items = [i for i in scan.get("items") or []
+                     if rules_mod.should_keep(i["path"], rules)]
             files = len(items)
             raw = sum(int(i.get("size") or 0) for i in items)
         # 压缩比只是给用户一个量级；真实值由导出后统计。

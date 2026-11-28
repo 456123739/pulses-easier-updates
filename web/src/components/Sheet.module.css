@@ -4,11 +4,14 @@
   display: grid;
   place-items: center;
   background: rgba(10, 10, 11, 0.45);
+  backdrop-filter: blur(2px);
   z-index: 150;
 }
 
 .sheet {
   max-height: 82vh;
+  max-width: calc(100vw - 32px);
+  will-change: transform, opacity;
   min-height: 232px;
   display: flex;
   flex-direction: column;

@@ -5,6 +5,7 @@
   display: grid;
   place-items: center;
   background: #121214;
+  will-change: opacity;
 }
 
 .mark {

@@ -16,6 +16,7 @@ window_shell.py — 无边框窗口：启动尺寸、圆角、展开动画
 from __future__ import annotations
 
 import ctypes
+import math
 import sys
 import time
 
@@ -133,17 +134,22 @@ def _window_rect(hwnd: int):
     return int(rect.left), int(rect.top), w, h
 
 
-def _set_region(hwnd: int, radius: int = RADIUS_PX) -> bool:
+def _set_region(hwnd: int, radius: int = RADIUS_PX,
+                size: tuple[int, int] | None = None,
+                redraw: bool = True) -> bool:
     _u, gdi32, _c, _w = _win32()
-    size = _window_rect(hwnd)
-    if not size:
-        return False
-    _l, _t, w, h = size
+    if size is None:
+        rect = _window_rect(hwnd)
+        if not rect:
+            return False
+        w, h = rect[2:]
+    else:
+        w, h = size
     rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1,
                                    radius * 2, radius * 2)
     if not rgn:
         return False
-    if not _u.SetWindowRgn(hwnd, rgn, True):
+    if not _u.SetWindowRgn(hwnd, rgn, redraw):
         gdi32.DeleteObject(rgn)
         return False
     return True
@@ -219,32 +225,47 @@ def clear_window_rounding() -> None:
 
 
 def expand(window, target: tuple[int, int],
-           duration: float = 0.42, steps: int = 20,
+           duration: float = 0.56, steps: int | None = None,
            screen: tuple[int, int] | None = None,
-           sleep=time.sleep, radius: int = RADIUS_PX) -> tuple[int, int]:
+           sleep=time.sleep, radius: int = RADIUS_PX,
+           clock=time.perf_counter) -> tuple[int, int]:
     sw, sh = screen or screen_size()
     tw = min(int(target[0]), max(MIN_SIZE[0], sw - 80))
     th = min(int(target[1]), max(MIN_SIZE[1], sh - 100))
     sw0, sh0 = SPLASH_W, SPLASH_H
     hwnd = find_hwnd(timeout=3.0) if sys.platform == "win32" else 0
-    for i in range(1, steps + 1):
-        t = _ease_out_cubic(i / steps)
+    duration = max(0.0, duration)
+    frames = max(1, steps if steps is not None else math.ceil(duration * 60))
+    started = clock()
+    i = 1
+    while i <= frames:
+        # 以实际时间推进；原生 resize 的耗时也包含在预算内，不在每帧后累加 sleep。
+        # 落后的帧直接追上进度，不能让慢机器在旧尺寸上排队。
+        scheduled = duration * i / frames
+        delay = started + scheduled - clock()
+        if delay > 0:
+            sleep(delay)
+        elapsed = max(scheduled, clock() - started)
+        progress = min(1.0, elapsed / duration) if duration else i / frames
+        t = _ease_out_cubic(progress)
         w = int(round(sw0 + (tw - sw0) * t))
         h = int(round(sh0 + (th - sh0) * t))
         x, y = center_rect(w, h, (sw, sh))
         try:
             if hwnd:
-                # 移动+缩放一次完成；圆角每 4 帧重算一次即可，
-                # 每帧建 HRGN + SetWindowRgn 是主要卡顿源之一。
+                # 区域若每四帧才长一次，会把中间三帧的新窗口裁掉。
+                # 复用已算好的尺寸，不再 GetWindowRect；resize 自己负责重绘。
+                _set_region(hwnd, radius, size=(w, h), redraw=False)
                 _set_window_rect(hwnd, x, y, w, h)
-                if i == 1 or i % 4 == 0 or i == steps:
-                    _set_region(hwnd, radius)
             else:
                 window.resize(w, h)
                 window.move(x, y)
         except Exception:                             # noqa: BLE001, S110
             break
-        sleep(max(0.0, duration / steps))
+        if progress >= 1:
+            break
+        i = max(i + 1, math.floor((clock() - started) * frames / duration) + 1) if duration else i + 1
+        i = min(i, frames)
     try:
         window.min_size = MIN_SIZE
     except Exception:                                 # noqa: BLE001, S110

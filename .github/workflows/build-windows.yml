@@ -58,6 +58,7 @@ jobs:
       - name: 端到端（真前端 + 真 Api）
         run: |
           npx --prefix web playwright install chromium
+          npm --prefix web run test:motion
           python scripts/dev/run_ui_e2e.py
 
       # 一键制作更新包：真前端 + 真 Api + 真磁盘，从实例目录导出并读回产物

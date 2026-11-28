@@ -280,6 +280,35 @@
   gap: 2px;
 }
 
+.rowGroup {
+  flex: 0 0 auto;
+}
+
+.scopeToggle {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  min-height: 32px;
+  border-radius: 8px;
+}
+.scopeToggle:hover:not(:disabled) {
+  background: var(--mat-2);
+}
+
+.disclosure {
+  display: inline-flex;
+  transition: transform 220ms var(--ease-out);
+}
+.disclosure[data-expanded='true'] {
+  transform: rotate(90deg);
+}
+
+.subTree {
+  margin: 4px 4px 10px 18px;
+  padding-left: 12px;
+  border-left: 1px solid var(--hairline-strong);
+}
+
 .row {
   display: flex;
   align-items: center;

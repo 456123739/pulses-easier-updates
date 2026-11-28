@@ -162,7 +162,7 @@ class Api:
             "app.db.get": lambda p: self._controller.db_path(),
             "app.db.set": lambda p: self._controller.set_db_path(p.get("path", "")),
             # ---- 无边框窗口的控制（浏览器里没有 window，一律 NO_WINDOW）----
-            "window.expand": lambda p: self.window_expand(),
+            "window.expand": lambda p: self.window_expand(bool(p.get("animate", True))),
             "window.minimize": lambda p: self.window_minimize(),
             "window.toggle_max": lambda p: self.window_toggle_max(),
             "window.state": lambda p: self.window_state(),
@@ -195,23 +195,18 @@ class Api:
             raise ApiError("NO_WINDOW", "当前不是桌面窗口")
         return self._window
 
-    def window_expand(self) -> dict:
-        """logo 小窗 → 主窗口：Python 侧做尺寸动画，页面只管画内容。"""
-        win = self._win()
-        if getattr(self, "expanded", False):          # 前端与兜底线程只展开一次
-            return {"expanding": False}
-        target = getattr(self, "window_target", (1440, 860))
-
-        def _run():
-            try:
-                from .window_shell import expand
-                expand(win, target)
-            except Exception:                          # noqa: BLE001, S110
-                pass
-
-        self.expanded = True
-        threading.Thread(target=_run, daemon=True).start()
-        return {"expanding": True, "target": list(target)}
+    def window_expand(self, animate: bool = True) -> dict:
+        """logo 小窗 → 主窗口。桥本就在工作线程中；完成后再回包，避免前端猜时长。"""
+        # 兜底线程直接调用本方法，不经 invoke 的 page-ready 钩子。
+        with self._lock:
+            win = self._win()
+            if getattr(self, "expanded", False):      # 前端与兜底线程只展开一次
+                return {"expanding": False}
+            self.expanded = True
+            target = getattr(self, "window_target", (1440, 860))
+            from .window_shell import expand
+            actual = expand(win, target, **({} if animate else {"duration": 0}))
+            return {"expanding": False, "target": list(actual)}
 
     def window_minimize(self) -> dict:
         self._win().minimize()
@@ -233,8 +228,7 @@ class Api:
 
     def window_toggle_max(self) -> dict:
         win = self._win()
-        from .window_shell import (apply_window_rounding, clear_window_rounding,
-                                   is_maximized)
+        from .window_shell import apply_window_rounding, clear_window_rounding
         # 不能信 pywebview 的 window.maximized（maximize() 后不一定更新），
         # 以 Win32 IsZoomed 为准，否则第二次点会又执行 maximize。
         if self._is_maxed(win):

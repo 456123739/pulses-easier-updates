@@ -81,6 +81,33 @@ class DevExportCase(unittest.TestCase):
         self.assertIn("导出测试", (eapack_mod.read_changelog(out) or ""))
         self.assertTrue(eapack_mod.read_hashes(out), "应当写入哈希清单")
 
+    def test_changelog_save_updates_response_readback_and_state_event(self):
+        self.api.invoke("dev.pick", {"path": str(self.zip_path)})
+        for text in ("# 5.0.0\n\n- 保存日志\n\n```json\n{}\n```\n", ""):
+            with self.subTest(text=text):
+                self.bus.drain()
+                res = self.api.invoke("dev.changelog.set", {"text": text})
+                self.assertTrue(res["ok"], res)
+                self.assertEqual(res["data"]["changelog"], text)
+                self.assertEqual(self.api.invoke("dev.state")["data"]["changelog"],
+                                 text)
+                events = self.bus.drain()
+                states = [e["data"] for e in events if e["type"] == "state"]
+                self.assertEqual(len(states), 1, events)
+                self.assertEqual(states[0]["dev"]["changelog"], text)
+                self.assertEqual(self.api.invoke("app.state")["data"]["dev"]
+                                 ["changelog"], text)
+
+    def test_changelog_save_is_rejected_while_exporting(self):
+        self.api.invoke("dev.changelog.set", {"text": "saved"})
+        self.bus.drain()
+        self.ctl.dev.phase = "exporting"
+        res = self.api.invoke("dev.changelog.set", {"text": "late edit"})
+        self.assertFalse(res["ok"], res)
+        self.assertEqual(self.ctl.dev.changelog, "saved")
+        self.assertFalse(any(e["type"] == "state" for e in self.bus.drain()))
+        self.ctl.dev.phase = "idle"
+
     def test_option_and_exclusion_are_recorded(self):
         self.api.invoke("dev.pick", {"path": str(self.zip_path)})
         self.api.invoke("dev.option.set", {"key": "tamper_proof", "value": False})
